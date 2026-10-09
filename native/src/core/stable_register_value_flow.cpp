@@ -515,4 +515,175 @@ StableRegisterValueFlow analyze_stable_register_value_flow(
   return result;
 }
 
+
+PostLayoutMantissaBitProof prove_post_layout_mantissa_bits(
+    const std::vector<MachineItem>& items,
+    const std::vector<PreloadReport>& preloads,
+    const AuthoritativePostLayoutControlFlow& flow,
+    const std::vector<std::size_t>& requested_items,
+    std::size_t maximum_work) {
+  PostLayoutMantissaBitProof result;
+  const auto boundaries = prove_post_layout_input_boundaries(items, flow);
+  if (!boundaries.proved || requested_items.empty())
+    return result;
+  constexpr std::uint32_t unknown = 0x0fffffffU;
+  using State = std::array<std::uint32_t, 19>; // X/Y/Z/T, R0..Re
+  State initial;
+  initial.fill(unknown);
+  std::set<int> loaded;
+  for (const auto& preload : preloads) {
+    const auto name = preload.register_name;
+    if (name.size() != 1U || std::string("0123456789abcde").find(name[0]) == std::string::npos)
+      return result;
+    const int reg = register_index(name);
+    if (!loaded.insert(reg).second)
+      return result;
+    const auto& word = preload.value;
+    if (preload.setup_expression || preload.setup_target_name ||
+        word.size() != 8U || word[0] < '1' || word[0] > '9' ||
+        !std::all_of(word.begin(), word.end(), [](char c) { return c >= '0' && c <= '9'; }))
+      continue;
+    std::uint32_t bits = 0;
+    for (std::size_t i = 1; i < word.size(); ++i)
+      bits = (bits << 4U) | static_cast<std::uint32_t>(word[i] - '0');
+    initial[static_cast<std::size_t>(4 + reg)] = bits;
+  }
+  const auto count = flow.execution_states.size();
+  std::vector<std::optional<State>> incoming(count);
+  std::vector<bool> queued(count, false);
+  std::deque<std::size_t> pending;
+  const auto merge = [&](std::size_t state, State value) {
+    if (boundaries.input_boundary_states[state])
+      std::fill_n(value.begin(), 4, unknown);
+    if (incoming[state]) {
+      for (std::size_t slot = 0; slot < value.size(); ++slot)
+        value[slot] |= (*incoming[state])[slot];
+      if (value == *incoming[state])
+        return;
+    }
+    incoming[state] = value;
+    if (!queued[state]) {
+      queued[state] = true;
+      pending.push_back(state);
+    }
+  };
+  for (const auto state : boundaries.main_states)
+    merge(state, initial);
+
+  while (!pending.empty()) {
+    if (result.work >= maximum_work) {
+      result.exhausted = true;
+      return result;
+    }
+    ++result.work;
+    const auto state = pending.front();
+    pending.pop_front();
+    queued[state] = false;
+    const auto at = flow.execution_states[state].item_index;
+    const auto& item = items[at];
+    const auto before = *incoming[state];
+    auto after = before;
+    const int code = item.opcode, family = code & 0xf0, reg = code & 15;
+    const auto push = [&](std::uint32_t x) {
+      after[0] = x; after[1] = before[0]; after[2] = before[1]; after[3] = before[2];
+    };
+    const bool regular_register = reg < 15;
+    if (item.raw || code < 0 || code > 0xee || code == 0x1f ||
+        code == 0x4f || code == 0x6f ||
+        (family >= 0x70 && !regular_register)) {
+      after.fill(unknown);
+    } else if (family == 0x40 && regular_register) {
+      after[static_cast<std::size_t>(4 + reg)] = before[0];
+    } else if (family == 0x60 && regular_register) {
+      push(before[static_cast<std::size_t>(4 + reg)]);
+    } else if (family == 0xb0 || family == 0xd0) {
+      // Even a stable selector can change its stored BCD word on access.
+      after[static_cast<std::size_t>(4 + reg)] = unknown;
+      const auto found = flow.indirect_memory_targets.find(at);
+      if (family == 0xb0) {
+        if (found == flow.indirect_memory_targets.end() || found->second.empty()) {
+          std::fill(after.begin() + 4, after.end(), unknown);
+        } else {
+          for (const int target : found->second) {
+            if (target < 0 || target >= 15)
+              return result;
+            auto& bits = after[static_cast<std::size_t>(4 + target)];
+            bits = found->second.size() == 1U ? before[0] : bits | before[0];
+          }
+        }
+      } else {
+        std::uint32_t bits = 0;
+        if (found == flow.indirect_memory_targets.end() || found->second.empty()) {
+          bits = unknown;
+        } else {
+          for (const int target : found->second) {
+            if (target < 0 || target >= 15)
+              return result;
+            bits |= after[static_cast<std::size_t>(4 + target)];
+          }
+        }
+        push(bits);
+      }
+    } else if (is_indirect_flow_opcode(code)) {
+      after[static_cast<std::size_t>(4 + reg)] = unknown;
+    } else if (code == 0x5d || code == 0x5b || code == 0x58 || code == 0x5a) {
+      const int counter = code == 0x5d ? 0 : code == 0x5b ? 1 : code == 0x58 ? 2 : 3;
+      after[static_cast<std::size_t>(4 + counter)] = unknown;
+    } else if (code == 0x50 || code == 0x29) {
+      std::fill_n(after.begin(), 4, unknown);
+    } else if (code == 0x51 || code == 0x52 || code == 0x53 || code == 0x54 ||
+               opcode_by_code(code).takes_address) {
+      // Control transfers themselves do not change the data stack.
+    } else if (code == 0x14) {
+      std::swap(after[0], after[1]);
+    } else if (code == 0x25) {
+      after[0] = before[1]; after[1] = before[2]; after[2] = before[3]; after[3] = before[0];
+    } else if (code == 0x0d) {
+      after[0] = 0;
+    } else if (code == 0x0e || code == 0x0f) {
+      push(code == 0x0e ? before[0] : unknown);
+    } else if (code <= 0x0c) {
+      // Unknown numeric-entry mode may both edit X and lift the old stack.
+      std::fill_n(after.begin(), 4, unknown);
+    } else {
+      const auto effect = opcode_by_code(code).stack_effect;
+      switch (effect) {
+      case StackEffect::ConsumeYDrop:
+        after[1] = before[2]; after[2] = before[3]; after[3] = before[3];
+        [[fallthrough]];
+      case StackEffect::ConsumeYKeep:
+        after[0] = code == 0x37 ? before[0] & before[1]
+            : code == 0x38 || code == 0x39 ? before[0] | before[1] : unknown;
+        break;
+      case StackEffect::Preserves:
+        after[0] = unknown;
+        break;
+      case StackEffect::Shifts:
+        push(unknown);
+        break;
+      case StackEffect::Exposes:
+        after[0] = before[1]; after[1] = before[2]; after[2] = before[3]; after[3] = before[3];
+        break;
+      case StackEffect::Unknown:
+      case StackEffect::Barrier:
+        after.fill(unknown);
+        break;
+      }
+    }
+    for (const auto next : flow.execution_successors[state])
+      merge(next, after);
+  }
+  // A disconnected/external context is not bottom evidence about its value.
+  if (std::any_of(incoming.begin(), incoming.end(), [](const auto& state) { return !state; }))
+    return result;
+  const std::set<std::size_t> wanted(requested_items.begin(), requested_items.end());
+  for (std::size_t state = 0; state < count; ++state) {
+    const auto at = flow.execution_states[state].item_index;
+    if (!wanted.contains(at))
+      continue;
+    result.x_possible_bits[at] |= (*incoming[state])[0];
+  }
+  return result;
+}
+
 }  // namespace mkpro::core

@@ -55,9 +55,10 @@ bool prove_ir_stack_entry_equality(const std::vector<IrOp>& ops,
 StackValueEqualityState xyz_preserving_selector_charge_state();
 
 // These ROM-certified entry-closing commands let the first decimal digit
-// supply the lift. Arithmetic is an explicit opcode whitelist, not inferred
-// from visible stack effects. A literal/Enter/manual-input predecessor is
-// deliberately not such a proof.
+// supply the lift. Direct predicates and FL0..FL3 close entry on both edges;
+// their tested counter/condition value need not have a known numeric range.
+// The explicit whitelist is not inferred from visible stack effects. A
+// literal/Enter/manual-input predecessor is deliberately not such a proof.
 bool selector_charge_entry_closer_opcode(int opcode);
 // A fact for each exact execution context, immediately before its command.
 // Follow normal jumps and matched returns without inventing a fresh entry at

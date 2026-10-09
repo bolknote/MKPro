@@ -120,15 +120,17 @@ struct Family {
 
 std::optional<Family> family_at(const std::vector<MachineItem>& items,
                                 const AuthoritativePostLayoutControlFlow& flow,
-                                std::size_t store, bool verify_entry_bindings = true) {
+                                std::size_t store, bool verify_entry_bindings = true,
+                                bool allow_coalesced = false) {
   const auto id = role(items[store], "selector-sunk-literal-id:");
   const auto literal = role(items[store], "selector-sunk-literal-value:");
+  const bool coalesced = std::find(items[store].roles.begin(), items[store].roles.end(),
+      "selector-sunk-literal-coalesced") != items[store].roles.end();
   if (!id || !literal || literal->empty() || literal->size() > 2 ||
       !std::all_of(literal->begin(), literal->end(), [](char c) { return c >= '0' && c <= '9'; }) ||
       literal->front() == '0' || items[store].kind != MachineItemKind::Op ||
       items[store].opcode < 0x47 || items[store].opcode > 0x4e ||
-      std::find(items[store].roles.begin(), items[store].roles.end(),
-                "selector-sunk-literal-coalesced") != items[store].roles.end())
+      (coalesced && !allow_coalesced))
     return std::nullopt;
   Family family{.store = store, .identity = *id, .literal = *literal};
   const int reg = items[store].opcode & 15;
@@ -163,7 +165,7 @@ std::optional<Family> family_at(const std::vector<MachineItem>& items,
     return std::nullopt;
   family.leaf = index.labels.at(*leaf);
   std::size_t digit = store;
-  for (const char value : *literal) {
+  if (!coalesced) for (const char value : *literal) {
     digit = next(items, digit);
     if (digit >= items.size() || items[digit].kind != MachineItemKind::Op ||
         items[digit].opcode != value - '0' || items[digit].manual_interaction ||
@@ -316,7 +318,7 @@ SelectorChargeLiteralLayoutResult close_literal_layout(
         if (!preload_index) return result;
         const auto value = rebind_stable_preloaded_indirect_flow_selector(
             *named, preloads[*preload_index], before, target.address, address,
-            flow_options.address_space_model);
+            flow_options.address_space_model, &preloads);
         if (!value) {
           result.reasons.push_back("literal erasure cannot rebind companion R" + name);
           return result;
@@ -444,7 +446,7 @@ SelectorChargeLiteralLayoutResult layout_after_literal_erasure(
       if (!preload_index) return best;
       const auto value = rebind_stable_preloaded_indirect_flow_selector(
           items, preloads[*preload_index], before, target.address,
-          temporary_address, layout_options.address_space_model);
+          temporary_address, layout_options.address_space_model, &preloads);
       if (value) {
         delivered_preloads[*preload_index].value = *value;
       } else {
@@ -706,7 +708,7 @@ std::vector<SelectorChargeLiteralLayoutResult> joint_family_erasure_layout(
       }
       const auto rebound = rebind_stable_preloaded_indirect_flow_selector(
           items, *original, before, target.address, temporary_address,
-          layout_options.address_space_model);
+          layout_options.address_space_model, &preloads);
       if (rebound) { delivered->value = *rebound; continue; }
       const auto [position, added] = fixed.emplace(output, target.address);
       if (!added && position->second != target.address) { complete = false; break; }
@@ -1006,7 +1008,7 @@ SelectorDataLiteralLayoutFrontier selector_data_literal_layout_frontier(
               [&](const auto& report) { return register_from_text(report.register_name) == selector; });
           const auto rebound = rebind_stable_preloaded_indirect_flow_selector(
               *symbolic, *original_value, before, targets.front().address, temporary_address,
-              layout_options.address_space_model);
+              layout_options.address_space_model, &preloads);
           if (rebound) { value->value = *rebound; continue; }
         }
         const auto [position, inserted] = fixed.emplace(output_target, targets.front().address);
@@ -1090,6 +1092,101 @@ SelectorDataLiteralLayoutFrontier selector_data_literal_layout_frontier(
     }
   }
   return frontier;
+}
+
+
+std::vector<DeferredSelectorDataLiteralLayout>
+prepare_deferred_selector_data_literal_layouts(
+    const std::vector<MachineItem>& items,
+    const PostLayoutControlFlowOptions& options, std::size_t maximum_candidates) {
+  std::vector<DeferredSelectorDataLiteralLayout> result;
+  if (maximum_candidates == 0 || std::none_of(items.begin(), items.end(),
+      [](const auto& item) {
+        return role(item, "selector-sunk-literal-id:").has_value() &&
+            std::find(item.roles.begin(), item.roles.end(),
+                "selector-sunk-literal-coalesced") == item.roles.end();
+      }))
+    return result;
+  // The owner supplies symbolic command identities and the encoded origins
+  // of its preloads. Do not invent new labels or reinterpret formal aliases.
+  const auto named = symbolize(items);
+  if (!named || named->size() != items.size()) return result;
+  const auto bound = rebind_late_bound_decimal_selectors(
+      *named, {.minimum_target_address = 0, .maximum_target_address = 99});
+  if (!bound.diagnostics.empty()) return result;
+  const auto before = build_post_layout_control_flow(bound.items, options);
+  if (!before.proved) return result;
+  for (std::size_t store = 0; store < bound.items.size(); ++store) {
+    const auto family = family_at(bound.items, before, store);
+    if (!family) continue;
+    DeferredSelectorDataLiteralLayout candidate;
+    const int reg = bound.items[store].opcode & 15;
+    candidate.family_id = family->identity;
+    candidate.selector_register = std::string(1, "0123456789abcde"[reg]);
+    candidate.target_label = *role(bound.items[family->source],
+                                    "late-decimal-selector-high:");
+    candidate.literal_value = std::stoi(family->literal);
+    candidate.removed_cells = static_cast<int>(family->digits.size());
+    for (const auto charge : family->charges)
+      candidate.charge_targets.push_back(
+          *role(bound.items[charge], "late-decimal-selector-high:"));
+    std::sort(candidate.charge_targets.begin(), candidate.charge_targets.end());
+    std::vector<std::optional<std::size_t>> mapping(bound.items.size());
+    for (std::size_t i = 0; i < bound.items.size(); ++i) {
+      if (family->digits.contains(i)) continue;
+      mapping[i] = candidate.items.size();
+      candidate.items.push_back(bound.items[i]);
+      if (i == store)
+        candidate.items.back().roles.push_back("selector-sunk-literal-coalesced");
+    }
+    const auto after = build_post_layout_control_flow(candidate.items, options);
+    std::set<std::size_t> deferred_companions;
+    for (const auto& [source, targets] : before.indirect_flow_targets) {
+      (void)targets;
+      if ((bound.items[source].opcode & 15) != reg)
+        deferred_companions.insert(source);
+    }
+    // Only command identities are transported here. The owning transaction
+    // must still close every preload, callback and the new literal equation.
+    if (!after.proved || !transport_is_exact(
+            before, after, mapping, &bound.items, reg, deferred_companions))
+      continue;
+    result.push_back(std::move(candidate));
+    if (result.size() == maximum_candidates) break;
+  }
+  return result;
+}
+
+bool prove_deferred_selector_data_literal_layout(
+    const DeferredSelectorDataLiteralLayout& preparation,
+    const std::vector<MachineItem>& items,
+    const AuthoritativePostLayoutControlFlow& control) {
+  if (!control.proved || preparation.literal_value < 1 ||
+      preparation.literal_value > 99 || preparation.charge_targets.size() < 2U)
+    return false;
+  std::optional<std::size_t> store;
+  for (std::size_t i = 0; i < items.size(); ++i)
+    if (role(items[i], "selector-sunk-literal-id:") ==
+        std::optional<std::string>(preparation.family_id)) {
+      if (store) return false;
+      store = i;
+    }
+  if (!store || std::find(items[*store].roles.begin(), items[*store].roles.end(),
+          "selector-sunk-literal-coalesced") == items[*store].roles.end())
+    return false;
+  const auto family = family_at(items, control, *store, true, true);
+  if (!family || std::stoi(family->literal) != preparation.literal_value ||
+      static_cast<int>(family->literal.size()) != preparation.removed_cells ||
+      std::string(1, "0123456789abcde"[items[*store].opcode & 15]) !=
+          preparation.selector_register ||
+      role(items[family->source], "late-decimal-selector-high:") !=
+          std::optional<std::string>(preparation.target_label))
+    return false;
+  std::vector<std::string> targets;
+  for (const auto charge : family->charges)
+    targets.push_back(*role(items[charge], "late-decimal-selector-high:"));
+  std::sort(targets.begin(), targets.end());
+  return targets == preparation.charge_targets;
 }
 
 SelectorDataLiteralLayoutFrontier joint_selector_allocation_layout_frontier(

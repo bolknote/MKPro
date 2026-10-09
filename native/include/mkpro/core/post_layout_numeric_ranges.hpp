@@ -48,6 +48,10 @@ enum class NumericRangeInputPolicy {
 // Input register transport is opt-in and requires the shared protocol proof.
 // Unknown branches
 // join both alternatives; expanding ranges widen to unknown after eight changes.
+// A separate finite digit-set component keeps word shape through copies/joins.
+// Logical operations may certify ordinary 8.x results even for unknown inputs;
+// hexadecimal alternatives remain nonnumeric. Widening an interval does not
+// erase the independent digit invariant or assume an input range.
 // Preload facts apply only to Main, never to resume/manual entries. No host
 // floating point. Budget exhaustion discards all facts, never a partial iterate.
 PostLayoutNumericRangeProof prove_post_layout_numeric_ranges(

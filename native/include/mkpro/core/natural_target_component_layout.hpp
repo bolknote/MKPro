@@ -268,14 +268,18 @@ std::optional<std::string> rebind_proved_natural_fractional_selector_preload(
 // remaining official cells (A0..A4 on stock, A0..B1 on mk61s). A short-side
 // alias is not extra storage. Runtime decimal charges keep their own codec.
 // Selectors with ordinary data
-// reads must belong to a proved retunable fractional family. Indirect memory
+// reads must belong to a proved fractional or masked-bit projection. Mask
+// proofs require the original runtime_preloads and forget every R7..Re seed
+// so independently retuned selectors cannot justify each other's dead bits.
+// Indirect memory
 // target aliases also count as data uses: checking only the encoded selector
 // would let a pointer expose a changed address word. Unknown aliases fail
 // closed, including in fractional/numeric projection alternatives.
 std::optional<std::string> rebind_stable_preloaded_indirect_flow_selector(
     const std::vector<MachineItem>& items, const PreloadReport& preload,
     const AuthoritativePostLayoutControlFlow& control_flow, int old_target,
-    int new_target, AddressSpaceModel model = AddressSpaceModel::Standard);
+    int new_target, AddressSpaceModel model = AddressSpaceModel::Standard,
+    const std::vector<PreloadReport>* runtime_preloads = nullptr);
 
 PreloadedIndirectFlowCellErasurePlan
 plan_preloaded_indirect_flow_cell_erasure(

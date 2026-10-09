@@ -3237,6 +3237,7 @@ bool rebind_preloads(
     AddressSpaceModel model, std::vector<PreloadReport>& preloads,
     std::vector<NaturalTargetPreloadRewrite>& rewrites,
     std::string* failure = nullptr) {
+  const auto original_preloads = preloads;
   const auto reject = [&](std::string reason) {
     if (failure != nullptr)
       *failure = std::move(reason);
@@ -3487,11 +3488,22 @@ bool rebind_preloads(
 
     const NonFlowUseProjection projection =
         prove_fractional_nonflow_projection(original_items, reg);
-    if (!projection.proved)
+    if (!projection.proved) {
+      const auto masked = rebind_stable_preloaded_indirect_flow_selector(
+          original_items, original_preloads.at(preload->second), original_flow,
+          old_target->second, new_target->second, model, &original_preloads);
+      if (masked) {
+        preloads.at(preload->second).value = *masked;
+        rewrites.push_back(NaturalTargetPreloadRewrite{
+            .register_name = name, .old_value = old_value, .new_value = *masked,
+            .fractional_projection_only = false});
+        continue;
+      }
       return reject("non-flow selector projection was not proved for R" + name +
                     "=" + old_value + " old-target=" +
                     std::to_string(old_target->second) + " new-target=" +
                     std::to_string(new_target->second));
+    }
     const std::optional<std::string> rebound =
         rebind_stable_decimal_value(old_value, new_target->second);
     if (!rebound.has_value() ||
@@ -6160,10 +6172,113 @@ std::optional<std::string> rebind_proved_natural_fractional_selector_preload(
   return rebound;
 }
 
+
+namespace {
+std::optional<std::string> rebind_masked_selector_preload(
+    const std::vector<MachineItem>& items, const PreloadReport& preload,
+    const AuthoritativePostLayoutControlFlow& flow, int new_target,
+    AddressSpaceModel model, const std::vector<PreloadReport>* runtime_preloads) {
+  const auto& old = preload.value;
+  if (old.size() != 8U || old[0] < '1' || old[0] > '9' ||
+      !std::all_of(old.begin(), old.end(), [](char c) { return c >= '0' && c <= '9'; }) ||
+      new_target < 0 || new_target > 99 || !runtime_preloads)
+    return std::nullopt;
+  const int reg = register_index(preload.register_name);
+  std::string value = old;
+  value[6] = static_cast<char>('0' + new_target / 10);
+  value[7] = static_cast<char>('0' + new_target % 10);
+  const auto old_word = evaluate_indirect_address(preload.register_name, old,
+      IndirectOperationKind::Flow, model);
+  const auto new_word = evaluate_indirect_address(preload.register_name, value,
+      IndirectOperationKind::Flow, model);
+  if (!old_word || !new_word || new_word->actual_flow_target != new_target ||
+      !indirect_writeback_preserves_literal_word(*old_word, old) ||
+      !indirect_writeback_preserves_literal_word(*new_word, value))
+    return std::nullopt;
+  std::uint32_t changed = 0;
+  for (std::size_t i = 1; i < old.size(); ++i)
+    changed = (changed << 4U) | static_cast<std::uint32_t>((old[i] - '0') ^ (value[i] - '0'));
+  if (changed == 0)
+    return value;
+
+  std::vector<std::size_t> reads;
+  for (std::size_t at = 0; at < items.size(); ++at) {
+    const auto& item = items[at];
+    if (item.kind != MachineItemKind::Op)
+      continue;
+    if (item.raw || indirect_memory_uses_register(item, reg))
+      return std::nullopt;
+    if (!direct_recall_of(item, reg))
+      continue;
+    const auto logical = next_cell_item(items, at);
+    const auto overwrite = logical ? next_cell_item(items, *logical) : std::nullopt;
+    // A bitwise result alone is insufficient: AND saves its old X (the
+    // changed mask) in physical X1. Fractional-part immediately kills that
+    // difference, using the already equal result and preserving hidden X2.
+    if (item.manual_interaction || !logical || !overwrite ||
+        items[*logical].kind != MachineItemKind::Op || items[*logical].opcode != 0x37 ||
+        items[*overwrite].kind != MachineItemKind::Op || items[*overwrite].opcode != 0x35 ||
+        items[*logical].manual_interaction || items[*overwrite].manual_interaction ||
+        opcode_by_code(0x37).x2_effect != X2Effect::Preserves ||
+        opcode_by_code(0x35).x2_effect != X2Effect::Preserves)
+      return std::nullopt;
+    bool reached = false;
+    for (std::size_t state = 0; state < flow.execution_states.size(); ++state) {
+      if (flow.execution_states[state].item_index != at)
+        continue;
+      reached = true;
+      const auto& next = flow.execution_successors[state];
+      if (next.size() != 1U || flow.execution_states[next[0]].item_index != *logical)
+        return std::nullopt;
+      const auto& following = flow.execution_successors[next[0]];
+      if (following.size() != 1U ||
+          flow.execution_states[following[0]].item_index != *overwrite)
+        return std::nullopt;
+    }
+    if (!reached)
+      return std::nullopt;
+    reads.push_back(at);
+  }
+  if (reads.empty())
+    return std::nullopt;
+  // Other R7..Re words may be rebound in the same layout transaction. Do not
+  // prove one changed mask using zero bits of another independently changed
+  // mask: two individually harmless rewrites need not compose. Forget every
+  // layout-allocatable preload, including this selector, in the bit proof.
+  std::vector<PreloadReport> invariant_preloads;
+  for (const auto& candidate : *runtime_preloads)
+    if (candidate.register_name.size() == 1U &&
+        candidate.register_name[0] >= '0' && candidate.register_name[0] <= '6' &&
+        candidate.value.size() == 8U && candidate.value[0] >= '1' &&
+        candidate.value[0] <= '9' &&
+        std::all_of(candidate.value.begin(), candidate.value.end(),
+                    [](char c) { return c >= '0' && c <= '9'; }))
+      invariant_preloads.push_back(candidate);
+  // With no known seed or clear command this lattice remains top everywhere.
+  // Avoid rebuilding a fixed point for each speculative target in that case.
+  if (invariant_preloads.empty() &&
+      std::none_of(items.begin(), items.end(), [](const auto& item) {
+        return item.kind == MachineItemKind::Op && !item.raw && item.opcode == 0x0d;
+      }))
+    return std::nullopt;
+  const auto proof = prove_post_layout_mantissa_bits(items, invariant_preloads, flow, reads);
+  if (proof.exhausted)
+    return std::nullopt;
+  for (const auto read : reads) {
+    const auto bits = proof.x_possible_bits.find(read);
+    if (bits == proof.x_possible_bits.end() || (bits->second & changed) != 0)
+      return std::nullopt;
+  }
+  return value;
+}
+} // namespace
+
+
 std::optional<std::string> rebind_stable_preloaded_indirect_flow_selector(
     const std::vector<MachineItem>& items, const PreloadReport& preload,
     const AuthoritativePostLayoutControlFlow& control_flow, int old_target,
-    int new_target, AddressSpaceModel model) {
+    int new_target, AddressSpaceModel model,
+    const std::vector<PreloadReport>* runtime_preloads) {
   if (!control_flow.proved || control_flow.address_space_model != model)
     return std::nullopt;
   int reg = -1;
@@ -6211,6 +6326,9 @@ std::optional<std::string> rebind_stable_preloaded_indirect_flow_selector(
       return rebound;
     }
   }
+  if (const auto masked = rebind_masked_selector_preload(
+          items, preload, control_flow, new_target, model, runtime_preloads))
+    return masked;
   return rebind_proved_natural_fractional_selector_preload(
       items, preload, old_target, new_target, model);
 }
@@ -6316,7 +6434,7 @@ plan_preloaded_indirect_flow_cell_erasure(
     const std::optional<std::string> rebound =
         rebind_stable_preloaded_indirect_flow_selector(
             items, report, control_flow, required.old_target,
-            required.new_target, model);
+            required.new_target, model, &preloads);
     if (!rebound.has_value()) {
       return reject("cell-erasure selector cannot preserve its non-flow value while retargeting");
     }

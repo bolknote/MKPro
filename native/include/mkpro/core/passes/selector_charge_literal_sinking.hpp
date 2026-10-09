@@ -51,6 +51,36 @@ SelectorChargeLiteralLayoutResult optimize_selector_data_literal_coalescing(
     const AuthoritativePostLayoutControlFlow& control,
     const NaturalTargetComponentLayoutOptions& layout_options);
 
+
+struct DeferredSelectorDataLiteralLayout {
+  // Conditional IR, never executable output until both placement and the
+  // final entry certificate have been discharged by the owning transaction.
+  std::vector<MachineItem> items;
+  std::string family_id;
+  std::string selector_register;
+  std::string target_label;
+  int literal_value = 0;
+  int removed_cells = 0;
+  std::vector<std::string> charge_targets;
+};
+
+// Erase only a re-proved compiler-owned literal. All remaining selector
+// bindings belong to the enclosing transaction, including immutable preloads.
+// The returned data/address equality is a required placement, not a hint.
+std::vector<DeferredSelectorDataLiteralLayout>
+prepare_deferred_selector_data_literal_layouts(
+    const std::vector<MachineItem>& items,
+    const PostLayoutControlFlowOptions& options,
+    std::size_t maximum_candidates = 4);
+
+// Reconstruct the complete family on the delivered artifact, including every
+// charge, entry predecessor and private-register alias. Re-prove address/data,
+// stack, X1/X2 and return-context equality after all other pending rewrites.
+bool prove_deferred_selector_data_literal_layout(
+    const DeferredSelectorDataLiteralLayout& preparation,
+    const std::vector<MachineItem>& items,
+    const AuthoritativePostLayoutControlFlow& control);
+
 struct SelectorDataLiteralLayoutFrontier {
   std::vector<SelectorChargeLiteralLayoutResult> alternatives;
   std::vector<std::string> reasons;

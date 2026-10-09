@@ -1,5 +1,6 @@
 #include "mkpro/core/passes/selector_charge_literal_sinking.hpp"
 #include "mkpro/core/emit/machine_emitter.hpp"
+#include "mkpro/core/joint_representation_search.hpp"
 #include "mkpro/core/late_bound_decimal_selector.hpp"
 #include "mkpro/core/natural_target_component_layout.hpp"
 #include "mkpro/emulator/mk61.hpp"
@@ -60,7 +61,8 @@ auto optimize(const std::vector<MachineItem>& items) {
       core::build_post_layout_control_flow(items), core::NaturalTargetComponentLayoutOptions{});
 }
 std::vector<std::string> run(const std::vector<MachineItem>& items, const std::string& seed,
-                             const std::vector<PreloadReport>& preloads = {}) {
+                             const std::vector<PreloadReport>& preloads = {},
+                             bool observe_kernel_register = false) {
   const auto resolved = resolve_machine_items(items);
   require(resolved.diagnostics.empty(), "fixture must resolve");
   std::vector<int> bytes;
@@ -77,12 +79,145 @@ std::vector<std::string> run(const std::vector<MachineItem>& items, const std::s
   // program recall; that observation, not private formatting, must agree.
   for (const auto& name : {"X", "Y", "Z", "T", "X1", "1", "2", "3", "4", "8"})
     state.push_back(calc.read_register(name));
+  if (observe_kernel_register) state.push_back(calc.read_register("9"));
   calc.press("."); state.push_back(calc.display_text(true));
   return state;
 }
+
+std::vector<MachineItem> coupled_fixture(int displacement, char reg) {
+  auto items = fixture(32 + displacement, reg);
+  std::vector<MachineItem> prefix;
+  const auto op = [&](int code) { prefix.push_back(MachineItem::op(code, "coupled fixture")); };
+  const auto call = [&] {
+    op(0x53);
+    prefix.push_back(MachineItem::address(std::string("value_kernel")));
+  };
+  op(0x52);
+  op(0x60); call(); op(0x38); op(0x49);
+  op(0x60); call(); op(0x37);
+  op(0x61); call(); op(0x38); op(0x49); op(0x60);
+  for (int i = 0; i < displacement; ++i) op(0x54);
+  items.insert(items.begin(), prefix.begin(), prefix.end());
+  items.push_back(MachineItem::label("value_kernel"));
+  for (int i = 0; i < 7 - displacement; ++i)
+    items.push_back(MachineItem::op(0x31, "abs"));
+  items.push_back(MachineItem::op(0x52, "return"));
+  const auto bound = core::rebind_late_bound_decimal_selectors(
+      items, {.minimum_target_address = 0});
+  require(bound.diagnostics.empty(), "coupled fixture must bind");
+  return bound.items;
+}
+
+bool has_report(const core::LayoutSearchArtifact& artifact, const std::string& name) {
+  return std::any_of(artifact.optimizations.begin(), artifact.optimizations.end(),
+      [&](const auto& report) { return report.name == name; });
+}
+
+void deferred_joint_contracts() {
+  CompileOptions options;
+  options.defer_return_suffix_until_callee_hole = true;
+  options.coalesce_copies = true;
+  core::PostLayoutControlFlowOptions control;
+  control.empty_return_target = 1;
+  for (const int displacement : {0, 1}) for (const char reg : {'a', 'd'}) {
+    const auto original = coupled_fixture(displacement, reg);
+    const core::LayoutSearchArtifact root{.items = original};
+    const auto pending = core::passes::prepare_deferred_selector_data_literal_layouts(
+        original, control);
+    require(pending.size() == 1U && pending.front().removed_cells == 2 &&
+                pending.front().literal_value == 32 + displacement,
+            "discovery must produce a typed literal equation independent of spelling and register");
+    require(!core::passes::prove_deferred_selector_data_literal_layout(
+        pending.front(), pending.front().items,
+        core::build_post_layout_control_flow(pending.front().items, control)),
+        "an erased but unplaced literal is not an executable certificate");
+    require(!core::passes::prove_deferred_selector_data_literal_layout(
+        pending.front(), original, core::build_post_layout_control_flow(original, control)),
+        "the unerased source must not discharge a pending deletion");
+    require(core::passes::prepare_deferred_selector_data_literal_layouts(
+        original, control, 0).empty(), "a zero discovery budget must do no work");
+
+    const auto searched = core::search_joint_representation_constraints(root, options);
+    require(searched.incumbent.has_value(), "the coupled transaction must close");
+    const auto& final = *searched.incumbent;
+    require(resolve_machine_items(original).steps.size() == 68U &&
+                resolve_machine_items(final.items).steps.size() == 64U &&
+                has_report(final, "shared-helper-dual-mode-layout") &&
+                has_report(final, "joint-projected-tail-layout") &&
+                has_report(final, "joint-data-control-literal-layout"),
+            "joint literal/tail baseline must shrink 68 to 64, not only 66");
+    const auto flow = core::build_post_layout_control_flow(final.items, control);
+    require(flow.proved && flow.empty_return_target &&
+                flow.empty_return_target->address == 1 &&
+                core::passes::prove_deferred_selector_data_literal_layout(
+                    pending.front(), final.items, flow),
+            "final geometry, hardware return and every literal entry must be proved");
+    for (const std::string seed : {"0", "-7", "3.25"}) {
+      const std::vector<PreloadReport> input{{.register_name = "0", .value = seed}};
+      require(run(original, seed, input, true) == run(final.items, seed, input, true),
+              "joint projection must preserve ROM display, stack, X1/X2, data and returns");
+    }
+
+    auto missing = final.items;
+    for (auto& item : missing) std::erase(item.roles, "selector-sunk-literal-coalesced");
+    require(!core::passes::prove_deferred_selector_data_literal_layout(
+        pending.front(), missing, core::build_post_layout_control_flow(missing, control)),
+        "a missing erasure identity must reject");
+    auto wrong_equation = pending.front();
+    ++wrong_equation.literal_value;
+    require(!core::passes::prove_deferred_selector_data_literal_layout(
+        wrong_equation, final.items, flow), "a stale address/data equation must reject");
+    auto wrong_family = pending.front();
+    wrong_family.charge_targets.push_back("unproved_entry");
+    require(!core::passes::prove_deferred_selector_data_literal_layout(
+        wrong_family, final.items, flow), "every original charge must remain accounted for");
+    auto unproved = flow;
+    unproved.proved = false;
+    require(!core::passes::prove_deferred_selector_data_literal_layout(
+        pending.front(), final.items, unproved), "a missing final CFG proof must reject");
+
+    auto moved = final.items;
+    const auto target = std::find_if(moved.begin(), moved.end(), [&](const auto& item) {
+      return item.kind == MachineItemKind::Label && item.name == pending.front().target_label;
+    });
+    require(target != moved.end(), "the fixture must retain its data target identity");
+    moved.insert(target, MachineItem::op(0x54, "unproved padding"));
+    require(!core::passes::prove_deferred_selector_data_literal_layout(
+        pending.front(), moved, core::build_post_layout_control_flow(moved, control)),
+        "moving the final target must invalidate the literal certificate");
+  }
+  auto observed_shadow = coupled_fixture(0, 'a');
+  observed_shadow.at(6) = MachineItem::op(0x0a, "observe entry shadow");
+  const auto rejected = core::search_joint_representation_constraints(
+      {.items = observed_shadow}, options);
+  require(!rejected.incumbent ||
+              !has_report(*rejected.incumbent, "shared-helper-dual-mode-layout"),
+          "observable X2 must still reject the pending tail, even with literal credit");
+  auto raw = coupled_fixture(0, 'a');
+  raw.front().raw = true;
+  require(core::passes::prepare_deferred_selector_data_literal_layouts(
+      raw, control).empty(), "raw geometry must not supply a deferred erasure proof");
+
+  // A source that already owns a literal family needs no unrelated finite
+  // representation rewrite to become a root of the separate closure lane.
+  const auto simple = fixture(20, 'a');
+  const auto root_only = core::search_joint_representation_constraints({.items = simple}, options);
+  require(root_only.incumbent &&
+              has_report(*root_only.incumbent, "joint-data-control-literal-layout") &&
+              resolve_machine_items(root_only.incumbent->items).steps.size() <
+                  resolve_machine_items(simple).steps.size(),
+          "an already prepared literal family must be considered at the search root");
+  core::TransactionSearchLimits disabled;
+  disabled.maximum_expansions = 0;
+  const auto skipped = core::search_joint_representation_constraints(
+      {.items = simple}, options, {}, disabled);
+  require(!skipped.incumbent, "the independent closure lane must respect a disabled search");
+}
+
 } // namespace
 int main() {
   try {
+    deferred_joint_contracts();
     for (char reg : {'a', 'd'}) {
       for (int literal : {20, 26, 32}) {
         const auto original = fixture(literal, reg);

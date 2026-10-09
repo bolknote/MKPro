@@ -7,6 +7,7 @@
 
 #include <array>
 #include <cstddef>
+#include <cstdint>
 #include <map>
 #include <optional>
 #include <string>
@@ -75,5 +76,27 @@ StableRegisterValueFlow analyze_stable_register_value_flow(
     const std::vector<PreloadReport>& preloads,
     const AuthoritativePostLayoutControlFlow& flow,
     AddressSpaceModel model = AddressSpaceModel::Standard);
+
+
+struct PostLayoutMantissaBitProof {
+  // Possible one bits in the seven payload nibbles (leading digit excluded).
+  // Missing items and an exhausted analysis never authorize a rewrite.
+  std::map<std::size_t, std::uint32_t> x_possible_bits;
+  std::size_t work = 0;
+  bool exhausted = false;
+};
+
+// A finite may-bit lattice on the exact return-context graph. Joins use OR;
+// K AND intersects possible bits, K OR/XOR conservatively union them.
+// Unknown arithmetic/entry forgets affected stack values, not independent
+// registers. Input boundaries inherit registers only through a validated
+// protocol. Constants use a deliberately narrow, exact eight-digit grammar:
+// decimal equality alone does not establish a stored mantissa's shape.
+PostLayoutMantissaBitProof prove_post_layout_mantissa_bits(
+    const std::vector<MachineItem>& items,
+    const std::vector<PreloadReport>& preloads,
+    const AuthoritativePostLayoutControlFlow& flow,
+    const std::vector<std::size_t>& requested_items,
+    std::size_t maximum_work = 100000);
 
 }  // namespace mkpro::core

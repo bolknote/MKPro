@@ -1,6 +1,7 @@
 #include "mkpro/core/callee_hole_boundary_normalization.hpp"
 #include "mkpro/core/emit/machine_emitter.hpp"
 #include "mkpro/core/joint_representation_search.hpp"
+#include "mkpro/core/natural_target_component_layout.hpp"
 #include "mkpro/core/passes/finite_mode_representation.hpp"
 #include "mkpro/core/post_layout_numeric_ranges.hpp"
 #include "mkpro/core/stable_register_value_flow.hpp"
@@ -387,6 +388,278 @@ void signed_score_composition() {
 
 }
 
+
+std::vector<MachineItem> masked_selector_fixture(bool guarded = true, bool live_x1 = false,
+                                                bool bypass_filter = false) {
+  std::vector<MachineItem> items;
+  append(items, {0x54, 0x60});
+  if (bypass_filter)
+    target(items, 0x5e, "mask");
+  append(items, guarded ? std::initializer_list<int>{0x64, 0x37}
+                        : std::initializer_list<int>{0x54, 0x54});
+  items.push_back(MachineItem::label("mask"));
+  append(items, {0x6a, 0x37, live_x1 ? 0x0f : 0x35, 0x41, 0xaa});
+  items.back().indirect_flow_targets = std::vector<IrTarget>{"leaf"};
+  append(items, {0x42});
+  // The filler is executed and preserves the observed fractional result.
+  while (cells(items) < 33) append(items, {0x31});
+  stop(items, StopDisposition::Terminal);
+  items.push_back(MachineItem::label("leaf"));
+  append(items, {0x52});
+  return items;
+}
+
+void mask_bits_selector_layout_and_rom() {
+  const std::vector<PreloadReport> preloads{
+      {.register_name = "4", .value = "88888800"},
+      {.register_name = "a", .value = "88888834"}};
+  const auto before = masked_selector_fixture();
+  const auto flow = build_post_layout_control_flow(before);
+  require(flow.proved, "masked selector fixture needs authoritative calls");
+  const auto plan = plan_preloaded_indirect_flow_cell_erasure(
+      before, preloads, flow, 0, 0);
+  require(plan.proved && plan.preloads.at(1).value == "88888833",
+          "dead mask bits must allow retargeting a data/control word");
+  auto after = before;
+  after.erase(after.begin());
+  require(cells(before) == 35 && cells(after) == 34,
+          "masked selector erasure baseline must shrink 35 to 34 cells");
+  require(build_post_layout_control_flow(after).proved,
+          "retargeted masked selector must retain a complete final CFG");
+  const auto run = [&](const std::vector<MachineItem>& program,
+                       const std::vector<PreloadReport>& setup, const std::string& input) {
+    emulator::MK61 calc;
+    require(calc.command_limit() == 105, "mask contract uses stock MK-61 ROM");
+    std::string raw_word;
+    if (input == "raw-bcd") {
+      require(calc.load_program({0x61, 0x62, 0x38, 0x40, 0x50}).diagnostics.empty(),
+              "raw mask operand preparation");
+      calc.set_register("1", "66666666");
+      calc.set_register("2", "88888888");
+      calc.press_sequence({"В/О", "С/П"});
+      require(calc.run_until_stable(1000, 8).stopped, "raw operand preparation must stop");
+      raw_word = calc.read_register("0");
+      require(raw_word.find('E') != std::string::npos ||
+                  raw_word.find("Е") != std::string::npos,
+              "ROM OR must prepare a nondecimal mantissa");
+    }
+    require(calc.load_program(bytecode(program)).diagnostics.empty(), "masked selector ROM load");
+    for (const auto& preload : setup) calc.set_register(preload.register_name, preload.value);
+    if (input == "raw-bcd")
+      require(calc.read_register("0") == raw_word, "program load must preserve the prepared BCD word");
+    else
+      calc.set_register("0", input);
+    for (const char* reg : {"X", "Y", "Z", "T", "X1"}) calc.set_register(reg, "12345678");
+    calc.press_sequence({"В/О", "С/П"});
+    require(calc.run_until_stable(3000, 8).stopped, "masked selector must call, return and stop");
+    std::vector<std::string> observed;
+    for (const char* reg : {"X", "Y", "Z", "T", "X1", "0", "1", "2", "4"})
+      observed.push_back(calc.read_register(reg));
+    calc.press(".");
+    observed.push_back(calc.display_text(true));
+    return observed;
+  };
+  for (const char* input : {"0", "44444.4", "-44444.4", "123456.7", "88888888",
+                            "99999999", "1e99", "-1e99", "1e-99", "raw-bcd"})
+    require(run(before, preloads, input) == run(after, plan.preloads, input),
+            "mask rebind must preserve data, stack, X1, X2 and return behavior");
+
+  for (const auto& unsafe : {masked_selector_fixture(false),
+                             masked_selector_fixture(true, true),
+                             masked_selector_fixture(true, false, true)}) {
+    const auto graph = build_post_layout_control_flow(unsafe);
+    require(graph.proved, "negative masked fixture must have valid control flow");
+    require(!plan_preloaded_indirect_flow_cell_erasure(unsafe, preloads, graph, 0, 0).proved,
+            "unknown operand, live X1 or an unfiltered incoming edge must block mask retuning");
+    auto wrong = unsafe;
+    wrong.erase(wrong.begin());
+    require(run(unsafe, preloads, "99999999") != run(wrong, plan.preloads, "99999999"),
+            "each rejected rewrite must have an observable ROM counterexample");
+  }
+  auto generated = preloads;
+  generated[0].setup_target_name = "leaf";
+  require(!plan_preloaded_indirect_flow_cell_erasure(before, generated, flow, 0, 0).proved,
+          "a generated setup word must not masquerade as an exact mask");
+
+  const auto bounded = prove_post_layout_mantissa_bits(before, preloads, flow, {1}, 0);
+  require(bounded.exhausted && bounded.x_possible_bits.empty(),
+          "bit-analysis budget exhaustion must not export partial facts");
+
+  // Losing the last two nibbles is a data-flow property, not a mask-name or
+  // target-number special case. The bit invariant survives an unbounded loop.
+  std::vector<MachineItem> loop;
+  append(loop, {0x60, 0x64, 0x37, 0x41});
+  loop.push_back(MachineItem::label("again"));
+  append(loop, {0x61});
+  const auto read = loop.size();
+  append(loop, {0x6a, 0x37, 0x41});
+  target(loop, 0x51, "again");
+  const auto loop_flow = build_post_layout_control_flow(loop);
+  require(loop_flow.proved, "bit lattice loop CFG");
+  const auto bits = prove_post_layout_mantissa_bits(loop, preloads, loop_flow, {read});
+  require(!bits.exhausted && bits.x_possible_bits.contains(read) &&
+              (bits.x_possible_bits.at(read) & 0xffU) == 0,
+          "the finite may-bit lattice must retain an inductive mask across a loop");
+
+  auto alias = before;
+  alias[1].opcode = 0xdd; // Unknown indirect alias may expose the changed word.
+  require(!plan_preloaded_indirect_flow_cell_erasure(
+      alias, preloads, build_post_layout_control_flow(alias), 0, 0).proved,
+      "unknown indirect aliases must fail closed");
+  alias[1].indirect_memory_targets = std::vector<int>{10};
+  const auto alias_flow = build_post_layout_control_flow(alias);
+  require(alias_flow.proved &&
+              !plan_preloaded_indirect_flow_cell_erasure(alias, preloads, alias_flow, 0, 0).proved,
+          "a known indirect alias of the mask is also a data observation");
+
+  auto coupled = before;
+  for (auto& item : coupled)
+    if (item.kind == MachineItemKind::Op && item.opcode == 0x64) item.opcode = 0x6c;
+  auto mutable_filter = preloads;
+  mutable_filter[0].register_name = "c";
+  require(!plan_preloaded_indirect_flow_cell_erasure(
+      coupled, mutable_filter, build_post_layout_control_flow(coupled), 0, 0).proved,
+      "retuning cannot borrow dead bits from another layout-allocatable preload");
+}
+
+
+void digit_shape_join_contracts() {
+  for (const bool raw_branch : {false, true}) {
+    std::vector<MachineItem> items;
+    append(items, {0x60});
+    target(items, 0x57, "mask-right");
+    append(items, {0x61});
+    target(items, 0x51, "mask-joined");
+    items.push_back(MachineItem::label("mask-right"));
+    append(items, {0x62});
+    if (raw_branch) append(items, {0x63, 0x38});
+    items.push_back(MachineItem::label("mask-joined"));
+    append(items, {0x44, 0x60, 0x64, 0x37});
+    const auto masked = items.size();
+    append(items, {0x35});
+    const auto fractional = items.size();
+    stop(items, StopDisposition::Terminal);
+    const std::vector<PreloadReport> preloads{
+        {.register_name = "1", .value = "88888888"},
+        {.register_name = "2", .value = "77777777"},
+        {.register_name = "3", .value = "88888888"}};
+    const auto proof = ranges(items, {masked, fractional}, preloads);
+    if (raw_branch) {
+      require(proof.x_before.empty(),
+              "a hexadecimal mask path must not acquire an ordinary-number certificate");
+    } else {
+      require(proof.x_before.at(masked) == OrdinaryNumericRange{8, 9, false} &&
+                  proof.x_before.at(fractional) == OrdinaryNumericRange{0, 1, false},
+              "digit alternatives 7/8 stay decimal although their may-bit union is F");
+      const auto graph = build_post_layout_control_flow(items);
+      const auto lift = analyze_post_layout_automatic_entry_lift(items, graph, 100000);
+      const auto limited = prove_post_layout_numeric_ranges(
+          items, graph, *lift, {masked}, &preloads, 1,
+          NumericRangeInputPolicy::ValidatedRegisterTransport);
+      require(limited.exhausted && limited.x_before.empty(),
+              "the combined numeric/digit fixed point must not publish partial proofs");
+    }
+  }
+
+  for (const bool bypass : {false, true}) {
+    std::vector<MachineItem> items;
+    append(items, {0x60, 0x42});
+    if (bypass) target(items, 0x57, "mask-done");
+    items.push_back(MachineItem::label("mask-loop"));
+    append(items, {0x62, 0x61, 0x37, 0x42, 0x60});
+    target(items, 0x57, "mask-loop");
+    items.push_back(MachineItem::label("mask-done"));
+    append(items, {0x62});
+    const auto masked = items.size();
+    append(items, {0x35});
+    const auto fractional = items.size();
+    stop(items, StopDisposition::Terminal);
+    const std::vector<PreloadReport> preloads{
+        {.register_name = "1", .value = "77777777"}};
+    const auto proof = ranges(items, {masked, fractional}, preloads);
+    require(!proof.exhausted && proof.x_before.contains(masked) != bypass &&
+                proof.x_before.contains(fractional) != bypass,
+            "an unbounded filtered loop must prove its invariant, but an unfiltered entry cannot");
+  }
+
+  for (const bool overwrite : {false, true}) {
+    std::vector<MachineItem> items;
+    append(items, {0x60, 0xb7, 0x60, 0x61, 0x37});
+    items[1].indirect_memory_targets = std::vector<int>{overwrite ? 1 : 2};
+    const auto masked = items.size();
+    stop(items, StopDisposition::Terminal);
+    const std::vector<PreloadReport> preloads{
+        {.register_name = "1", .value = "88888888"},
+        {.register_name = "7", .value = overwrite ? "1" : "2"}};
+    const auto proof = ranges(items, {masked}, preloads);
+    require(proof.x_before.contains(masked) != overwrite,
+            "digit facts must respect indirect stores that alias the mask");
+  }
+}
+
+void digit_shape_nibble_compiler_and_rom() {
+  const auto word = [](int digit) { return "8" + std::string(7, static_cast<char>('0' + digit)); };
+  const auto boundary = [](int digit) {
+    return digit == 0 || digit == 7 || digit == 8 || digit == 9 || digit == 10 || digit == 15;
+  };
+  for (int a = 0; a < 16; ++a)
+    for (int b = 0; b < 16; ++b)
+      for (const int operation : {0x37, 0x38, 0x39}) {
+        // Two ordinary decimal operands construct every hexadecimal payload
+        // through the ROM's OR, rather than injecting an invented raw spelling.
+        const std::vector<PreloadReport> preloads{
+            {.register_name = "1", .value = word(a & 7)},
+            {.register_name = "2", .value = word(a & 8)},
+            {.register_name = "3", .value = word(b & 7)},
+            {.register_name = "4", .value = word(b & 8)}};
+        std::vector<MachineItem> items;
+        append(items, {0x61, 0x62, 0x38, 0x40, 0x63, 0x64, 0x38, 0x45,
+                       0x60, 0x65, operation});
+        const auto value = items.size();
+        append(items, {0x46, 0x34});
+        const auto integer = items.size();
+        stop(items, StopDisposition::Terminal);
+        const auto proof = ranges(items, {value, integer}, preloads);
+        const int digit = operation == 0x37 ? a & b : operation == 0x38 ? a | b : a ^ b;
+        require(!proof.exhausted &&
+                    proof.x_before.at(integer) == OrdinaryNumericRange{8, 8, true},
+                "integer extraction from a proved positive order-zero 8.x word is eight");
+        if (digit <= 9) {
+          const auto expected = bound_ordinary_decimal(
+              "8." + std::string(7, static_cast<char>('0' + digit)));
+          require(proof.x_before.contains(value) && proof.x_before.at(value) == *expected,
+                  "all 16x16 payload combinations must retain exact decimal enclosures");
+        } else {
+          require(!proof.x_before.contains(value),
+                  "hexadecimal payloads remain nonnumeric even when their bitwise format is known");
+        }
+        if (!boundary(a) || !boundary(b)) continue;
+        emulator::MK61 calc;
+        require(calc.load_program(bytecode(items)).diagnostics.empty(), "digit-shape ROM load");
+        for (const auto& preload : preloads)
+          calc.set_register(preload.register_name, preload.value);
+        calc.press_sequence({"В/О", "С/П"});
+        require(calc.run_until_stable(2000, 8).stopped, "digit-shape ROM must stop");
+        require(calc.read_register("X").starts_with("8,"),
+                "ROM integer extraction must agree for ordinary and raw payloads");
+        if (digit <= 9)
+          require(calc.read_register("6").starts_with(
+                      digit == 0 ? "8," : "8," + std::string(7, static_cast<char>('0' + digit))),
+                  "ROM logical mantissas must agree with the digit-set transfer table");
+      }
+
+  std::vector<MachineItem> inverse;
+  append(inverse, {0x60, 0x3a});
+  const auto raw = inverse.size();
+  append(inverse, {0x34});
+  const auto integer = inverse.size();
+  stop(inverse, StopDisposition::Terminal);
+  const auto proof = ranges(inverse, {raw, integer});
+  require(!proof.x_before.contains(raw) &&
+              proof.x_before.at(integer) == OrdinaryNumericRange{8, 8, true},
+          "NOT certifies a word format, not decimal digits of an unknown input");
+}
+
 } // namespace
 
 int main() {
@@ -396,6 +669,9 @@ int main() {
     exact_caller_contexts_and_input_boundaries();
     composition_compiler_rom_and_size_baseline();
     signed_score_composition();
+    mask_bits_selector_layout_and_rom();
+    digit_shape_join_contracts();
+    digit_shape_nibble_compiler_and_rom();
     std::cout << "numeric entry value compiler and ROM contracts passed\n";
     return 0;
   } catch (const std::exception& error) {

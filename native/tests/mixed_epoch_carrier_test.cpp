@@ -34,7 +34,7 @@ void finish(std::vector<MachineItem>& items) {
 enum class Variant { Normal, Unknown, UnknownJoin, Zero, Negative, TooSmall,
                      Overflow, Alias, LastX, LiveZ, Resume, MixedProduct,
                      PredicateValue, PredicateStack, PredicateStop, InvertedEncoding,
-                     FractionalScore };
+                     FractionalScore, MaskedScore, RawMaskedScore, LeakedMaskedScore };
 
 std::vector<MachineItem> fixture(Variant variant = Variant::Normal,
                                int reg = 8, int seed = 1, int iterations = 2,
@@ -77,7 +77,8 @@ std::vector<MachineItem> fixture(Variant variant = Variant::Normal,
   append(items, {0x46, 7});
   items.push_back(MachineItem::label("chosen"));
   append(items, {0x49});
-  if (variant == Variant::Unknown)
+  if (variant == Variant::Unknown || variant == Variant::MaskedScore ||
+      variant == Variant::RawMaskedScore || variant == Variant::LeakedMaskedScore)
     append(items, {0x6b, 0x49});
   if (variant == Variant::Zero || variant == Variant::TooSmall)
     append(items, {variant == Variant::Zero ? 0 : 1, 0x49});
@@ -102,6 +103,17 @@ std::vector<MachineItem> fixture(Variant variant = Variant::Normal,
   append(items, {0x60 + reg, 0x44});
   finish(items);
   items.push_back(MachineItem::label("score"));
+  if (variant == Variant::MaskedScore || variant == Variant::RawMaskedScore ||
+      variant == Variant::LeakedMaskedScore) {
+    if (variant == Variant::LeakedMaskedScore) append(items, {9, 8});
+    append(items, {0x69, 0x6e,
+                   variant == Variant::RawMaskedScore ? 0x38 : 0x37, 0x35, 0x22});
+    // K AND keeps Y. Only a fresh literal after the square makes it the
+    // addend; the negative fixture intentionally leaks the unbounded input.
+    if (variant != Variant::LeakedMaskedScore) append(items, {9, 8});
+    append(items, {0x10, 0x52});
+    return items;
+  }
   if (variant == Variant::FractionalScore) {
     // A positive reduction assembled from a loop counter, a fractional
     // runtime preload and nested decimal arithmetic, not an integer literal.
@@ -135,7 +147,8 @@ bool mixed(const passes::PassResult& result) {
 }
 std::vector<std::string> observe(const std::vector<MachineItem>& items,
                                  const std::string& input,
-                                 const std::vector<PreloadReport>* preloads = nullptr) {
+                                 const std::vector<PreloadReport>* preloads = nullptr,
+                                 bool resume = false) {
   const auto resolved = resolve_machine_items(items);
   require(resolved.diagnostics.empty(), "mixed fixture must resolve");
   std::vector<int> codes;
@@ -153,6 +166,10 @@ std::vector<std::string> observe(const std::vector<MachineItem>& items,
       calc.set_register(preload.register_name, preload.value);
   calc.press_sequence({"В/О", "С/П"});
   require(calc.run_until_stable(15000, 8).stopped, "mixed fixture must stop");
+  if (resume) {
+    calc.press("\u0421/\u041f");
+    require(calc.run_until_stable(15000, 8).stopped, "restored carrier must resume safely");
+  }
   std::vector<std::string> values{calc.display_text(true)};
   calc.press(".");
   values.push_back(calc.display_text(true));
@@ -215,7 +232,10 @@ void predicate_epoch_contracts() {
       }
   for (const auto variant : {Variant::PredicateValue, Variant::PredicateStack,
                             Variant::PredicateStop, Variant::InvertedEncoding}) {
-    const auto results = candidates(fixture(variant, 8, 1, 2, 0x5c));
+    // Make the observation reachable in both finite and dynamic epochs.
+    // An impossible arm is not a valid negative contract.
+    const int predicate = variant == Variant::InvertedEncoding ? 0x5c : 0x59;
+    const auto results = candidates(fixture(variant, 8, 1, 2, predicate));
     require(std::none_of(results.begin(), results.end(), mixed),
             "equal predicate outcomes alone do not prove numerical or hidden-state observations: " +
                 std::to_string(static_cast<int>(variant)));
@@ -333,6 +353,46 @@ void fractional_score_composition() {
           "an opaque runtime coefficient must not gain an ordinary range");
 }
 
+
+void masked_score_composition() {
+  const std::vector<PreloadReport> preloads{
+      {.register_name = "e", .value = "77777777"}};
+  const auto source = fixture(Variant::MaskedScore);
+  const auto results = candidates(source, &preloads);
+  const auto found = std::find_if(results.begin(), results.end(), mixed);
+  require(found != results.end(),
+          "a sanitizing mask must prove the dynamic reduction without restricting the input");
+  const auto after = lower_ir_to_machine(found->ops);
+  require(cells(after) == cells(source) - 7,
+          "digit-set, numeric-range and mixed-epoch proofs must compose to save seven cells");
+  require(build_post_layout_control_flow(after).proved, "masked score final CFG must prove");
+  for (const char* input : {"-7", "0", "13", "99999999", "1e99", "-1e99"})
+    require(observe(source, input, &preloads) == observe(after, input, &preloads),
+            "masked score recoding must preserve data, X1, decimal-entry and return behavior");
+  for (const auto variant : {Variant::RawMaskedScore, Variant::LeakedMaskedScore}) {
+    const auto rejected = candidates(fixture(variant), &preloads);
+    require(std::none_of(rejected.begin(), rejected.end(), mixed),
+            "a raw result or leaked unbounded Y cannot prove an ordinary positive score");
+  }
+
+  const LayoutSearchArtifact root{.items = source, .preloads = preloads};
+  const auto incomplete = expand_joint_representation_transactions(root, {}, false);
+  require(std::none_of(incomplete.begin(), incomplete.end(), [](const auto& edge) {
+            return std::any_of(edge.node.optimizations.begin(), edge.node.optimizations.end(),
+                [](const auto& report) {
+                  return report.name == "mixed-epoch-coefficient-state-carrier";
+                });
+          }), "an incomplete preload environment must not borrow the mask's setup value");
+  const auto edges = expand_joint_representation_transactions(root, {}, true);
+  require(std::any_of(edges.begin(), edges.end(), [&](const auto& edge) {
+            return cells(edge.node.items) < cells(source) &&
+                std::any_of(edge.node.optimizations.begin(), edge.node.optimizations.end(),
+                    [](const auto& report) {
+                      return report.name == "mixed-epoch-coefficient-state-carrier";
+                    });
+          }), "the digit/range certificate must reach the production joint search");
+}
+
 void production_frontier() {
   const LayoutSearchArtifact root{.items = fixture()};
   const auto first = expand_joint_representation_transactions(root, {}, false);
@@ -408,10 +468,196 @@ void laid_out_production_frontier() {
         [](const auto& report) { return report.name == "mixed-epoch-coefficient-state-carrier"; });
   }), "typed roles must not silently repair a stale executable selector");
 }
+
+bool recovered(const passes::PassResult& result) {
+  return std::any_of(result.optimizations.begin(), result.optimizations.end(),
+      [](const auto& report) { return report.name == "finite-mode-exit-recovery"; });
+}
+enum class ExitVariant { Normal, Taken, SharedDynamic, Shadow, FurtherProjection,
+                         SideEntry, Resume, RawPredicate, Unprofitable, UnaliasedStore, AliasedStore };
+
+std::vector<MachineItem> exit_fixture(ExitVariant variant = ExitVariant::Normal,
+                                     int reg = 8, int seed = 1, int shift = 1) {
+  std::vector<MachineItem> items;
+  append(items, {0x45, seed});
+  if (variant != ExitVariant::SharedDynamic)
+    append(items, {0x0b});
+  append(items, {0x40 + reg});
+  if (variant == ExitVariant::UnaliasedStore || variant == ExitVariant::AliasedStore) {
+    const int destination = variant == ExitVariant::AliasedStore ? reg : 9;
+    append(items, {destination, 0x47, 0x6b, 0xb7});
+    items.back().indirect_memory_targets = std::vector<int>{destination};
+  }
+  const auto product = [&] {
+    append(items, {0x6b, 0x60 + reg, 1});
+    for (int i = 0; i < shift; ++i) append(items, {0});
+    append(items, {0x13, 0x12, 0x4a});
+  };
+  for (int i = 0; i < (variant == ExitVariant::Unprofitable ? 1 : 3); ++i)
+    product();
+  append(items, {0x6b, 0x6c, 0x6d, 0x6e, 0x6b, 0x10, 0x46});
+  if (variant == ExitVariant::SideEntry) {
+    append(items, {0x6b});
+    target(items, 0x59, "exit");
+  }
+  append(items, {0x6b});
+  target(items, 0x59, "check"); // Negative input bypasses the positive reduction.
+  append(items, {7, 0x22, 0x60 + reg, 0x36, 0x40 + reg});
+  items.push_back(MachineItem::label("check"));
+  append(items, {0x60 + reg});
+  const auto predicate = items.size();
+  target(items, variant == ExitVariant::Taken || variant == ExitVariant::SharedDynamic
+                    ? 0x59 : 0x5c,
+         variant == ExitVariant::Taken ? "exit" : "normalized");
+  if (variant == ExitVariant::RawPredicate)
+    items[predicate].raw = true;
+  if (variant == ExitVariant::Taken)
+    finish(items);
+  items.push_back(MachineItem::label("exit"));
+  if (variant == ExitVariant::FurtherProjection) {
+    append(items, {0, 0x14, 0x47});
+    product();
+    finish(items);
+  } else {
+    append(items, {variant == ExitVariant::Shadow ? 0x0a : 0, 0x50});
+    items.back().stop_disposition = variant == ExitVariant::Resume
+        ? StopDisposition::Resumable : StopDisposition::Terminal;
+  }
+  if (variant != ExitVariant::Taken) {
+    items.push_back(MachineItem::label("normalized"));
+    finish(items);
+  }
+  return items;
+}
+
+void finite_exit_compiler_rom_and_sizes() {
+  for (const auto variant : {ExitVariant::Normal, ExitVariant::UnaliasedStore})
+  for (const int reg : {2, 8})
+    for (const int seed : {1, 4})
+      for (const int shift : {1, 2}) {
+        const auto source = exit_fixture(variant, reg, seed, shift);
+        const int transport = variant == ExitVariant::UnaliasedStore ? 4 : 0;
+        const auto results = candidates(source);
+        const auto found = std::find_if(results.begin(), results.end(), recovered);
+        require(found != results.end(), "finite exit needs a real, stack-preserving recovery");
+        const auto after = lower_ir_to_machine(found->ops);
+        require(cells(source) == 52 + 3 * (shift - 1) + transport &&
+                    cells(after) == 48 + (shift - 1) + transport,
+                "recovered-exit size baseline includes every recovery cell: " +
+                    std::to_string(cells(source)) + " -> " + std::to_string(cells(after)));
+        require(found->preloads.empty(), "exit repair must not borrow an unproved register");
+        require(build_post_layout_control_flow(after).proved, "recovered final CFG must prove");
+        for (const char* input : {"-7", "0", "13"})
+          require(observe(source, input) == observe(after, input),
+                  "finite and dynamic exits must preserve all registers, stack, X1 and X2");
+      }
+  for (const auto variant : {ExitVariant::Taken, ExitVariant::SharedDynamic,
+                            ExitVariant::Shadow, ExitVariant::FurtherProjection,
+                            ExitVariant::SideEntry,
+                            ExitVariant::RawPredicate, ExitVariant::Unprofitable, ExitVariant::AliasedStore}) {
+    const auto rejected = candidates(exit_fixture(variant));
+    require(std::none_of(rejected.begin(), rejected.end(), mixed),
+            "unsafe or unprofitable recovery must reject: " +
+                std::to_string(static_cast<int>(variant)));
+  }
+  const auto resumable = exit_fixture(ExitVariant::Resume);
+  const auto resumed_candidates = candidates(resumable);
+  const auto resumed = std::find_if(resumed_candidates.begin(), resumed_candidates.end(), recovered);
+  require(resumed != resumed_candidates.end(), "restoring the carrier permits a resumable exit");
+  for (const bool resume : {false, true})
+    require(observe(resumable, "-7", nullptr, resume) ==
+                observe(lower_ir_to_machine(resumed->ops), "-7", nullptr, resume),
+            "a restored epoch preserves the first stop and the resumed continuation");
+
+  const auto impossible = fixture(Variant::PredicateValue, 8, 1, 2, 0x5c);
+  const auto accepted = candidates(impossible);
+  const auto found = std::find_if(accepted.begin(), accepted.end(), recovered);
+  require(found != accepted.end(), "a proved impossible numerical observation is not live");
+  for (const char* input : {"-7", "0", "13"})
+    require(observe(impossible, input) == observe(lower_ir_to_machine(found->ops), input),
+            "finite truth-table pruning must preserve actual branch decisions");
+
+  const LayoutSearchArtifact root{.items = exit_fixture()};
+  const auto first = expand_joint_representation_transactions(root, {}, false);
+  const auto second = expand_joint_representation_transactions(root, {}, false);
+  require(first.size() == second.size(), "exit-recovery frontier size is deterministic");
+  bool smaller = false;
+  for (std::size_t i = 0; i < first.size(); ++i) {
+    require(same_layout_search_artifact(first[i].node, second[i].node),
+            "exit-recovery frontier repeats byte for byte");
+    if (cells(first[i].node.items) <= cells(root.items) - 4 &&
+        std::any_of(first[i].node.optimizations.begin(), first[i].node.optimizations.end(),
+            [](const auto& report) { return report.name == "finite-mode-exit-recovery"; }))
+      smaller = true;
+  }
+  require(smaller, "complete exit recovery must participate in the production joint search");
+}
+
+std::vector<std::string> exponent_recovery_observation(
+    const std::string& word, int predicate, int shift, bool repair, int context) {
+  std::vector<int> code;
+  if (context == 1) code = {3, 0x0c, 2};
+  if (context == 2) code = {0x0e};
+  if (context == 3) code = {0x0d};
+  code.push_back(0x68);
+  const int next = static_cast<int>(code.size()) + 2;
+  code.insert(code.end(), {predicate, (next / 10) * 16 + next % 10});
+  if (repair) code.insert(code.end(), {0x0c, shift, 0x48});
+  code.insert(code.end(), {0, 0x50});
+  emulator::MK61 calc;
+  require(calc.load_program(code).diagnostics.empty(), "exponent recovery ROM load");
+  calc.set_register("X", "101").set_register("Y", "103")
+      .set_register("Z", "107").set_register("T", "109")
+      .set_register("X1", "113").set_register("8", word);
+  calc.press_sequence({"\u0412/\u041e", "\u0421/\u041f"});
+  require(calc.run_until_stable(5000, 8).stopped, "exponent recovery ROM stop");
+  std::vector<std::string> result;
+  for (const char* name : {"X", "Y", "Z", "T", "X1", "8"})
+    result.push_back(calc.read_register(name));
+  calc.press(".");
+  result.push_back(calc.display_text(true));
+  return result;
+}
+
+void exponent_recovery_rom_facts() {
+  struct Row { std::string original, encoded; int shift; };
+  for (const auto& row : std::vector<Row>{
+           {"1", "0.1", 1}, {"7", "0.7", 1}, {"-4", "-0.4", 1},
+           {"9", "0.09", 2}, {"42", "0.42", 2}, {"-42", "-0.42", 2},
+           {"37", "3.7", 1}, {"1200", "12", 2},
+           {"1234567", "123456.7", 1}, {"1", "0.000001", 6}}) {
+    const bool negative = row.original.front() == '-';
+    for (const int predicate : {0x57, negative ? 0x5c : 0x59})
+      for (int context = 0; context < 4; ++context)
+        require(exponent_recovery_observation(row.original, predicate, row.shift, false, context) ==
+                    exponent_recovery_observation(row.encoded, predicate, row.shift, true, context),
+                "true predicate exponent/store repair preserves stack, register, X1 and X2: " +
+                    row.original + " / " + row.encoded + " context " + std::to_string(context));
+  }
+  require(exponent_recovery_observation("1", 0x5c, 1, false, 0) !=
+              exponent_recovery_observation("0.1", 0x5c, 1, true, 0),
+          "taken-branch entry shadow is a real ROM counterexample, not an arbitrary restriction");
+  for (const int predicate : {0x57, 0x59, 0x5c, 0x5e})
+    for (const int value : {-1, 0, 1}) {
+      emulator::MK61 calc;
+      require(calc.load_program({0x68, predicate, 0x05, 2, 0x50, 3, 0x50})
+                  .diagnostics.empty(), "predicate direction ROM load");
+      calc.set_register("8", std::to_string(value));
+      calc.press_sequence({"\u0412/\u041e", "\u0421/\u041f"});
+      require(calc.run_until_stable(3000, 8).stopped, "predicate direction ROM stop");
+      const bool truth = predicate == 0x57 ? value != 0 : predicate == 0x59 ? value >= 0 :
+                         predicate == 0x5c ? value < 0 : value == 0;
+      require(calc.read_register("X") == (truth ? "2," : "3,"),
+              "all four direct predicates fall through on true and branch on false");
+    }
+}
+
 } // namespace
 
 int main() {
   try {
+    exponent_recovery_rom_facts();
+    finite_exit_compiler_rom_and_sizes();
     range_contracts();
     iterative_range_contracts();
     positive_compiler_rom_and_sizes();
@@ -419,6 +665,7 @@ int main() {
     predicate_epoch_contracts();
     production_frontier();
     fractional_score_composition();
+    masked_score_composition();
     laid_out_production_frontier();
     std::cout << "mixed finite/dynamic carrier compiler and ROM contracts passed\n";
     return 0;

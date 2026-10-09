@@ -266,6 +266,50 @@ void arithmetic_entry_rom_facts() {
     require(!selector_charge_entry_closer_opcode(opcode),
             "editing, entry suppression and context-preserving flow are not unconditional closers");
 }
+
+std::array<std::string, 5> conditional_entry_observation(
+    int opcode, const std::string& input, int context, bool digit) {
+  std::vector<int> code{0x61, 0x62};
+  if (context == 1) code.insert(code.end(), {0x0d, 2});
+  if (context == 2) code.push_back(0x0e);
+  if (context == 3) code.push_back(0x43);
+  if (context == 4) code.insert(code.end(), {2, 0x0c, 3});
+  if (context == 5) code.push_back(0x0d);
+  // Both outcomes lead directly to the probe. No intervening BP/store may
+  // manufacture the entry fact that this test attributes to the conditional.
+  const int next = static_cast<int>(code.size()) + 2;
+  code.insert(code.end(), {opcode, (next / 10) * 16 + next % 10});
+  if (digit) code.push_back(7);
+  code.push_back(0x50);
+  emulator::MK61 calc;
+  require(calc.load_program(code).diagnostics.empty(), "conditional entry ROM load");
+  calc.set_register("X", "101").set_register("Y", "103")
+      .set_register("Z", "107").set_register("T", "109");
+  for (const char* reg : {"0", "1", "2", "3"})
+    calc.set_register(reg, input);
+  calc.press_sequence({"\u0412/\u041e", "\u0421/\u041f"});
+  require(calc.run_until_stable(4000, 8).stopped, "conditional entry ROM must stop");
+  return {calc.read_register("X"), calc.read_register("Y"), calc.read_register("Z"),
+          calc.read_register("T"), calc.read_register("X1")};
+}
+
+void conditional_entry_rom_facts() {
+  for (const int opcode : {0x57, 0x59, 0x5c, 0x5e, 0x5d, 0x5b, 0x58, 0x5a}) {
+    require(selector_charge_entry_closer_opcode(opcode),
+            "direct predicates and FL counters must certify fresh entry");
+    // Zero, signs, and the FL 1/2 boundary exercise both hardware decisions.
+    for (const char* input : {"0", "1", "2", "-3.125"})
+      for (int context = 0; context < 6; ++context) {
+        const auto before = conditional_entry_observation(opcode, input, context, false);
+        const auto after = conditional_entry_observation(opcode, input, context, true);
+        require(after[0] == "7," && after[1] == before[0] &&
+                    after[2] == before[1] && after[3] == before[2] &&
+                    after[4] == before[4],
+                "either conditional edge must close entry and lift all four stack slots");
+      }
+  }
+}
+
 } // namespace
 
 int main() {
@@ -273,6 +317,7 @@ int main() {
     positive_compiler_and_rom();
     negative_contracts();
     arithmetic_entry_rom_facts();
+    conditional_entry_rom_facts();
     std::cout << "Typed continuation compiler/ROM contracts passed\n";
     return 0;
   } catch (const std::exception& error) {

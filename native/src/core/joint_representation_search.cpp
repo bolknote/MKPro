@@ -7,6 +7,7 @@
 #include "mkpro/core/passes/common_processor_factoring.hpp"
 #include "mkpro/core/passes/indirect_selector_seed_reuse.hpp"
 #include "mkpro/core/passes/register_coalesce.hpp"
+#include "mkpro/core/passes/selector_charge_literal_sinking.hpp"
 #include "mkpro/core/passes/semantic_region_folding.hpp"
 #include "mkpro/core/passes/shared_straight_line_helper.hpp"
 #include "mkpro/core/post_layout_control_flow.hpp"
@@ -377,8 +378,9 @@ bool charged_constraint_consumer(const MachineItem& item) {
 std::optional<LayoutSearchArtifact> close_representation_constraints(
     const ConstrainedRepresentation& node, const passes::PassContext& context,
     const PostLayoutControlFlowOptions& control_options, bool complete_preloads,
-    bool project_shared_tail = false) {
-  const auto& input = node.artifact.items;
+    bool project_shared_tail = false,
+    const passes::DeferredSelectorDataLiteralLayout* pending_literal = nullptr) {
+  const auto& input = pending_literal ? pending_literal->items : node.artifact.items;
   const auto flow = build_post_layout_control_flow(input, control_options);
   if (!flow.proved)
     return std::nullopt;
@@ -405,6 +407,8 @@ std::optional<LayoutSearchArtifact> close_representation_constraints(
   };
   std::map<std::string, Selector> selectors;
   std::map<std::string, int> fixed;
+  if (pending_literal)
+    fixed.emplace(pending_literal->target_label, pending_literal->literal_value);
   constexpr std::string_view names = "0123456789abcde";
   for (const auto& [source, destinations] : flow.indirect_flow_targets) {
     const auto& item = input[source];
@@ -445,7 +449,8 @@ std::optional<LayoutSearchArtifact> close_representation_constraints(
         if (probe != selector.old_target &&
             rebind_stable_preloaded_indirect_flow_selector(
                 input, node.artifact.preloads[preload->second], flow,
-                selector.old_target, probe, control_options.address_space_model)) {
+                selector.old_target, probe, control_options.address_space_model,
+                &node.artifact.preloads)) {
           selector.flexible = true;
           break;
         }
@@ -533,7 +538,7 @@ std::optional<LayoutSearchArtifact> close_representation_constraints(
       const auto& preload = node.artifact.preloads[preload_by_register.at(name)];
       if (!rebind_stable_preloaded_indirect_flow_selector(
               input, preload, flow, selector.old_target, last,
-              control_options.address_space_model))
+              control_options.address_space_model, &node.artifact.preloads))
         continue;
       for (const auto& label : selector.labels) {
         if (decimal_charge_targets.contains(label)) continue;
@@ -603,7 +608,7 @@ std::optional<LayoutSearchArtifact> close_representation_constraints(
     auto& preload = output.preloads[preload_by_register.at(name)];
     const auto value = rebind_stable_preloaded_indirect_flow_selector(
         input, preload, flow, selector.old_target, *address,
-        control_options.address_space_model);
+        control_options.address_space_model, &node.artifact.preloads);
     if (!value)
       return std::nullopt;
     if (preload.value != *value) {
@@ -618,11 +623,21 @@ std::optional<LayoutSearchArtifact> close_representation_constraints(
   // the explicit hardware empty-return contract. Do not follow it with the
   // legacy symbolic walk, which rejects every empty return even under that
   // independently established contract.
-  if (!rebound || !build_post_layout_control_flow(rebound->items, control_options).proved)
+  if (!rebound) return std::nullopt;
+  const auto final_flow = build_post_layout_control_flow(rebound->items, control_options);
+  if (!final_flow.proved || (pending_literal &&
+      !passes::prove_deferred_selector_data_literal_layout(
+          *pending_literal, rebound->items, final_flow)))
     return std::nullopt;
   if (preparation && (cells(*rebound) != placed->projected_cells ||
       constraint_positions(rebound->items) != std::optional{placed->projected_targets}))
     return std::nullopt;
+  if (pending_literal)
+    rebound->optimizations.push_back({"joint-data-control-literal-layout",
+        "Solved a compiler-owned literal/address equality together with selector allocation "
+        "and pending tail widths; removed " + std::to_string(pending_literal->removed_cells) +
+        " literal cells and re-proved every final charge, entry, alias and stack/X1/X2 "
+        "continuation. The independent historical search retains its complete budget."});
   return rebound;
 }
 
@@ -814,6 +829,33 @@ TransactionSearchResult<LayoutSearchArtifact> search_joint_representation_constr
     }
     return variants;
   };
+
+  // Conditional data/control rewrites must not alter the historical beam,
+  // pruning incumbent or equal-size winner. Evaluate them in a separate
+  // closure lane, borrowing exactly the already-admitted representation and
+  // allocation states. No larger search limits or source-specific seeds.
+  std::optional<LayoutSearchArtifact> data_control_incumbent;
+  const auto close_data_control_literals = [&](const ConstrainedRepresentation& node) {
+    if (!preload_environment_complete || limits.maximum_expansions == 0 ||
+        limits.maximum_candidates == 0 || limits.maximum_depth == 0)
+      return;
+    for (const auto& pending : passes::prepare_deferred_selector_data_literal_layouts(
+             node.artifact.items, control_options,
+             std::min<std::size_t>(4, limits.maximum_candidates))) {
+      for (const bool projected : {false, true}) {
+        auto closed = close_representation_constraints(
+            node, context, control_options, true, projected, &pending);
+        if (!closed) continue;
+        // A temporarily larger placement can still repay its bounded debt in
+        // finalization. Only the complete artifact competes with incumbents.
+        if (finalize) closed = finalize(*closed);
+        if (closed && cells(*closed) < cells(root) &&
+            (!data_control_incumbent || cells(*closed) < cells(*data_control_incumbent)))
+          data_control_incumbent = std::move(*closed);
+      }
+    }
+  };
+
   const auto close_node = [&](const ConstrainedRepresentation& node, const std::vector<std::string>& path)
           -> std::optional<ConstrainedRepresentation> {
         std::optional<ConstrainedRepresentation> best;
@@ -840,6 +882,7 @@ TransactionSearchResult<LayoutSearchArtifact> search_joint_representation_constr
               (!best || cells(result.artifact) < cells(best->artifact)))
             best = std::move(result);
         }
+        for (const auto& variant : variants) close_data_control_literals(variant);
         return best;
       };
   const auto search = search_proved_transactions(
@@ -1002,6 +1045,7 @@ TransactionSearchResult<LayoutSearchArtifact> search_joint_representation_constr
                 (!output.incumbent || cells(*closed) < cells(*output.incumbent)))
               output.incumbent = std::move(*closed);
           }
+        for (const auto& variant : variants) close_data_control_literals(variant);
       }
     }
   }
@@ -1049,6 +1093,12 @@ TransactionSearchResult<LayoutSearchArtifact> search_joint_representation_constr
     output.rejected += topology_search.rejected;
     output.budget_exhausted = output.budget_exhausted || topology_search.budget_exhausted;
   }
+  // The input itself may already own a valid literal family, without an
+  // unrelated representation rewrite to serve as an artificial search seed.
+  close_data_control_literals(initial);
+  if (data_control_incumbent &&
+      (!output.incumbent || cells(*data_control_incumbent) < cells(*output.incumbent)))
+    output.incumbent = std::move(*data_control_incumbent);
   return output;
 }
 

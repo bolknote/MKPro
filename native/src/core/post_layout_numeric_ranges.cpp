@@ -274,10 +274,94 @@ Quantum quantized_literal(std::string_view text) {
   return quantized(mantissa, mantissa, denominator);
 }
 
+
+// A finite domain of possible digits in each payload tetrad. It is independent
+// of numeric bounds: an unknown/raw operand may still be sanitized by K AND,
+// and a bitwise result with hexadecimal digits is not an ordinary decimal.
+// normalized_eight certifies the output format (positive 8.x, order zero),
+// never inferred from a may-bit mask or an arbitrary value with the same bits.
+struct MantissaShape {
+  std::array<std::uint16_t, 7> digits{
+      0xffffU, 0xffffU, 0xffffU, 0xffffU, 0xffffU, 0xffffU, 0xffffU};
+  bool normalized_eight = false;
+  bool operator==(const MantissaShape&) const = default;
+};
+
+MantissaShape ordinary_mantissa() {
+  MantissaShape shape;
+  shape.digits.fill(0x03ffU);
+  return shape;
+}
+
+MantissaShape literal_mantissa(std::string_view text) {
+  const auto range = bound_ordinary_decimal(text);
+  if (!range)
+    return {};
+  std::string digits;
+  for (const char c : text) {
+    if (c == 'e' || c == 'E') break;
+    if (c >= '0' && c <= '9') digits.push_back(c);
+  }
+  const auto first = digits.find_first_not_of('0');
+  digits = first == std::string::npos ? "0" : digits.substr(first);
+  digits.resize(8, '0');
+  MantissaShape shape;
+  for (std::size_t i = 0; i < shape.digits.size(); ++i)
+    shape.digits[i] = static_cast<std::uint16_t>(1U << (digits[i + 1U] - '0'));
+  shape.normalized_eight = range->lower == 8 && range->upper <= 9;
+  return shape;
+}
+
+MantissaShape join_mantissa(const MantissaShape& a, const MantissaShape& b) {
+  MantissaShape result;
+  for (std::size_t i = 0; i < result.digits.size(); ++i)
+    result.digits[i] = a.digits[i] | b.digits[i];
+  result.normalized_eight = a.normalized_eight && b.normalized_eight;
+  return result;
+}
+
+std::uint16_t bitwise_digit_set(int code, std::uint16_t y, std::uint16_t x) {
+  std::uint16_t result = 0;
+  for (unsigned a = 0; a < 16; ++a) {
+    if ((y & (1U << a)) == 0) continue;
+    for (unsigned b = 0; b < 16; ++b) {
+      if ((x & (1U << b)) == 0) continue;
+      const unsigned digit = code == 0x37 ? a & b : code == 0x38 ? a | b : a ^ b;
+      result |= static_cast<std::uint16_t>(1U << digit);
+    }
+  }
+  return result;
+}
+
+MantissaShape bitwise_mantissa(int code, const MantissaShape& y, const MantissaShape& x) {
+  MantissaShape result;
+  result.normalized_eight = true;
+  for (std::size_t i = 0; i < result.digits.size(); ++i)
+    result.digits[i] = bitwise_digit_set(code, y.digits[i], x.digits[i]);
+  return result;
+}
+
+Quantum decimal_bitwise_enclosure(const MantissaShape& shape) {
+  if (!shape.normalized_eight)
+    return std::nullopt;
+  std::int64_t lo = 8, hi = 8;
+  for (const auto digits : shape.digits) {
+    if (digits == 0 || (digits & 0xfc00U) != 0)
+      return std::nullopt;
+    int minimum = 0, maximum = 9;
+    while ((digits & (1U << minimum)) == 0) ++minimum;
+    while ((digits & (1U << maximum)) == 0) --maximum;
+    lo = 10 * lo + minimum;
+    hi = 10 * hi + maximum;
+  }
+  return quantized(lo, hi, 10000000);
+}
+
 struct Literal {
   std::size_t begin;
   OrdinaryNumericRange value;
   Quantum quantum;
+  MantissaShape mantissa;
 };
 
 } // namespace
@@ -630,7 +714,7 @@ static PostLayoutNumericRangeProof prove_numeric_ranges_on_graph(
       ++i;
     }
     if (const auto range = bound_ordinary_decimal(value))
-      literals.emplace(i - 1U, Literal{begin, *range, quantized_literal(value)});
+      literals.emplace(i - 1U, Literal{begin, *range, quantized_literal(value), literal_mantissa(value)});
   }
   using Key = std::pair<std::size_t, int>; // X,Y,Z,T, then R0..Re
   // Bottom (no grounded path yet) is distinct from unknown (a real path with
@@ -642,6 +726,7 @@ static PostLayoutNumericRangeProof prove_numeric_ranges_on_graph(
     Quantum quantum;
     // Numeric equality alone does not certify indirect BCD write-back.
     bool integer_selector_word = false;
+    MantissaShape mantissa{};
     bool operator==(const Fact&) const = default;
   };
   const Fact unknown{true, std::nullopt, std::nullopt};
@@ -660,10 +745,12 @@ static PostLayoutNumericRangeProof prove_numeric_ranges_on_graph(
     else if (!quantum)
       quantum = quantized_range(range);
     const bool integer_word = range && range->integral && range->lower >= 1;
-    return Fact{true, std::move(range), std::move(quantum), integer_word};
+    const auto mantissa = range ? ordinary_mantissa() : MantissaShape{};
+    return Fact{true, std::move(range), std::move(quantum), integer_word, mantissa};
   };
   const auto decimal = [&](std::string_view text) {
     auto fact = constant(bound_ordinary_decimal(text), quantized_literal(text));
+    fact.mantissa = literal_mantissa(text);
     if (fact.integer_selector_word) {
       const auto decoded = evaluate_indirect_address("0", text, IndirectOperationKind::Memory);
       const auto updated = decoded && decoded->result_value
@@ -679,7 +766,18 @@ static PostLayoutNumericRangeProof prove_numeric_ranges_on_graph(
     if (!b.grounded) return a;
     auto joined = constant(join(a.range, b.range), join_quantized(a.quantum, b.quantum));
     joined.integer_selector_word = a.integer_selector_word && b.integer_selector_word;
+    joined.mantissa = join_mantissa(a.mantissa, b.mantissa);
     return joined;
+  };
+  const auto is_top = [&](const Fact& fact) {
+    return fact.grounded && !fact.range && fact.mantissa == unknown.mantissa;
+  };
+  const auto bitwise = [&](int code, const Fact& y, const Fact& x) {
+    if (!y.grounded || !x.grounded) return Fact{};
+    const auto shape = bitwise_mantissa(code, y.mantissa, x.mantissa);
+    auto fact = constant(std::nullopt, decimal_bitwise_enclosure(shape));
+    fact.mantissa = shape;
+    return fact;
   };
   std::map<Key, Fact> cache;
   std::map<Key, std::set<Key>> dependents;
@@ -817,9 +915,12 @@ static PostLayoutNumericRangeProof prove_numeric_ranges_on_graph(
                     items[item].opcode >= 0x60 && items[item].opcode <= 0x6e;
               });
       if (valid && (automatic_entry_lift[start] || recalled) &&
-          !external.contains(literal->second.begin))
-        return slot == 0 ? constant(Range{literal->second.value}, literal->second.quantum)
-                         : before(start, slot - 1);
+          !external.contains(literal->second.begin)) {
+        if (slot != 0) return before(start, slot - 1);
+        auto fact = constant(Range{literal->second.value}, literal->second.quantum);
+        fact.mantissa = literal->second.mantissa;
+        return fact;
+      }
     }
     if (family == 0x60) {
       if (slot == 0) {
@@ -892,9 +993,17 @@ static PostLayoutNumericRangeProof prove_numeric_ranges_on_graph(
       if (effect == StackEffect::ConsumeYDrop || effect == StackEffect::ConsumeYKeep) {
         const auto y = input(1);
         const auto x = input(0);
+        if (code >= 0x37 && code <= 0x39) return bitwise(code, y, x);
         return !y.grounded || !x.grounded ? Fact{} : constant(binary(code, y.range, x.range), binary_quantized(code, y.quantum, x.quantum));
       }
       const auto x = input(0);
+      if (x.grounded && code == 0x34 && x.mantissa.normalized_eight)
+        return decimal("8");
+      if (code == 0x3a) {
+        auto ones = unknown;
+        ones.mantissa.digits.fill(0x8000U);
+        return bitwise(0x39, ones, x);
+      }
       return x.grounded ? constant(unary(code, x.range), unary_quantized(code, x.quantum)) : Fact{};
     }
     if (effect == StackEffect::ConsumeYDrop || effect == StackEffect::Exposes)
@@ -920,8 +1029,8 @@ static PostLayoutNumericRangeProof prove_numeric_ranges_on_graph(
     else work.pop_front();
     queued.erase(key);
     auto& previous = cache.at(key);
-    if (previous.grounded && !previous.range)
-      continue; // Top is stable under further joins.
+    if (is_top(previous))
+      continue; // Only the entire reduced product at top is stable under joins.
     evaluating = key;
     const auto [state, slot] = key;
     const auto at = flow.execution_states[state].item_index;
@@ -967,7 +1076,7 @@ static PostLayoutNumericRangeProof prove_numeric_ranges_on_graph(
     if (!exact_stable)
       for (const auto predecessor : predecessors[state]) {
         value = merge(value, after(predecessor, slot, state));
-        if (value.grounded && !value.range)
+        if (is_top(value))
           break;
       }
     evaluating.reset();
@@ -979,7 +1088,11 @@ static PostLayoutNumericRangeProof prove_numeric_ranges_on_graph(
     // Losing only the word-representation certificate is not range growth.
     if (previous.grounded && previous.range && value.range &&
         (previous.range != value.range || previous.quantum != value.quantum) && ++changes[key] > 8U) {
-      value = unknown;
+      value.range.reset();
+      value.quantum.reset();
+      value.integer_selector_word = false;
+      // The digit-set domain is finite. Keep its independently proved facts
+      // when widening a growing numeric interval; it needs no loop bound.
       if (widened_queries) widened.insert(key);
     }
     previous = std::move(value);

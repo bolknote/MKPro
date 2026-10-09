@@ -171,7 +171,8 @@ std::size_t cells(const std::vector<MachineItem>& items) {
   }));
 }
 
-std::vector<std::string> observe_program(const std::vector<MachineItem>& items) {
+std::vector<std::string> observe_program(const std::vector<MachineItem>& items,
+                                          const std::string& input = "0") {
   const auto resolved = resolve_machine_items(items);
   require(resolved.diagnostics.empty(), "synthesized fixture must resolve");
   std::vector<int> codes;
@@ -181,6 +182,7 @@ std::vector<std::string> observe_program(const std::vector<MachineItem>& items) 
   require(calc.load_program(codes).diagnostics.empty(), "synthesized fixture must fit MK-61");
   for (const char* reg : {"0", "1", "2", "3", "4", "5", "6", "7", "9", "a", "b", "c", "d", "e"})
     calc.set_register(reg, "7");
+  calc.set_register("X", input);
   calc.press_sequence({"В/О", "С/П"});
   require(calc.run_until_stable(6000, 8).stopped, "synthesized fixture must terminate");
   std::vector<std::string> result{calc.display_text(true)};
@@ -256,6 +258,69 @@ void compiler_and_rom() {
           "entry analysis requires an authoritative execution graph");
 }
 
+
+std::vector<MachineItem> conditional_definitions(int opcode) {
+  const auto original = fixture();
+  std::vector<MachineItem> items;
+  int definitions = 0;
+  for (std::size_t i = 0; i < original.size(); ++i) {
+    const auto& item = original[i];
+    if (i + 2U < original.size() && item.kind == MachineItemKind::Op &&
+        item.opcode >= 1 && item.opcode <= 8 &&
+        original[i + 1U].kind == MachineItemKind::Op && original[i + 1U].opcode == 0 &&
+        original[i + 2U].kind == MachineItemKind::Op && original[i + 2U].opcode == 0x53) {
+      const auto label = "mode_" + std::to_string(definitions++);
+      append(items, {opcode});
+      items.push_back(MachineItem::address(label));
+      items.push_back(MachineItem::label(label));
+    }
+    items.push_back(item);
+  }
+  require(definitions == 8, "fixture must have eight independently entered mode literals");
+  // Main itself supplies no fresh-entry fact, and Enter suppresses lift.
+  // Only the first executed condition can justify changing that literal.
+  items.front() = MachineItem::op(0x0e, "suppressed entry before conditional");
+  return items;
+}
+
+void conditional_definition_compiler_and_rom() {
+  for (const int opcode : {0x57, 0x59, 0x5c, 0x5e, 0x5d, 0x5b, 0x58, 0x5a}) {
+    const auto before = conditional_definitions(opcode);
+    const auto optimized = optimize(before);
+    const auto after = lower_ir_to_machine(optimized.ops);
+    require(optimized.applied == 1 && cells(before) == 69U && cells(after) == 63U,
+            "branch-closed entry must enable the six-cell joint constant synthesis");
+    require(build_post_layout_control_flow(after).proved,
+            "synthesized branch targets and returns must remain valid");
+    for (const char* input : {"0", "2", "-3.125"})
+      require(observe_program(before, input) == observe_program(after, input),
+              "conditional synthesis must preserve ROM memory, stack, X1/X2 and returns");
+
+    const auto flow = build_post_layout_control_flow(before);
+    const auto facts = analyze_post_layout_automatic_entry_lift(before, flow);
+    require(facts.has_value(), "conditional entry proof must converge");
+    std::size_t edges = 0;
+    for (std::size_t state = 0; state < flow.execution_states.size(); ++state)
+      if (before[flow.execution_states[state].item_index].opcode == opcode)
+        for (const auto successor : flow.execution_successors[state]) {
+          ++edges;
+          require(facts->at(successor), "both direct conditional edges must close entry");
+        }
+    require(edges > 0, "compiler fixture must actually execute the tested control opcode");
+
+    auto raw = before;
+    raw[1].raw = true;
+    require(optimize(raw).applied == 0, "an opaque conditional is not an entry certificate");
+
+    // One branch reaches the definition directly; the other reopens entry.
+    // Union must keep that counterexample even though the branch itself closes.
+    auto mixed = before;
+    mixed.insert(mixed.begin() + 3, MachineItem::op(2, "open entry on fallthrough"));
+    require(optimize(mixed).applied == 0,
+            "an open path into the mode literal must still reject synthesis");
+  }
+}
+
 } // namespace
 
 int main() {
@@ -263,6 +328,7 @@ int main() {
     solver_contracts();
     finite_tables();
     compiler_and_rom();
+    conditional_definition_compiler_and_rom();
     std::cout << "constraint-synthesized constants: solver, compiler and ROM passed\n";
     return 0;
   } catch (const std::exception& error) {

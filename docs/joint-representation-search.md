@@ -839,4 +839,153 @@ selector-allocation and projected-tail techniques reduces 133 cells to 132.
 The remaining gap is 27 cells; neither this result nor the synthetic contracts
 claim that the 105-cell target has been reached.
 
+## Joint literal/address and tail closure
+
+`joint-data-control-literal-layout` composes a compiler-owned runtime selector
+with an ordinary data literal in the same physical-layout transaction as
+whole-family allocation and a pending shared-helper tail. The source literal
+is not guessed or changed: its exact value becomes a required address for its
+typed consumer.
+
+Preparation re-proves every incoming charge on the original command-identity
+CFG, removes only the owned digits, and transports all other entries,
+indirect-memory aliases and return frames. The resulting artifact is
+conditional, not executable output. Its owner must preserve encoded preload
+provenance and satisfy every outstanding selector constraint.
+
+The component solver sees the shortened literal and the projected tail widths
+together. After real tail rewriting and selector binding, a fresh certificate
+reconstructs the complete literal family. It checks the actual data-producing
+address, every charge and store predecessor, private-register uses, stack,
+X1/X2, and matched return contexts. A historical marker alone is not proof.
+
+These closures use an independent incumbent. They do not consume the old
+search's beam or alter its pruning, work limits, or equal-size winner.
+Already-admitted representation/allocation states supply the alternatives;
+an input that already owns a valid literal family is also eligible.
+Only fully finalized, strictly smaller artifacts can replace the old winner.
+
+The compiler/ROM regression varies the selector register and body geometry.
+A 68-cell source needs both mechanisms: shared-tail projection alone gives
+66 cells, while the joint transaction gives 64. Negative cases cover an
+undischarged literal, stale targets, changed charge families, missing CFG
+proofs, raw code, observable X2, and disabled search budgets.
+
+The 4x4 prototype remains at 132 cells. This mechanism does not by itself
+resolve its other representation and placement constraints.
+
+### Masked data/control words
+
+A selector need not preserve bits that every data consumer provably discards.
+The post-layout mantissa analysis propagates possible one bits in the seven
+payload nibbles over the authoritative return-context graph. AND intersects,
+OR/XOR union, and joins union their incoming possibilities. This finite lattice
+needs no guessed loop trip count or widening. Unknown arithmetic and numeric
+entry forget their affected values; aliases and typed input boundaries retain
+the same conservative rules as the other value proofs.
+
+The initial selector rewrite supports an exact eight-digit decimal word read
+only by `recall; K AND; K frac`. Placement may replace its last two digits
+with a new ordinary target in 00..99 only when every changed bit is absent
+from every possible partner. Both selector words must preserve their exact
+stored representation on repeated indirect access. The immediate fractional
+operation is required to overwrite the changed mask saved by AND in physical
+X1; equal visible AND results alone are insufficient. X2 and the data stack
+must remain equal as well.
+
+This certificate is reused by cell erasure, companion-selector relocation and
+joint data/control layout, rather than matching source functions or games.
+All layout-allocatable R7..Re entry words are forgotten during the mask proof:
+otherwise two masks could each justify the other's rewrite using stale zero
+bits. Ordinary data preloads in R0..R6, runtime filters, copies, calls and loops
+can establish the independent bit invariant. Generated setup values and
+unknown aliases cannot establish it. A proof budget exhaustion exports no
+facts, and final target/CFG checks remain mandatory.
+
+The compiler/ROM contract includes a 35-to-34-cell erasure, unknown and bypassed
+filter paths, a live-X1 rejection, generated setup rejection, an inductive loop,
+raw BCD input, and visible stack/decimal-entry/return observations. This is a
+synthetic size baseline, not a claimed reduction of the 4x4 game.
+
+
+### Digit-set and numeric-range product
+
+Numeric range analysis also carries a finite set of possible values for each
+of the seven payload tetrads. This is not a may-bit union: the alternatives
+7 and 8 remain {7,8}, rather than silently admitting A..F. Constants supply
+exact digits, ordinary numeric results supply decimal digit sets, copies keep
+them, and CFG joins union them. The same demand-driven return-context fixed
+point handles aliases, manual input and calls; input values remain unknown.
+
+AND, OR, XOR and NOT use their complete sixteen-value digit tables. Their
+positive leading 8 and order-zero result format is tracked independently of
+whether payload digits are decimal. A result is converted to an ordinary,
+quantized range only if every possible payload digit is 0..9. Thus a decimal
+AND mask can sanitize an otherwise unknown/raw operand, while OR does not
+automatically acquire a decimal certificate. Integer extraction from a
+proved order-zero 8.x word is eight, including hexadecimal fractional digits.
+Numeric widening preserves the finite digit component, never inventing a
+loop bound; budget exhaustion still exports no partial facts.
+
+These facts feed the existing mixed-epoch state representation and joint
+data/control search. A compiler/ROM contract composes mask sanitization,
+fractional arithmetic, a positive max boundary and coefficient recoding for
+a seven-cell reduction. Negative cases cover an unfiltered CFG path, a raw
+mask alternative, aliases, unknown logical results and interrupted proofs.
+The digit tables are checked for all 16x16 operand combinations; ROM cases
+cover decimal/hexadecimal boundaries. This supplies additional facts for
+4x4, but is not by itself a claim that its program has become smaller.
+
+### Numeric entry after direct conditions
+
+The common entry-effect table certifies all four direct predicates and
+FL0..FL3 as unconditional numeric-entry closers on both control-flow edges.
+This is a property of the keyboard entry state, not a numeric bound on X or
+the counter. The next digit starts a fresh literal with automatic stack
+lift, even after open mantissa/exponent entry, clear or Enter suppression.
+
+The ROM contract compares every stack slot and last-X for both branch
+decisions and the FL 1/2 boundary. The shared fact reaches constant synthesis,
+mixed-epoch representation and continuation proofs through their existing
+entry analysis; it does not require a special literal or program name.
+A synthetic compiler/ROM baseline shrinks from 69 to 63 cells. Raw commands,
+external entries and paths which reopen entry before the definition remain
+unproved. The change supplies no invented bounds for unrestricted user input.
+
+### Finite-epoch path products and paid exit recovery
+
+The finite-carrier proof can refine its return-context CFG with a bounded
+product of exact finite rows, a certified positive ordinary epoch and an
+unknown epoch. Pending literal arguments survive only proven input transports.
+Indirect writes preserve a row only when the authoritative memory-target set
+excludes its carrier; unknown or overlapping aliases still invalidate it.
+A normalizing max establishes positivity only from an already finite or
+positive epoch, never from an arbitrary old register value. Predicate truth
+tables prune impossible edges in this data-proof view; the executable
+relocation CFG and all external entries remain authoritative.
+
+A representation may now leave a finite epoch through an explicit decoder.
+The first decoder is exponent entry followed by a store to the same carrier,
+after the true fallthrough of an immediate recall/predicate. Admission proves
+an exact common positive exponent adjustment to nonzero ordinary integer
+rows, without rounding or raw words. Every incoming return context must meet
+that condition. Dynamic joins, side entries, taken branches and fractional
+destination representations are not admitted.
+
+ROM contracts demonstrate why the edge restriction matters: after a taken
+branch, exponent entry can edit the stale mantissa instead of the recalled
+number. Neither an arithmetic sign decoder (which changes last-X) nor an
+extra store is an unconditional substitute. The admitted decoder preserves
+Y/Z/T and physical X1; X2 stays unequal until the ordinary continuation
+independently synchronizes it. Restoring the register ends the encoded
+epoch, so later encoded consumers cannot silently keep using it.
+
+Recovery costs are included before ranking candidates. A deterministic,
+cost-ordered search considers at most 32 exit subsets; proof-budget exhaustion
+exports no partial facts. Branch pruning and paid recovery compose with the
+existing coefficient, numeric-range and final-layout proofs. Synthetic
+compiler/ROM baselines shrink 52 to 48 and 55 to 49 cells, including the
+three-cell decoder, without an extra register or a program-name pattern.
+
+
 
