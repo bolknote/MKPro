@@ -33,16 +33,30 @@ struct PostLayoutNumericRangeProof {
   bool exhausted = false;
 };
 
-// Demand-driven must analysis on the authoritative return-context graph.
-// Only exact eight-digit integral arithmetic is propagated. Unknown branches
-// join both alternatives, unresolved cycles fail closed, and preload facts
-// apply only to Main, never to resume/manual entries. No host floating point.
+enum class NumericRangeInputPolicy {
+  Forget,
+  // Preserve predecessor registers, never input X or setup-state assumptions.
+  // Requires exact typed input/resume edges including their return contexts.
+  ValidatedRegisterTransport,
+};
+
+// Demand-driven fixed point on the authoritative return-context graph, without
+// a recursive call-depth cutoff. Bottom and unknown are distinct: inductive
+// constants may survive loops, but ungrounded cycles never prove a value.
+// Ordinary arithmetic uses outward integer enclosures, including fractions.
+// Positive integral FL counters use their labelled branch/exit semantics.
+// Input register transport is opt-in and requires the shared protocol proof.
+// Unknown branches
+// join both alternatives; expanding ranges widen to unknown after eight changes.
+// Preload facts apply only to Main, never to resume/manual entries. No host
+// floating point. Budget exhaustion discards all facts, never a partial iterate.
 PostLayoutNumericRangeProof prove_post_layout_numeric_ranges(
     const std::vector<MachineItem>& items,
     const AuthoritativePostLayoutControlFlow& flow,
     const std::vector<bool>& automatic_entry_lift,
     const std::vector<std::size_t>& requested_items,
     const std::vector<PreloadReport>* preloads = nullptr,
-    std::size_t maximum_work = 100000);
+    std::size_t maximum_work = 100000,
+    NumericRangeInputPolicy input_policy = NumericRangeInputPolicy::Forget);
 
 } // namespace mkpro::core

@@ -63,6 +63,13 @@ std::optional<IndirectAddressEvaluation> evaluate_indirect_address(
 bool indirect_writeback_preserves_literal_value(
     const IndirectAddressEvaluation& evaluation, std::string_view original_value);
 
+// Stronger certificate for adding a previously absent selector access.
+// Numeric equality is insufficient: e.g. ordinary 7 becomes denormalized
+// 00000007. This bounded grammar certifies the literal's stored word, including
+// its mantissa/order shape; unsupported raw encodings fail closed.
+bool indirect_writeback_preserves_literal_word(
+    const IndirectAddressEvaluation& evaluation, std::string_view original_value);
+
 // Preserve noncanonical runtime entry counters in typed flow metadata.
 // nullopt retains the ordinary relocatable physical/logical target contract.
 // A missing, non-flow, or incomplete evaluation yields an explicitly invalid

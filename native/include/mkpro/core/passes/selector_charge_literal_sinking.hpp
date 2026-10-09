@@ -65,4 +65,13 @@ SelectorDataLiteralLayoutFrontier selector_data_literal_layout_frontier(
     const AuthoritativePostLayoutControlFlow& control,
     const NaturalTargetComponentLayoutOptions& layout_options);
 
+// A separate frontier: run only after preserving the ordinary compiler's
+// fully finalized incumbent. Complete call-family allocation and erasure are
+// solved atomically; returned debt must still be repaid by finalization.
+SelectorDataLiteralLayoutFrontier joint_selector_allocation_layout_frontier(
+    const std::vector<MachineItem>& items,
+    const std::vector<PreloadReport>& preloads,
+    const AuthoritativePostLayoutControlFlow& control,
+    const NaturalTargetComponentLayoutOptions& layout_options);
+
 } // namespace mkpro::core::passes

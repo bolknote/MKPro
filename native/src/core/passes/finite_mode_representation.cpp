@@ -290,6 +290,7 @@ struct Macro {
   bool state_identity = false;
   bool inline_product = false;
   bool normalizing_max = false;
+  bool predicate_observation = false;
   std::optional<int> replacement_recall;
 };
 
@@ -310,6 +311,7 @@ struct Plan {
   bool inline_coefficient = false;
   std::optional<int> seed_reg;
   std::size_t normalizing_max_count = 0;
+  std::size_t predicate_observation_count = 0;
 };
 
 // A physical register is not a single source value. Build reaching definitions
@@ -1045,6 +1047,34 @@ struct StateTransition {
   Projection function;
 };
 
+// A branch observes a predicate, not necessarily the complete carrier word.
+// Do not include FL (a destructive register operation), indirect selectors or
+// a branch with an independently addressed interior in this observation.
+std::optional<int> predicate_after(const std::vector<IrOp>& ops, std::size_t read) {
+  if (read + 1U >= ops.size() || !ordinary(ops[read]) ||
+      !ordinary(ops[read + 1U]) || ops[read + 1U].kind != IrKind::CondJump)
+    return std::nullopt;
+  const int opcode = ops[read + 1U].opcode;
+  if (opcode == 0x57 || opcode == 0x59 || opcode == 0x5c || opcode == 0x5e)
+    return opcode;
+  return std::nullopt;
+}
+
+std::optional<bool> ordinary_predicate(int opcode, const std::string& word) {
+  const auto number = exact_decimal(word);
+  if (!number)
+    return std::nullopt;
+  // Equality of these truth values preserves both hardware successors,
+  // regardless of which edge the lowering uses for the source-language arm.
+  switch (opcode) {
+    case 0x57: return number->numerator != 0;
+    case 0x59: return number->numerator >= 0;
+    case 0x5c: return number->numerator < 0;
+    case 0x5e: return number->numerator == 0;
+    default: return std::nullopt;
+  }
+}
+
 
 // A physical register can have several unrelated epochs. Close only the
 // def/use component reached from one finite literal seed, including transition
@@ -1057,6 +1087,7 @@ struct FiniteCarrierWeb {
   std::set<std::size_t> reads;
   std::set<std::string> values;
   std::map<std::size_t, std::size_t> normalizers;
+  std::map<std::size_t, int> predicates;
 };
 
 std::vector<FiniteCarrierWeb> finite_carrier_webs(
@@ -1119,6 +1150,14 @@ std::vector<FiniteCarrierWeb> finite_carrier_webs(
           continue;
         if (const auto sink = normalizers.find(read); sink != normalizers.end()) {
           web.normalizers.emplace(read, sink->second);
+          continue;
+        }
+        if (const auto predicate = predicate_after(ops, read)) {
+          // Ordinary dynamic definitions reaching this same instruction stay
+          // unchanged. The codec must separately preserve the finite rows'
+          // predicate, and the product proof tracks the unequal numeric X
+          // through BOTH continuations. This is not a numerical decoder.
+          web.predicates.emplace(read, *predicate);
           continue;
         }
         const auto& definitions = uses->read_definitions.at(read);
@@ -1257,7 +1296,7 @@ std::vector<Plan> discover_inline_coefficient_carriers(
   const auto numeric = reduction_items.empty() ? PostLayoutNumericRangeProof{}
       : prove_post_layout_numeric_ranges(lower_ir_to_machine(ops), flow,
             automatic_entry_lift, reduction_items, options.runtime_preloads,
-             kMaximumProofStates);
+             kMaximumProofStates, NumericRangeInputPolicy::ValidatedRegisterTransport);
   if (std::getenv("MKPRO_NATIVE_TRACE_FINITE_MODE_REPRESENTATION") && !webs.empty())
     std::cerr << "[finite-mode-discovery] R" << register_name_for_index(reg)
               << " webs=" << webs.size() << " reductions=" << reduction_items.size()
@@ -1268,7 +1307,8 @@ std::vector<Plan> discover_inline_coefficient_carriers(
     std::vector<Projection> encoders, functions;
     bool complete = true;
     for (const auto read : web.reads) {
-      if (web.updates.contains(read) || web.normalizers.contains(read))
+      if (web.updates.contains(read) || web.normalizers.contains(read) ||
+          web.predicates.contains(read))
         continue;
       if (!ordinary(ops[read]) || flow_read(ops[read], reg)) {
         complete = false;
@@ -1317,7 +1357,7 @@ std::vector<Plan> discover_inline_coefficient_carriers(
       const bool symmetric = unit_signs && encoded[0] == "-" + encoded[1];
       if (free_seed && symmetric)
         alternatives.push_back({encoded, false, true});
-      if (free_seed && symmetric && web.normalizers.empty() &&
+      if (free_seed && symmetric && web.normalizers.empty() && web.predicates.empty() &&
           std::all_of(web.updates.begin(), web.updates.end(), [](const auto& update) {
             return update.second.function.opcode == 0x0b && !update.second.function.operand;
           }) &&
@@ -1490,6 +1530,29 @@ std::vector<Plan> discover_inline_coefficient_carriers(
           reduction.normalizing_max = true;
           plan.macros.emplace(read, std::move(reduction));
           ++plan.normalizing_max_count;
+        }
+        for (const auto& [read, opcode] : web.predicates) {
+          // Raw words and signed zero do not acquire ordinary-real ordering
+          // merely because their rendered text has a familiar sign.
+          if (encoding.raw) {
+            valid = false;
+            break;
+          }
+          for (std::size_t row = 0; row < values.size(); ++row) {
+            const auto before = ordinary_predicate(opcode, values[row]);
+            const auto after = ordinary_predicate(opcode, encoding.words[row]);
+            if (!before || !after || *before != *after) {
+              valid = false;
+              break;
+            }
+          }
+          if (!valid)
+            break;
+          Macro predicate;
+          predicate.end = read + 2U;
+          predicate.predicate_observation = true;
+          plan.macros.emplace(read, std::move(predicate));
+          ++plan.predicate_observation_count;
         }
         std::size_t end = 0;
         for (const auto& [begin, macro] : plan.macros) {
@@ -1781,7 +1844,10 @@ std::vector<Plan> discover_joint(
   const auto inputs = literal_inputs(ops, flow, machine, *uses);
   if (inputs.empty())
     return plans;
-  const auto positions = label_positions(ops);
+  auto positions = label_positions(ops);
+  if (candidate_options.assumed_target_addresses)
+    for (const auto& [label, address] : *candidate_options.assumed_target_addresses)
+      positions[label] = address;
   std::set<std::size_t> visited;
   for (const auto& [seed, unused_inputs] : inputs) {
     (void)unused_inputs;
@@ -2224,7 +2290,16 @@ bool prove(const std::vector<MachineItem>& items,
       const auto& macro = *found->second;
       reached_macros.insert(item_index);
       const auto old = state.stack.stack_equal;
-      if (macro.normalizing_max) {
+      if (macro.predicate_observation) {
+        // Only the decision is equal in an encoded epoch. In particular, do
+        // not pretend the recalled word, last-X or entry shadow were decoded.
+        // In an ordinary epoch the unchanged instructions remain identical.
+        state.stack.stack_equal = {!state.initialized, old[0], old[1], old[2]};
+        state.stack.x2_equal = old[0];
+        if (!stack_values_fully_equal(state.stack))
+          state.stack.x2_equal = false;
+        state.encoded_input = false;
+      } else if (macro.normalizing_max) {
         if (!old[0])
           return fail("max epoch boundary has unequal dynamic operands");
         // In an encoded epoch the independent range certificate proves Y
@@ -2403,11 +2478,17 @@ bool prove(const std::vector<MachineItem>& items,
 
 } // namespace
 
-std::vector<PassResult> finite_mode_representation_candidates(
+static std::vector<DeferredFiniteModeRepresentation> finite_mode_candidates_impl(
     const std::vector<IrOp>& ops, const PassContext& context,
-    const FiniteModeCandidateOptions& candidate_options) {
-  const auto unchanged = [] { return std::vector<PassResult>{}; };
-  std::vector<PassResult> alternatives;
+    const FiniteModeCandidateOptions& candidate_options, bool defer_layout) {
+  const auto unchanged = [] { return std::vector<DeferredFiniteModeRepresentation>{}; };
+  std::vector<DeferredFiniteModeRepresentation> alternatives;
+  if (candidate_options.assumed_target_addresses) {
+    const auto positions = label_positions(ops);
+    for (const auto& [label, address] : *candidate_options.assumed_target_addresses)
+      if (address < 0 || !positions.contains(label))
+        return unchanged();
+  }
   if (candidate_options.maximum_candidates == 0 ||
       candidate_options.maximum_growth_cells < 0 || candidate_options.maximum_growth_cells > 4)
     return unchanged();
@@ -2440,16 +2521,26 @@ std::vector<PassResult> finite_mode_representation_candidates(
         std::cerr << "[finite-mode-discovery] CFG: " << reason << '\n';
     return unchanged();
   }
-  // Relational data proofs may distinguish actual runtime selector values.
-  // Keep the authoritative, unpruned graph for all later relocation checks.
-  const auto selector_graph = build_selector_consistent_execution_graph(items, flow);
+  // This product is a conditional data-proof view, never the relocation CFG.
+  // Physical positions may select callbacks only when all assumed bindings
+  // are already closed. Otherwise use the separately proved encoded origins;
+  // a missing/colliding origin cannot turn an unselected callback into fact.
+  const auto current_positions = label_positions(ops);
+  const bool closed_geometry = !candidate_options.assumed_target_addresses ||
+      std::all_of(candidate_options.assumed_target_addresses->begin(),
+                  candidate_options.assumed_target_addresses->end(),
+          [&](const auto& binding) { return current_positions.at(binding.first) == binding.second; });
+  const auto selector_graph = closed_geometry
+      ? build_selector_consistent_execution_graph(items, flow)
+      : build_deferred_selector_consistent_execution_graph(
+            items, flow, *candidate_options.assumed_target_addresses).execution;
   if (selector_graph.proved && selector_graph.pruned_edges != 0) {
     const auto original = flow.execution_states;
     flow.execution_states.clear();
     for (const auto state : selector_graph.original_states)
       flow.execution_states.push_back(original[state]);
     flow.execution_successors = selector_graph.successors;
-    flow.execution_edges.clear();
+    flow.execution_edges = selector_graph.execution_edges;
   }
   const auto automatic_entry_lift =
       analyze_post_layout_automatic_entry_lift(items, flow, kMaximumProofStates);
@@ -2500,7 +2591,7 @@ std::vector<PassResult> finite_mode_representation_candidates(
         continue;
       }
       const auto& macro = found->second;
-      if (macro.normalizing_max) {
+      if (macro.normalizing_max || macro.predicate_observation) {
         // The boundary's machine code is unchanged, including typed store
         // and provenance metadata needed by subsequent lifetime passes.
         rewritten.insert(rewritten.end(), ops.begin() + static_cast<std::ptrdiff_t>(i),
@@ -2542,7 +2633,10 @@ std::vector<PassResult> finite_mode_representation_candidates(
       i = macro.end;
     }
     auto required_targets = plan.fixed_targets;
-    const auto original_positions = label_positions(ops);
+    auto original_positions = label_positions(ops);
+    if (candidate_options.assumed_target_addresses)
+      for (const auto& [label, address] : *candidate_options.assumed_target_addresses)
+        original_positions[label] = address;
     bool compatible = true;
     // A changed web has no authority over any other runtime selector.
     for (std::size_t i = 0; i < ops.size(); ++i)
@@ -2565,7 +2659,7 @@ std::vector<PassResult> finite_mode_representation_candidates(
           const auto at = positions.find(target.first);
           return at == positions.end() || at->second != target.second;
         });
-    if (needs_layout) {
+    if (needs_layout && !defer_layout) {
       if (!candidate_options.allow_target_relayout)
         continue;
       auto layout = layout_symbolic_regions(rewritten, required_targets, context, 4096,
@@ -2576,7 +2670,8 @@ std::vector<PassResult> finite_mode_representation_candidates(
     }
     if (!build_post_layout_control_flow(lower_ir_to_machine(rewritten), options).proved)
       continue;
-    alternatives.push_back(PassResult{
+    alternatives.push_back(DeferredFiniteModeRepresentation{
+      .transformation = PassResult{
         .ops = std::move(rewritten), .applied = 1,
         .optimizations = {{
             .name = plan.normalizing_max_count > 0 ? "mixed-epoch-coefficient-state-carrier" :
@@ -2628,14 +2723,44 @@ std::vector<PassResult> finite_mode_representation_candidates(
                                 " max epoch boundaries: an ordinary strictly positive operand "
                                 "dominates every original and encoded finite value. Dynamic "
                                 "epochs are unchanged; last-X remains unequal until independently erased."
+                          : std::string{}) +
+                      (plan.predicate_observation_count > 0
+                          ? " Certified " + std::to_string(plan.predicate_observation_count) +
+                                " predicate-only observations shared with unchanged dynamic epochs; "
+                                "checked the complete finite truth table and both continuations "
+                                "without asserting equality of the recalled numeric word."
                           : std::string{}),
         }},
         .preloads = plan.preloads,
+      },
+      .required_target_addresses = std::move(required_targets),
     });
+    if (!closed_geometry && selector_graph.proved && selector_graph.pruned_edges != 0)
+      alternatives.back().transformation.optimizations.push_back({
+          "finite-mode-deferred-selector-proof",
+          "Proved the finite representation over exact selected callback contexts using "
+          "encoded command origins, not speculative physical addresses; retained every "
+          "unchanged destination equation for independent final layout and return proof."});
     if (alternatives.size() >= candidate_options.maximum_candidates)
       break;
   }
   return alternatives;
+}
+
+std::vector<DeferredFiniteModeRepresentation>
+deferred_finite_mode_representation_candidates(
+    const std::vector<IrOp>& ops, const PassContext& context,
+    const FiniteModeCandidateOptions& options) {
+  return finite_mode_candidates_impl(ops, context, options, true);
+}
+
+std::vector<PassResult> finite_mode_representation_candidates(
+    const std::vector<IrOp>& ops, const PassContext& context,
+    const FiniteModeCandidateOptions& options) {
+  std::vector<PassResult> result;
+  for (auto& candidate : finite_mode_candidates_impl(ops, context, options, false))
+    result.push_back(std::move(candidate.transformation));
+  return result;
 }
 
 PassResult finite_mode_representation(const std::vector<IrOp>& ops,

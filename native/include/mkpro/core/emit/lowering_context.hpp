@@ -190,6 +190,14 @@ struct LoweringContext {
   MachineEmitter emitter;
   const V2Program* program = nullptr;
   FeatureProfile feature_profile = FeatureProfile::Standard;
+  std::optional<FeatureProfile> register_allocation_profile;
+  FeatureProfile allocation_profile() const {
+    if (register_allocation_profile &&
+        feature_profile_max_register_index(*register_allocation_profile) <
+            feature_profile_max_register_index(feature_profile))
+      return *register_allocation_profile;
+    return feature_profile;
+  }
   // Internal standard-target proof probe: allocate R0..Re with the ordinary
   // standard policy, then use Rf only as one overflow color. A proved forced
   // share must eliminate Rf before standard lowering continues.

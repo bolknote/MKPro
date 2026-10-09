@@ -1,12 +1,16 @@
 #include "mkpro/core/joint_representation_search.hpp"
 
 #include "mkpro/core/callee_hole_boundary_normalization.hpp"
+#include "mkpro/core/indirect_addressing.hpp"
 #include "mkpro/core/natural_target_component_layout.hpp"
 #include "mkpro/core/passes/finite_mode_representation.hpp"
+#include "mkpro/core/passes/common_processor_factoring.hpp"
+#include "mkpro/core/passes/indirect_selector_seed_reuse.hpp"
 #include "mkpro/core/passes/register_coalesce.hpp"
 #include "mkpro/core/passes/semantic_region_folding.hpp"
 #include "mkpro/core/passes/shared_straight_line_helper.hpp"
 #include "mkpro/core/post_layout_control_flow.hpp"
+#include "mkpro/core/shared_helper_dual_mode_layout.hpp"
 
 #include <algorithm>
 #include <cstdlib>
@@ -122,6 +126,103 @@ std::optional<LayoutSearchArtifact> apply(const LayoutSearchArtifact& parent,
 
 } // namespace
 
+
+std::optional<LayoutSearchArtifact> transport_layout_search_artifact(
+    const LayoutSearchArtifact& artifact, FeatureProfile source_profile,
+    FeatureProfile target_profile, std::string* rejection) {
+  const auto reject = [&](const std::string& reason) -> std::optional<LayoutSearchArtifact> {
+    if (rejection) *rejection = reason;
+    return std::nullopt;
+  };
+  if (rejection) rejection->clear();
+  const auto source_model = address_space_model_for_feature_profile(source_profile);
+  const auto target_model = address_space_model_for_feature_profile(target_profile);
+  const int register_limit = std::min(feature_profile_max_register_index(source_profile),
+                                      feature_profile_max_register_index(target_profile));
+  const auto reg_index = [](const std::string& name) -> int {
+    if (name.size() != 1U) return -1;
+    const char digit = name.front();
+    if (digit >= '0' && digit <= '9') return digit - '0';
+    if (digit >= 'a' && digit <= 'f') return digit - 'a' + 10;
+    if (digit >= 'A' && digit <= 'F') return digit - 'A' + 10;
+    return -1;
+  };
+  for (const auto& item : artifact.items) {
+    if (item.raw)
+      return reject("raw instructions have no cross-model effect certificate");
+    if (item.kind == MachineItemKind::Op) {
+      const int family = item.opcode & 0xf0;
+      if ((family == 0x40 || family == 0x60 ||
+           (family >= 0x70 && family <= 0xe0)) &&
+          (item.opcode & 0x0f) > register_limit)
+        return reject("register opcode changes meaning between target models");
+      if (item.indirect_memory_targets)
+        for (const int reg : *item.indirect_memory_targets)
+          if (reg < 0 || reg > register_limit)
+            return reject("indirect memory target is outside the shared register bank");
+    }
+  }
+  std::set<int> preload_registers;
+  for (const auto& preload : artifact.preloads) {
+    const int reg = reg_index(preload.register_name);
+    if (reg < 0 || reg > register_limit || !preload_registers.insert(reg).second)
+      return reject("preload is outside the shared bank or has an ambiguous owner");
+  }
+  auto normalized = normalize_natural_target_overflow_formals(artifact.items, source_model);
+  if (!normalized || has_executable_address_words(*normalized))
+    return reject("opaque address/code words cannot cross memory models");
+  const auto rebound = rebind_late_bound_decimal_selectors(
+      *normalized, {.minimum_target_address = 0, .maximum_target_address = 99});
+  if (!rebound.diagnostics.empty() || rebound.items.size() != normalized->size())
+    return reject("runtime decimal selector obligations are not closed");
+  for (std::size_t i = 0; i < normalized->size(); ++i)
+    if (rebound.items[i].opcode != (*normalized)[i].opcode)
+      return reject("runtime decimal selector charge is stale");
+
+  PostLayoutControlFlowOptions flow_options;
+  flow_options.address_space_model = source_model;
+  flow_options.empty_return_target = 1;
+  const auto before = build_post_layout_control_flow(*normalized, flow_options);
+  flow_options.address_space_model = target_model;
+  const auto after = build_post_layout_control_flow(*normalized, flow_options);
+  // Require identity, including encoded counters, fetched operand identities,
+  // manual observations and every return frame. Logical oversized code stays
+  // logical in both graphs; crossing a physical-window boundary is not guessed.
+  if (!before.proved || !after.proved ||
+      before.external_entries != after.external_entries ||
+      before.indirect_flow_targets != after.indirect_flow_targets ||
+      before.indirect_memory_targets != after.indirect_memory_targets ||
+      before.empty_return_target != after.empty_return_target ||
+      before.execution_states != after.execution_states ||
+      before.execution_successors != after.execution_successors ||
+      before.execution_edges != after.execution_edges ||
+      before.maximum_observed_return_depth != after.maximum_observed_return_depth)
+    return reject("memory models disagree on exact execution or return contexts");
+
+  for (const auto& preload : artifact.preloads) {
+    const int reg = reg_index(preload.register_name);
+    const bool used = std::any_of(before.indirect_flow_targets.begin(),
+        before.indirect_flow_targets.end(), [&](const auto& entry) {
+          return ((*normalized)[entry.first].opcode & 0xf) == reg;
+        });
+    if (!used) continue;
+    if (preload.setup_expression || preload.setup_target_name ||
+        preload.setup_expression_text)
+      return reject("generated flow preload needs a cross-model value proof");
+    const auto old_value = evaluate_indirect_address(
+        preload.register_name, preload.value, IndirectOperationKind::Flow, source_model);
+    const auto new_value = evaluate_indirect_address(
+        preload.register_name, preload.value, IndirectOperationKind::Flow, target_model);
+    if (!old_value || !new_value ||
+        old_value->actual_flow_target != new_value->actual_flow_target ||
+        old_value->result_value != new_value->result_value)
+      return reject("preloaded flow word changes target or selector writeback");
+  }
+  auto result = artifact;
+  result.items = std::move(*normalized);
+  return result;
+}
+
 std::vector<ProvedSearchTransition<LayoutSearchArtifact>>
 expand_joint_representation_transactions(const LayoutSearchArtifact& artifact,
                                          const CompileOptions& options,
@@ -165,7 +266,790 @@ expand_joint_representation_transactions(const LayoutSearchArtifact& artifact,
                               ? &artifact.preloads : nullptr,
                           .preserve_compiler_selector_charges = laid_out.has_value()}))
     add(std::move(alternative), "joint-word-and-target-synthesis");
+
+  // This is a separate complete-artifact edge, not a wider greedy geometry
+  // rule. A locally smaller stitch can force a worse later selector layout;
+  // the caller's full finalizer must compare it with the unchanged incumbent.
+  bool annotated_jump = false;
+  bool annotation = false;
+  for (const auto& item : artifact.items) {
+    if (item.kind == MachineItemKind::Label) {
+      annotation = true;
+      continue;
+    }
+    annotated_jump = annotated_jump ||
+        (annotation && item.kind == MachineItemKind::Op && !item.raw &&
+         (item.opcode == 0x51 || (item.opcode >= 0x87 && item.opcode <= 0x8e)));
+    annotation = false;
+  }
+  if (preload_environment_complete && annotated_jump) {
+    const auto model = address_space_model_for_feature_profile(
+        effective_optimizer_feature_profile(options));
+    auto normalized = normalize_natural_target_overflow_formals(artifact.items, model);
+    if (normalized) {
+      PostLayoutControlFlowOptions flow_options;
+      flow_options.address_space_model = model;
+      flow_options.empty_return_target = 1;
+      const auto flow = build_post_layout_control_flow(*normalized, flow_options);
+      NaturalTargetComponentLayoutOptions layout_options;
+      layout_options.address_space_model = model;
+      layout_options.maximum_subset_states = 2000;
+      layout_options.maximum_anchor_combinations = 32;
+      layout_options.allow_standalone_fallthrough_jump_fold = true;
+      layout_options.allow_unreferenced_jump_labels = true;
+      const auto placed = optimize_natural_target_component_layout(
+          *normalized, artifact.preloads, flow, layout_options);
+      if (placed.applied > 0 && placed.plan.proved && placed.plan.final_artifact_proved &&
+          placed.plan.fallthrough_jump_folds > 0 && placed.plan.final_control_flow.proved &&
+          placed.plan.output_cells < cells(artifact)) {
+        auto candidate = artifact;
+        candidate.items = placed.items;
+        candidate.preloads = placed.preloads;
+        candidate.optimizations.push_back({"unreferenced-jump-label-layout",
+            "Stitched a proved transparent jump without treating unused annotations as "
+            "executable entries; transported labels and re-proved selectors, CFG, stack/X2 "
+            "and return contexts. Kept as a separate complete-artifact alternative."});
+        if (auto closed = rebind_layout_search_artifact(std::move(candidate));
+            closed && cells(*closed) < cells(artifact))
+          result.push_back({std::move(*closed), "unreferenced-jump-label-layout", true});
+      }
+    }
+  }
+
   return result;
+}
+
+
+namespace {
+
+// Conditional semantic state. No user of LayoutSearchArtifact can accidentally
+// receive this object before the physical obligations have been discharged.
+struct ConstrainedRepresentation {
+  LayoutSearchArtifact artifact;
+  std::map<std::string, int> targets;
+  // Word provenance belongs to its carrier, not the target label to which
+  // a speculative family assignment currently attaches it.
+  std::map<std::string, int> encoded_selectors{};
+};
+
+std::optional<std::map<std::string, int>> constraint_positions(
+    const std::vector<MachineItem>& items) {
+  std::map<std::string, int> result;
+  int address = 0;
+  for (const auto& item : items) {
+    if (item.kind == MachineItemKind::Label) {
+      if (!result.emplace(item.name, address).second)
+        return std::nullopt;
+    } else {
+      ++address;
+    }
+  }
+  return result;
+}
+
+// Retain obligations by command identity, not their speculative cell numbers.
+// New compiler-generated consumers acquire a binding; removed consumers do not
+// leave a spurious global placement constraint behind.
+bool refresh_constraint_targets(ConstrainedRepresentation& node) {
+  const auto positions = constraint_positions(node.artifact.items);
+  if (!positions)
+    return false;
+  std::map<std::string, int> targets;
+  for (const auto& item : node.artifact.items)
+    if (item.indirect_flow_targets)
+      for (const auto& target : *item.indirect_flow_targets) {
+        const auto* label = std::get_if<std::string>(&target);
+        if (!label || !positions->contains(*label))
+          return false;
+        const auto previous = node.targets.find(*label);
+        targets.emplace(*label, previous == node.targets.end()
+            ? positions->at(*label) : previous->second);
+      }
+  node.targets = std::move(targets);
+  return true;
+}
+
+bool charged_constraint_consumer(const MachineItem& item) {
+  return std::find(item.roles.begin(), item.roles.end(),
+                   "late-decimal-selector-consumer") != item.roles.end();
+}
+
+std::optional<LayoutSearchArtifact> close_representation_constraints(
+    const ConstrainedRepresentation& node, const passes::PassContext& context,
+    const PostLayoutControlFlowOptions& control_options, bool complete_preloads,
+    bool project_shared_tail = false) {
+  const auto& input = node.artifact.items;
+  const auto flow = build_post_layout_control_flow(input, control_options);
+  if (!flow.proved)
+    return std::nullopt;
+  const auto positions = constraint_positions(input);
+  if (!positions)
+    return std::nullopt;
+  std::optional<SharedHelperDualModePreparation> preparation;
+  if (project_shared_tail) {
+    if (!complete_preloads) return std::nullopt;
+    preparation = prepare_shared_helper_dual_mode_layout(
+        input, flow, control_options.address_space_model);
+    if (preparation->applied <= 0) return std::nullopt;
+  }
+  std::map<std::string, std::size_t> preload_by_register;
+  for (std::size_t i = 0; i < node.artifact.preloads.size(); ++i)
+    if (!preload_by_register.emplace(node.artifact.preloads[i].register_name, i).second)
+      return std::nullopt;
+
+  struct Selector {
+    std::string reg;
+    int old_target = -1;
+    std::set<std::string> labels;
+    bool flexible = true;
+  };
+  std::map<std::string, Selector> selectors;
+  std::map<std::string, int> fixed;
+  constexpr std::string_view names = "0123456789abcde";
+  for (const auto& [source, destinations] : flow.indirect_flow_targets) {
+    const auto& item = input[source];
+    if (charged_constraint_consumer(item))
+      continue; // The owned decimal binder, not a frozen address, closes it.
+    const int reg = item.opcode & 15;
+    if (reg < 0 || reg >= static_cast<int>(names.size()) ||
+        !item.indirect_flow_targets || destinations.empty())
+      return std::nullopt;
+    const std::string name(1, names[static_cast<std::size_t>(reg)]);
+    auto& selector = selectors[name];
+    selector.reg = name;
+    for (const auto& target : *item.indirect_flow_targets) {
+      const auto* label = std::get_if<std::string>(&target);
+      if (!label || !node.targets.contains(*label))
+        return std::nullopt;
+      const auto encoded = node.encoded_selectors.find(name);
+      const int address = encoded == node.encoded_selectors.end()
+          ? node.targets.at(*label) : encoded->second;
+      if (selector.old_target >= 0 && selector.old_target != address)
+        selector.flexible = false;
+      if (selector.old_target < 0)
+        selector.old_target = address;
+      selector.labels.insert(*label);
+    }
+  }
+  for (auto& [name, selector] : selectors) {
+    const auto preload = preload_by_register.find(name);
+    selector.flexible = selector.flexible && complete_preloads &&
+        preload != preload_by_register.end();
+    if (selector.flexible) {
+      // Probe permission, not geometry. The actual chosen word receives its
+      // own full data-projection/writeback certificate below.
+      selector.flexible = false;
+      // Zero is not representable by every fractional selector codec.
+      // Failure of that one probe is not evidence of an immutable word.
+      for (const int probe : {1, 2, 0}) {
+        if (probe != selector.old_target &&
+            rebind_stable_preloaded_indirect_flow_selector(
+                input, node.artifact.preloads[preload->second], flow,
+                selector.old_target, probe, control_options.address_space_model)) {
+          selector.flexible = true;
+          break;
+        }
+      }
+    }
+    if (!selector.flexible)
+      for (const auto& label : selector.labels) {
+        const auto encoded = node.encoded_selectors.find(name);
+        const int address = encoded == node.encoded_selectors.end()
+            ? node.targets.at(label) : encoded->second;
+        const auto [old, inserted] = fixed.emplace(label, address);
+        if (!inserted && old->second != address)
+          return std::nullopt;
+      }
+  }
+  // A single constraint solution sees every codec's bounds and every remaining
+  // immutable selector. No individual transformation chooses the block order.
+  const auto& neutral_items = preparation ? preparation->items : input;
+  const auto neutral_ops = raise_machine_to_ir(
+      neutral_items, effective_optimizer_feature_profile(context.options));
+  std::optional<passes::SymbolicRegionProjection> projection;
+  // Runtime callback charges have a codec too. Give their complete target
+  // domains to the same solver rather than accepting its first geometrically
+  // valid order and discovering an unencodable callback only in the binder.
+  std::set<std::string> decimal_charge_targets;
+  for (const auto& item : neutral_items) {
+    if (!charged_constraint_consumer(item)) continue;
+    if (!item.indirect_flow_targets || item.indirect_flow_targets->empty())
+      return std::nullopt;
+    if (!projection) projection.emplace();
+    for (const auto& target : *item.indirect_flow_targets) {
+      const auto* label = std::get_if<std::string>(&target);
+      if (!label) return std::nullopt;
+      projection->target_bounds.emplace(*label, std::pair{0, 99});
+      decimal_charge_targets.insert(*label);
+    }
+  }
+  if (preparation) {
+    const auto widths = shared_helper_dual_mode_projected_widths(*preparation);
+    if (!widths) return std::nullopt;
+    if (!projection) projection.emplace();
+    std::size_t item = 0;
+    for (const auto& op : neutral_ops) {
+      const auto length = op.kind == IrKind::Label
+          ? 1U : static_cast<std::size_t>(passes::cells_per_op(op));
+      if (item + length > widths->size()) return std::nullopt;
+      int width = 0;
+      for (std::size_t cell = 0; cell < length; ++cell) width += (*widths)[item++];
+      projection->cell_widths.push_back(width);
+    }
+    if (item != widths->size()) return std::nullopt;
+    const auto [entry, inserted] = fixed.emplace(
+        preparation->continuation.helper_label, preparation->required_final_start_address);
+    if (!inserted && entry->second != preparation->required_final_start_address)
+      return std::nullopt;
+    for (const auto& [name, selector] : selectors) {
+      if (!selector.flexible) continue;
+      const auto& preload = node.artifact.preloads[preload_by_register.at(name)];
+      const int minimum = preload.retunable_natural_fractional_prefix &&
+          preload.retunable_natural_fractional_prefix->starts_with("0.") ? 1 : 0;
+      for (const auto& label : selector.labels) {
+        auto [bound, new_bound] = projection->target_bounds.emplace(label, std::pair{minimum, 99});
+        if (!new_bound) bound->second.first = std::max(bound->second.first, minimum);
+      }
+    }
+  } else if (projection) {
+    for (const auto& op : neutral_ops) projection->cell_widths.push_back(passes::cells_per_op(op));
+  }
+  auto placed = passes::layout_symbolic_regions(
+      neutral_ops, fixed, context, 4096, &control_options, true,
+      projection ? &*projection : nullptr);
+  bool widened_preload_domain = false;
+  if (!placed && complete_preloads) {
+    // Retain the historical geometry and tie order. Only after it fails,
+    // retry with independently certified official BCD preload destinations.
+    // A typed runtime charge to the same identity still intersects at 99.
+    auto wider = projection.value_or(passes::SymbolicRegionProjection{});
+    if (wider.cell_widths.empty())
+      for (const auto& op : neutral_ops)
+        wider.cell_widths.push_back(passes::cells_per_op(op));
+    bool changed = false;
+    const int last = official_program_last_address(control_options.address_space_model);
+    for (const auto& [name, selector] : selectors) {
+      if (!selector.flexible || !preload_by_register.contains(name)) continue;
+      const auto& preload = node.artifact.preloads[preload_by_register.at(name)];
+      if (!rebind_stable_preloaded_indirect_flow_selector(
+              input, preload, flow, selector.old_target, last,
+              control_options.address_space_model))
+        continue;
+      for (const auto& label : selector.labels) {
+        if (decimal_charge_targets.contains(label)) continue;
+        const auto found = wider.target_bounds.find(label);
+        if (found == wider.target_bounds.end()) {
+          wider.target_bounds.emplace(label, std::pair{0, last});
+          changed = true;
+        } else if (found->second.second < last) {
+          found->second.second = last;
+          changed = true;
+        }
+      }
+    }
+    if (changed) {
+      placed = passes::layout_symbolic_regions(
+          neutral_ops, fixed, context, 4096, &control_options, true, &wider);
+      widened_preload_domain = placed.has_value();
+    }
+  }
+  if (!placed)
+    return std::nullopt;
+  LayoutSearchArtifact output = node.artifact;
+  output.items = lower_ir_to_machine(placed->ops);
+  if (widened_preload_domain)
+    output.optimizations.push_back({"joint-official-selector-domain",
+        "Solved placement with certified BCD address-only preloads through " +
+        format_official_address(official_program_last_address(control_options.address_space_model),
+                                control_options.address_space_model) +
+        "; runtime decimal charges remain bounded by 99 and stock memory is not extended."});
+  if (preparation) {
+    std::map<std::string, int> encoded_targets;
+    for (const auto& [name, selector] : selectors)
+      encoded_targets.emplace(name, selector.old_target);
+    const auto merged = finalize_shared_helper_dual_mode_layout(
+        *preparation, output.items, output.preloads,
+        build_post_layout_control_flow(output.items, control_options),
+        control_options.address_space_model, &encoded_targets);
+    if (!merged.proof.proved || merged.applied <= 0) return std::nullopt;
+    output.items = merged.items;
+    output.preloads = merged.preloads;
+    if (cells(output) != placed->projected_cells ||
+        constraint_positions(output.items) !=
+            std::optional{placed->projected_targets})
+      return std::nullopt;
+    for (const auto& report : merged.optimizations)
+      output.optimizations.push_back({report.name, report.detail});
+    output.optimizations.push_back({"joint-projected-tail-layout",
+        "Solved selector bindings and component order in certified final cell widths; "
+        "kept neutral command-identity CFG transport separate, then checked the actual "
+        "tail rewrite, every projected label, selector data use and hardware return."});
+  }
+  const auto final_positions = constraint_positions(output.items);
+  if (!final_positions)
+    return std::nullopt;
+  for (const auto& [name, selector] : selectors) {
+    if (!selector.flexible || preparation)
+      continue;
+    std::optional<int> address;
+    for (const auto& label : selector.labels) {
+      const auto found = final_positions->find(label);
+      if (found == final_positions->end() || (address && *address != found->second))
+        return std::nullopt;
+      address = found->second;
+    }
+    if (!address)
+      return std::nullopt;
+    auto& preload = output.preloads[preload_by_register.at(name)];
+    const auto value = rebind_stable_preloaded_indirect_flow_selector(
+        input, preload, flow, selector.old_target, *address,
+        control_options.address_space_model);
+    if (!value)
+      return std::nullopt;
+    if (preload.value != *value) {
+      output.optimizations.push_back({"joint-selector-constraint-synthesis",
+          "Solved R" + name + " with placement: " + preload.value + " -> " +
+          *value + "; certified all data uses and exact selector writeback."});
+      preload.value = *value;
+    }
+  }
+  auto rebound = rebind_layout_search_artifact(std::move(output));
+  // This matched, rooted graph proves return depth and continuations including
+  // the explicit hardware empty-return contract. Do not follow it with the
+  // legacy symbolic walk, which rejects every empty return even under that
+  // independently established contract.
+  if (!rebound || !build_post_layout_control_flow(rebound->items, control_options).proved)
+    return std::nullopt;
+  if (preparation && (cells(*rebound) != placed->projected_cells ||
+      constraint_positions(rebound->items) != std::optional{placed->projected_targets}))
+    return std::nullopt;
+  return rebound;
+}
+
+} // namespace
+
+TransactionSearchResult<LayoutSearchArtifact> search_joint_representation_constraints(
+    const LayoutSearchArtifact& root, const CompileOptions& options,
+    const JointRepresentationFinalizer& finalize,
+    const TransactionSearchLimits& limits, bool preload_environment_complete) {
+  TransactionSearchResult<LayoutSearchArtifact> output;
+  CompileOptions configured = options;
+  configured.defer_return_suffix_until_callee_hole = true;
+  configured.coalesce_copies = true;
+  const passes::PassContext context{configured};
+  PostLayoutControlFlowOptions control_options;
+  control_options.address_space_model = address_space_model_for_feature_profile(
+      effective_optimizer_feature_profile(options));
+  if (preload_environment_complete)
+    control_options.empty_return_target = 1;
+
+  auto root_ops = preload_environment_complete ? representation_view(root, options)
+      : std::optional{raise_machine_to_ir(root.items,
+                                         effective_optimizer_feature_profile(options))};
+  if (!root_ops || !build_post_layout_control_flow(
+          lower_ir_to_machine(*root_ops), control_options).proved)
+    return output;
+  ConstrainedRepresentation initial{root, {}};
+  initial.artifact.items = lower_ir_to_machine(*root_ops);
+  if (!refresh_constraint_targets(initial))
+    return output;
+  using Edge = ProvedSearchTransition<ConstrainedRepresentation>;
+  const auto expand = [&](const ConstrainedRepresentation& parent) {
+    std::vector<Edge> edges;
+    const auto ops = raise_machine_to_ir(parent.artifact.items,
+                                         effective_optimizer_feature_profile(options));
+    const auto add = [&](passes::PassResult proposal, const char* rule,
+                         const std::map<std::string, int>* bindings = nullptr) {
+      auto child = apply(parent.artifact, std::move(proposal));
+      if (!child)
+        return;
+      ConstrainedRepresentation next{std::move(*child),
+          bindings ? *bindings : parent.targets, parent.encoded_selectors};
+      if (refresh_constraint_targets(next) &&
+          (!same_layout_search_artifact(parent.artifact, next.artifact) ||
+           parent.targets != next.targets))
+        edges.push_back({std::move(next), rule, true});
+    };
+    for (auto& proposal : passes::deferred_finite_mode_representation_candidates(
+             ops, context, {
+                 .maximum_growth_cells = std::min(4, limits.maximum_growth_cells),
+                 .maximum_candidates = 6, .allow_target_relayout = true,
+                 .runtime_preloads = preload_environment_complete
+                     ? &parent.artifact.preloads : nullptr,
+                 .preserve_compiler_selector_charges = preload_environment_complete,
+                 .assumed_target_addresses = &parent.targets}))
+      add(std::move(proposal.transformation), "representation-equations",
+          &proposal.required_target_addresses);
+
+    const auto requests = passes::semantic_region_register_requests(ops, true);
+    passes::for_each_register_web_recoloring(ops, context, requests,
+        [&](std::vector<IrOp> recolored) {
+          add({.ops = std::move(recolored), .applied = 1,
+               .optimizations = {{"joint-register-web-equations",
+                   "Solved interference-checked operand equalities without committing "
+                   "a representation or physical layout winner."}}},
+              "register-web-equations");
+        });
+    add(passes::semantic_region_folding_with_deferred_layout(
+            ops, context, control_options), "region-equations");
+    if (preload_environment_complete && limits.maximum_growth_cells > 0)
+      for (auto& proposal : passes::stable_target_split_bridge_candidates(
+               ops, parent.artifact.preloads, parent.targets, context, control_options))
+        add(std::move(proposal), "stable-target-region-split");
+    return edges;
+  };
+
+  // Initial rule families receive independent expansion lanes. A smaller
+  // encoding cannot starve the equal-size allocator that enables its sharing.
+  auto seeds = expand(initial);
+  std::vector<ConstrainedRepresentation> allocation_roots{initial};
+  // Range certificates are obtained only from the complete original artifact,
+  // never from a descendant whose selector equations are still unresolved.
+  if (preload_environment_complete) {
+    for (auto& proposal : passes::common_processor_factoring_candidates(
+             *root_ops, context, {.runtime_preloads = &root.preloads})) {
+      auto child = apply(initial.artifact, std::move(proposal));
+      if (!child) continue;
+      ConstrainedRepresentation next{std::move(*child), initial.targets};
+      if (refresh_constraint_targets(next)) {
+        allocation_roots.push_back(next);
+        seeds.push_back({std::move(next), "finite-domain-common-processor", true});
+      }
+    }
+  }
+  // Keep the established search independent: neutral producer placement must
+  // not consume its beam or replace its equal-size incumbent.
+  std::vector<Edge> projection_seeds;
+  const auto original_allocation_roots = allocation_roots;
+  if (limits.maximum_expansions > 0 && limits.maximum_candidates > 0 &&
+      limits.maximum_depth > 0) {
+    auto seed_options = configured;
+    seed_options.allow_size_neutral_selector_seed_reuse = true;
+    const passes::PassContext seed_context{seed_options};
+    for (const auto& source : original_allocation_roots) {
+      auto proposal = passes::deferred_indirect_selector_seed_reuse(
+          raise_machine_to_ir(source.artifact.items,
+              effective_optimizer_feature_profile(options)),
+          seed_context, control_options, source.targets);
+      auto child = apply(source.artifact, std::move(proposal.transformation));
+      if (!child || !transaction_growth_fits(
+              cells(root), cells(*child), limits.maximum_growth_cells))
+        continue;
+      ConstrainedRepresentation next{
+          std::move(*child), std::move(proposal.encoded_target_origins),
+          source.encoded_selectors};
+      if (refresh_constraint_targets(next)) {
+        allocation_roots.push_back(next);
+        projection_seeds.push_back({std::move(next), "selector-projection-equations", true});
+      }
+    }
+  }
+  // Neutral changes of fallthrough boundaries get their own bounded lane.
+  // Append allocation roots only after every established root, so an enabling
+  // polarity choice cannot steal the old search's budget or equal-size winner.
+  const auto unrotated_allocation_roots = allocation_roots;
+  std::vector<Edge> topology_seeds;
+  const auto topology_edges = [&](const ConstrainedRepresentation& parent) {
+    std::vector<Edge> edges;
+    for (auto& proposal : passes::conditional_region_exchange_candidates(
+             raise_machine_to_ir(parent.artifact.items,
+                 effective_optimizer_feature_profile(options)),
+             context, control_options, 2)) {
+      auto child = apply(parent.artifact, std::move(proposal));
+      if (!child || !transaction_growth_fits(
+              cells(root), cells(*child), limits.maximum_growth_cells))
+        continue;
+      ConstrainedRepresentation next{
+          std::move(*child), parent.targets, parent.encoded_selectors};
+      if (refresh_constraint_targets(next))
+        edges.push_back({std::move(next), "conditional-region-exchange", true});
+    }
+    return edges;
+  };
+  if (limits.maximum_expansions > 0 && limits.maximum_candidates > 0 &&
+      limits.maximum_depth > 0) {
+    for (const auto& source : unrotated_allocation_roots) {
+      for (auto& edge : topology_edges(source)) {
+        if (topology_seeds.size() == 4U) break;
+        allocation_roots.push_back(edge.node);
+        topology_seeds.push_back(std::move(edge));
+      }
+      if (topology_seeds.size() == 4U) break;
+    }
+  }
+  // Recompute web interference after representation and whole-family choices.
+  // Keep the original closure first: a local copy saving must not replace a
+  // neutral variant whose geometry wins only after shared-tail projection.
+  // Selector digits still belong to their encoded carrier, not its provisional
+  // destination. Conflicting origins cannot certify a pruned execution graph.
+  const auto coalesced_variants = [&](const ConstrainedRepresentation& node) {
+    std::vector<ConstrainedRepresentation> variants{node};
+    if (!preload_environment_complete) return variants;
+    auto origins = node.targets;
+    std::map<std::string, int> overrides;
+    for (const auto& item : node.artifact.items) {
+      if (!item.indirect_flow_targets || charged_constraint_consumer(item)) continue;
+      const int reg = item.opcode & 15;
+      if (reg < 7 || reg > 14) continue;
+      const std::string name(1, "0123456789abcde"[reg]);
+      if (!node.encoded_selectors.contains(name)) continue;
+      for (const auto& target : *item.indirect_flow_targets) {
+        const auto* label = std::get_if<std::string>(&target);
+        if (!label) return variants;
+        const int origin = node.encoded_selectors.at(name);
+        const auto [old, inserted] = overrides.emplace(*label, origin);
+        if (!inserted && old->second != origin) return variants;
+      }
+    }
+    for (const auto& [label, origin] : overrides) origins[label] = origin;
+    auto copied = passes::deferred_register_web_copy_coalesce(
+        raise_machine_to_ir(node.artifact.items,
+            effective_optimizer_feature_profile(options)),
+        context, control_options, origins);
+    if (auto artifact = apply(node.artifact, std::move(copied))) {
+      ConstrainedRepresentation alternative{
+          std::move(*artifact), node.targets, node.encoded_selectors};
+      if (refresh_constraint_targets(alternative))
+        variants.push_back(std::move(alternative));
+    }
+    return variants;
+  };
+  const auto close_node = [&](const ConstrainedRepresentation& node, const std::vector<std::string>& path)
+          -> std::optional<ConstrainedRepresentation> {
+        std::optional<ConstrainedRepresentation> best;
+        // Each closure owns its downstream finalization. A smaller intermediate
+        // must not hide a different placement that wins only after composition.
+        const auto variants = coalesced_variants(node);
+        for (const auto& variant : variants) for (const bool projected : {false, true}) {
+          auto closed = close_representation_constraints(
+              variant, context, control_options, preload_environment_complete, projected);
+          if (!closed) continue;
+          std::string chain;
+          for (const auto& rule : path) {
+            if (!chain.empty()) chain += " + ";
+            chain += rule;
+          }
+          closed->optimizations.push_back({"joint-representation-constraint-search",
+              "Closed representation, register and target equations together (" + chain +
+              "); every immutable binding, flexible preload and matched return is "
+              "certified before final size comparison."});
+          if (finalize) closed = finalize(*closed);
+          if (!closed) continue;
+          ConstrainedRepresentation result{std::move(*closed), {}};
+          if (refresh_constraint_targets(result) &&
+              (!best || cells(result.artifact) < cells(best->artifact)))
+            best = std::move(result);
+        }
+        return best;
+      };
+  const auto search = search_proved_transactions(
+      std::move(seeds), std::vector<ConstrainedRepresentation>{initial}, cells(root),
+      limits, [](const auto& node) { return cells(node.artifact); },
+      [](const auto& a, const auto& b) {
+        return a.targets == b.targets && a.encoded_selectors == b.encoded_selectors &&
+            same_layout_search_artifact(a.artifact, b.artifact);
+      }, expand,
+      close_node);
+  if (search.incumbent)
+    output.incumbent = search.incumbent->artifact;
+  output.expanded = search.expanded;
+  output.admitted = search.admitted;
+  output.duplicate = search.duplicate;
+  output.rejected = search.rejected;
+  output.budget_exhausted = search.budget_exhausted;
+
+  // The historical topology prefix can fill up before reaching the projected
+  // representation roots. Preserve that prefix and its tie order, but do not
+  // leave allocation slots unused: compose the remaining proved alternatives
+  // fairly across parents. In particular, a neutral producer choice and a
+  // neutral polarity choice must be allowed to meet the same allocation/tail
+  // closure, even when neither improves an independent greedy incumbent.
+  if (preload_environment_complete && topology_seeds.size() == 4U &&
+      allocation_roots.size() < limits.maximum_expansions) {
+    auto product_limits = limits;
+    product_limits.maximum_candidates = std::min(
+        limits.maximum_candidates, limits.maximum_expansions - allocation_roots.size());
+    auto product = collect_proved_product_frontier(
+        unrotated_allocation_roots, allocation_roots, cells(root), product_limits,
+        [](const auto& node) { return cells(node.artifact); },
+        [](const auto& a, const auto& b) {
+          return a.targets == b.targets && a.encoded_selectors == b.encoded_selectors &&
+              same_layout_search_artifact(a.artifact, b.artifact);
+        }, topology_edges);
+    output.expanded += product.expanded;
+    output.admitted += product.candidates.size();
+    output.duplicate += product.duplicate;
+    output.rejected += product.rejected;
+    output.budget_exhausted = output.budget_exhausted || product.budget_exhausted;
+    for (auto& edge : product.candidates) {
+      edge.node.artifact.optimizations.push_back({"joint-representation-product-frontier",
+          "Retained a proved cross-representation continuation in an unused allocation "
+          "slot; selector projection, region polarity and whole-family allocation "
+          "remain subject to one final layout/return-state proof."});
+      allocation_roots.push_back(std::move(edge.node));
+    }
+  }
+
+  // Keep the historical search and its incumbent independent. Within this
+  // separate bounded lane an allocation, optional fallthrough cut and pending
+  // tail sharing close together. No eager natural-target layout is frozen
+  // before another rewrite can repay a released family's extra operands.
+  if (preload_environment_complete && limits.maximum_expansions > 0 &&
+      limits.maximum_depth > 0 && limits.maximum_candidates > 0) {
+    const std::size_t cap = std::min<std::size_t>(24, limits.maximum_candidates);
+    std::size_t roots = 0;
+    for (const auto& source : allocation_roots) {
+      if (roots++ >= limits.maximum_expansions) break;
+      const auto source_flow = build_post_layout_control_flow(source.artifact.items, control_options);
+      std::map<std::string, int> encoded = source.encoded_selectors;
+      bool consistent = source_flow.proved;
+      for (const auto& [command, targets] : source_flow.indirect_flow_targets) {
+        const auto& item = source.artifact.items[command];
+        if (charged_constraint_consumer(item)) continue;
+        const int reg = item.opcode & 15;
+        if (reg < 7 || reg > 14 || !item.indirect_flow_targets) continue;
+        const std::string name(1, "0123456789abcde"[reg]);
+        for (const auto& target : *item.indirect_flow_targets) {
+          const auto* label = std::get_if<std::string>(&target);
+          if (!label || !source.targets.contains(*label)) {
+            consistent = false;
+            break;
+          }
+          const auto [old, inserted] = encoded.emplace(name, source.targets.at(*label));
+          if (!inserted && old->second != source.targets.at(*label)) consistent = false;
+        }
+        (void)targets;
+      }
+      if (!consistent) continue;
+      const auto allocations = deferred_natural_target_selector_allocations(
+          source.artifact.items, source.artifact.preloads, source_flow, encoded,
+          control_options, {.maximum_assignments = 128, .maximum_candidates = cap,
+                            .maximum_growth_cells = limits.maximum_growth_cells});
+      if (allocations.empty()) continue;
+      ++output.expanded;
+      for (const auto& allocation : allocations) {
+        ConstrainedRepresentation allocated = source;
+        allocated.artifact.items = allocation.items;
+        // Factoring may already have borrowed cells. Reallocation cannot
+        // reset that debt by measuring only its local delta from source.
+        if (!transaction_growth_fits(
+                cells(root), cells(allocated.artifact), limits.maximum_growth_cells)) {
+          ++output.rejected;
+          continue;
+        }
+        allocated.encoded_selectors = encoded;
+        for (const auto& [reg, origin] : allocation.encoded_selector_targets)
+          allocated.encoded_selectors[reg] = origin;
+        if (!refresh_constraint_targets(allocated)) continue;
+        ++output.admitted;
+        allocated.artifact.optimizations.push_back({"joint-selector-family-allocation",
+            "Assigned whole stable flow families and direct-flow groups together (" +
+            std::to_string(allocation.changed_flows) + " commands, deferred cell delta " +
+            std::to_string(allocation.cell_delta) +
+            "); preserved carrier words, all data aliases, stack/X2 and return identities."});
+        std::vector<ConstrainedRepresentation> variants{allocated};
+        if (limits.maximum_growth_cells > 0) {
+          auto bridge_bindings = allocated.targets;
+          bool consistent_bridges = true;
+          std::map<std::string, int> new_bindings;
+          for (const auto& item : allocated.artifact.items) {
+            if (!item.indirect_flow_targets || charged_constraint_consumer(item)) continue;
+            const int reg = item.opcode & 15;
+            if (reg < 7 || reg > 14) continue;
+            const std::string name(1, "0123456789abcde"[reg]);
+            if (!allocated.encoded_selectors.contains(name)) continue;
+            for (const auto& target : *item.indirect_flow_targets) {
+              const auto* label = std::get_if<std::string>(&target);
+              if (!label) { consistent_bridges = false; break; }
+              const int origin = allocated.encoded_selectors.at(name);
+              const auto [old, inserted] = new_bindings.emplace(*label, origin);
+              if (!inserted && old->second != origin) consistent_bridges = false;
+            }
+          }
+          for (const auto& [label, origin] : new_bindings) bridge_bindings[label] = origin;
+          if (consistent_bridges)
+            for (auto& bridge : passes::stable_target_split_bridge_candidates(
+                     raise_machine_to_ir(allocated.artifact.items,
+                         effective_optimizer_feature_profile(options)),
+                     allocated.artifact.preloads, bridge_bindings, context, control_options)) {
+              auto artifact = apply(allocated.artifact, std::move(bridge));
+              if (!artifact || !transaction_growth_fits(
+                      cells(root), cells(*artifact), limits.maximum_growth_cells))
+                continue;
+              ConstrainedRepresentation split{std::move(*artifact), allocated.targets,
+                                               allocated.encoded_selectors};
+              if (refresh_constraint_targets(split)) variants.push_back(std::move(split));
+            }
+        }
+        const auto uncoalesced = variants;
+        for (const auto& source_variant : uncoalesced) {
+          auto alternatives = coalesced_variants(source_variant);
+          if (alternatives.size() > 1U)
+            variants.push_back(std::move(alternatives.back()));
+        }
+        for (const auto& variant : variants)
+          for (bool projected : {false, true}) {
+            auto closed = close_representation_constraints(
+                variant, context, control_options, true, projected);
+            // Geometry alone is not a saving. Avoid running the full compiler
+            // finalizer on an unpaid release/bridge, even if its CFG is valid.
+            if (!closed || cells(*closed) >= cells(root)) continue;
+            closed->optimizations.push_back({"joint-selector-allocation-layout",
+                "Closed complete-family allocation, region geometry and pending continuation "
+                "sharing atomically; independently checked delivered selectors and callbacks."});
+            if (finalize) closed = finalize(*closed);
+            if (closed && cells(*closed) < cells(root) &&
+                (!output.incumbent || cells(*closed) < cells(*output.incumbent)))
+              output.incumbent = std::move(*closed);
+          }
+      }
+    }
+  }
+  if (!projection_seeds.empty()) {
+    const auto projection_search = search_proved_transactions(
+        std::move(projection_seeds), original_allocation_roots, cells(root),
+        limits, [](const auto& node) { return cells(node.artifact); },
+        [](const auto& a, const auto& b) {
+          return a.targets == b.targets && a.encoded_selectors == b.encoded_selectors &&
+              same_layout_search_artifact(a.artifact, b.artifact);
+        }, expand, close_node);
+    if (projection_search.incumbent &&
+        (!output.incumbent ||
+         cells(projection_search.incumbent->artifact) < cells(*output.incumbent)))
+      output.incumbent = projection_search.incumbent->artifact;
+    output.expanded += projection_search.expanded;
+    output.admitted += projection_search.admitted;
+    output.duplicate += projection_search.duplicate;
+    output.rejected += projection_search.rejected;
+    output.budget_exhausted = output.budget_exhausted || projection_search.budget_exhausted;
+  }
+  if (!topology_seeds.empty()) {
+    auto topology_limits = limits;
+    topology_limits.maximum_expansions = std::min<std::size_t>(4, limits.maximum_expansions);
+    topology_limits.maximum_candidates = std::min<std::size_t>(24, limits.maximum_candidates);
+    topology_limits.maximum_depth = std::min<std::size_t>(3, limits.maximum_depth);
+    const auto topology_search = search_proved_transactions(
+        std::move(topology_seeds), unrotated_allocation_roots, cells(root),
+        topology_limits, [](const auto& node) { return cells(node.artifact); },
+        [](const auto& a, const auto& b) {
+          return a.targets == b.targets && a.encoded_selectors == b.encoded_selectors &&
+              same_layout_search_artifact(a.artifact, b.artifact);
+        }, [&](const ConstrainedRepresentation& parent) {
+          auto edges = expand(parent);
+          for (auto& edge : topology_edges(parent)) edges.push_back(std::move(edge));
+          return edges;
+        }, close_node);
+    if (topology_search.incumbent &&
+        (!output.incumbent ||
+         cells(topology_search.incumbent->artifact) < cells(*output.incumbent)))
+      output.incumbent = topology_search.incumbent->artifact;
+    output.expanded += topology_search.expanded;
+    output.admitted += topology_search.admitted;
+    output.duplicate += topology_search.duplicate;
+    output.rejected += topology_search.rejected;
+    output.budget_exhausted = output.budget_exhausted || topology_search.budget_exhausted;
+  }
+  return output;
 }
 
 namespace passes {

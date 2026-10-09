@@ -68,6 +68,7 @@ add_library(mkpro_core STATIC
   src/core/passes/arithmetic_if.cpp
   src/core/passes/branch_target_x_reuse.cpp
   src/core/passes/call_continuation_composition.cpp
+  src/core/passes/common_processor_factoring.cpp
   src/core/passes/cfg.cpp
   src/core/passes/conditional_branch_trampoline.cpp
   src/core/passes/constant_folding.cpp
@@ -128,6 +129,7 @@ add_library(mkpro_core STATIC
   src/core/shared_helper_dual_mode_layout.cpp
   src/core/shared_helper_wrapper.cpp
   src/core/stable_register_value_flow.cpp
+  src/core/post_layout_progress_bounds.cpp
   src/core/state_banks.cpp
   src/core/super_dark_layout.cpp
   src/core/terminal_report_tail.cpp
@@ -796,6 +798,12 @@ target_link_libraries(mkpro_constant_synthesis_tests PRIVATE mkpro_debug)
 mkpro_configure_target(mkpro_constant_synthesis_tests)
 add_test(NAME mkpro.constant_synthesis_compiler_and_rom COMMAND mkpro_constant_synthesis_tests)
 
+add_executable(mkpro_joint_constraint_search_tests tests/joint_constraint_search_test.cpp)
+target_link_libraries(mkpro_joint_constraint_search_tests PRIVATE mkpro_debug)
+mkpro_configure_target(mkpro_joint_constraint_search_tests)
+add_test(NAME mkpro.joint_constraint_search_compiler_and_rom
+  COMMAND mkpro_joint_constraint_search_tests)
+
 add_executable(mkpro_joint_representation_tests tests/joint_representation_test.cpp)
 target_link_libraries(mkpro_joint_representation_tests PRIVATE mkpro_debug)
 mkpro_configure_target(mkpro_joint_representation_tests)
@@ -826,6 +834,42 @@ target_link_libraries(mkpro_mixed_epoch_carrier_tests PRIVATE mkpro_debug)
 mkpro_configure_target(mkpro_mixed_epoch_carrier_tests)
 add_test(NAME mkpro.mixed_epoch_carrier_compiler_and_rom COMMAND mkpro_mixed_epoch_carrier_tests)
 
+add_executable(mkpro_numeric_entry_value_tests tests/numeric_entry_value_test.cpp)
+target_link_libraries(mkpro_numeric_entry_value_tests PRIVATE mkpro_debug)
+mkpro_configure_target(mkpro_numeric_entry_value_tests)
+add_test(NAME mkpro.numeric_entry_value_compiler_and_rom COMMAND mkpro_numeric_entry_value_tests)
+
+add_executable(mkpro_quantized_numeric_range_tests tests/quantized_numeric_range_test.cpp)
+target_link_libraries(mkpro_quantized_numeric_range_tests PRIVATE mkpro_debug)
+mkpro_configure_target(mkpro_quantized_numeric_range_tests)
+add_test(NAME mkpro.quantized_numeric_range_compiler_and_rom COMMAND mkpro_quantized_numeric_range_tests)
+
+add_executable(mkpro_progress_numeric_range_tests tests/progress_numeric_range_test.cpp)
+target_link_libraries(mkpro_progress_numeric_range_tests PRIVATE mkpro_debug)
+mkpro_configure_target(mkpro_progress_numeric_range_tests)
+add_test(NAME mkpro.progress_numeric_range_compiler_and_rom COMMAND mkpro_progress_numeric_range_tests)
+
+add_executable(mkpro_selector_counter_ranges_tests tests/selector_counter_ranges_test.cpp)
+target_link_libraries(mkpro_selector_counter_ranges_tests PRIVATE mkpro_debug)
+mkpro_configure_target(mkpro_selector_counter_ranges_tests)
+add_test(NAME mkpro.selector_counter_ranges_compiler_and_rom COMMAND mkpro_selector_counter_ranges_tests)
+
+add_executable(mkpro_guarded_numeric_range_tests tests/guarded_numeric_range_test.cpp)
+target_link_libraries(mkpro_guarded_numeric_range_tests PRIVATE mkpro_debug)
+mkpro_configure_target(mkpro_guarded_numeric_range_tests)
+add_test(NAME mkpro.guarded_numeric_range_compiler_and_rom COMMAND mkpro_guarded_numeric_range_tests)
+
+add_executable(mkpro_common_processor_factoring_tests tests/common_processor_factoring_test.cpp)
+target_link_libraries(mkpro_common_processor_factoring_tests PRIVATE mkpro_debug)
+mkpro_configure_target(mkpro_common_processor_factoring_tests)
+add_test(NAME mkpro.common_processor_factoring_compiler_and_rom
+  COMMAND mkpro_common_processor_factoring_tests)
+
+add_executable(mkpro_numeric_range_transport_tests tests/numeric_range_transport_test.cpp)
+target_link_libraries(mkpro_numeric_range_transport_tests PRIVATE mkpro_debug)
+mkpro_configure_target(mkpro_numeric_range_transport_tests)
+add_test(NAME mkpro.numeric_range_transport_compiler_and_rom COMMAND mkpro_numeric_range_transport_tests)
+
 add_executable(mkpro_selector_literal_address_domains_tests
   tests/selector_literal_address_domains_test.cpp)
 target_link_libraries(mkpro_selector_literal_address_domains_tests PRIVATE mkpro_debug)
@@ -844,3 +888,9 @@ target_link_libraries(mkpro_tail_provenance_layout_tests PRIVATE mkpro_debug)
 mkpro_configure_target(mkpro_tail_provenance_layout_tests)
 add_test(NAME mkpro.tail_provenance_layout_compiler_and_rom
   COMMAND mkpro_tail_provenance_layout_tests)
+
+add_executable(mkpro_joint_selector_allocation_tests tests/joint_selector_allocation_test.cpp)
+target_link_libraries(mkpro_joint_selector_allocation_tests PRIVATE mkpro_debug)
+mkpro_configure_target(mkpro_joint_selector_allocation_tests)
+add_test(NAME mkpro.joint_selector_allocation_compiler_and_rom
+  COMMAND mkpro_joint_selector_allocation_tests)

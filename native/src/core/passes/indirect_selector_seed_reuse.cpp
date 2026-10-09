@@ -1,6 +1,7 @@
 #include "mkpro/core/passes/indirect_selector_seed_reuse.hpp"
 
 #include "mkpro/core/post_layout_control_flow.hpp"
+#include "mkpro/core/late_bound_decimal_selector.hpp"
 #include "mkpro/core/stack_value_equivalence.hpp"
 
 #include <algorithm>
@@ -68,7 +69,7 @@ bool touches_register(const MachineItem& item, std::size_t item_index, int reg,
 // Physical targets, overlays and layout-bound selector charges belong to a
 // later transactional optimizer. This pass changes positions only while all
 // flow references are symbolic; it never edits a frozen numerical address.
-bool symbolic_geometry(const std::vector<MachineItem>& items) {
+bool symbolic_geometry(const std::vector<MachineItem>& items, bool deferred) {
   for (const MachineItem& item : items) {
     if (item.raw)
       return false;
@@ -82,8 +83,8 @@ bool symbolic_geometry(const std::vector<MachineItem>& items) {
           return false;
       }
     }
-    if (std::any_of(item.roles.begin(), item.roles.end(), [](const CellRole& role) {
-          return role.starts_with("late-decimal-selector-") ||
+    if (std::any_of(item.roles.begin(), item.roles.end(), [&](const CellRole& role) {
+          return (!deferred && role.starts_with("late-decimal-selector-")) ||
                  role.starts_with("finalization-cell-origin:") ||
                  role == kResumableErrorPaddingRole;
         }))
@@ -360,8 +361,9 @@ bool continuation_equivalent(const std::vector<MachineItem>& items,
 
 } // namespace
 
-PassResult indirect_selector_seed_reuse(const std::vector<IrOp>& ops,
-                                        const PassContext& context) {
+static PassResult seed_reuse_impl(const std::vector<IrOp>& ops,
+    const PassContext& context, const PostLayoutControlFlowOptions& control, bool deferred,
+    const std::map<std::string, int>* bindings = nullptr) {
   const auto unchanged = [&] { return PassResult{.ops = ops}; };
   std::vector<std::size_t> candidates;
   for (std::size_t index = 0; index + 1U < ops.size(); ++index) {
@@ -379,11 +381,31 @@ PassResult indirect_selector_seed_reuse(const std::vector<IrOp>& ops,
       }))
     return unchanged();
   const std::vector<MachineItem> items = lower_ir_to_machine(ops);
-  if (!symbolic_geometry(items))
+  if (!symbolic_geometry(items, deferred))
     return unchanged();
-  const AuthoritativePostLayoutControlFlow flow = build_post_layout_control_flow(items);
+  auto flow = build_post_layout_control_flow(items, control);
   if (!flow.proved || flow.execution_states.size() != flow.execution_successors.size())
     return unchanged();
+
+
+  if (deferred) {
+    if (!bindings)
+      return unchanged();
+    const auto conditional = build_deferred_selector_consistent_execution_graph(
+        items, flow, *bindings, control.maximum_execution_states);
+    const auto& graph = conditional.execution;
+    if (!graph.proved)
+      return unchanged();
+    // Use the conditional product only for the relational data proof. The
+    // final command-identity CFG is rebuilt independently below and at closure.
+    const auto states = std::move(flow.execution_states);
+    flow.execution_states.clear();
+    flow.execution_states.reserve(graph.original_states.size());
+    for (const auto original : graph.original_states)
+      flow.execution_states.push_back(states.at(original));
+    flow.execution_successors = graph.successors;
+    flow.execution_edges = graph.execution_edges;
+  }
   Predecessors predecessors(flow.execution_states.size());
   for (std::size_t index = 0; index < flow.execution_successors.size(); ++index) {
     for (const std::size_t successor : flow.execution_successors.at(index))
@@ -444,7 +466,7 @@ PassResult indirect_selector_seed_reuse(const std::vector<IrOp>& ops,
     }
     // Labels retain command identity. A newly inserted store is reached only
     // by fallthrough from the producer, never by an old edge to its successor.
-    if (!build_post_layout_control_flow(lower_ir_to_machine(result)).proved)
+    if (!build_post_layout_control_flow(lower_ir_to_machine(result), control).proved)
       continue;
     return PassResult{
         .ops = std::move(result),
@@ -463,6 +485,23 @@ PassResult indirect_selector_seed_reuse(const std::vector<IrOp>& ops,
     };
   }
   return unchanged();
+}
+
+
+PassResult indirect_selector_seed_reuse(const std::vector<IrOp>& ops,
+                                        const PassContext& context) {
+  return seed_reuse_impl(ops, context, {}, false);
+}
+
+DeferredIndirectSelectorSeedReuse deferred_indirect_selector_seed_reuse(
+    const std::vector<IrOp>& ops, const PassContext& context,
+    const PostLayoutControlFlowOptions& control,
+    const std::map<std::string, int>& encoded_target_origins) {
+  auto transformation = seed_reuse_impl(
+      ops, context, control, true, &encoded_target_origins);
+  if (transformation.applied <= 0)
+    return {.transformation = std::move(transformation)};
+  return {std::move(transformation), encoded_target_origins};
 }
 
 IrPass indirect_selector_seed_reuse_pass() {

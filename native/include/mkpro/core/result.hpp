@@ -7,6 +7,7 @@
 
 #include <filesystem>
 #include <map>
+#include <memory>
 #include <optional>
 #include <set>
 #include <string>
@@ -352,6 +353,10 @@ struct CompileOptions {
   // Internal optimizer root. The public target profile remains unchanged, but
   // lowering and candidate search use this strict subset of target features.
   std::optional<FeatureProfile> optimizer_feature_profile_override;
+  // Allocation-only root: constrain register colors without changing opcode,
+  // formal-address, return-stack or program-memory semantics. A larger bank
+  // than the effective target is never enabled by this option.
+  std::optional<FeatureProfile> optimizer_register_profile_override;
   std::optional<int> budget;
   bool analysis = false;
   bool strict = false;
@@ -562,6 +567,8 @@ inline FeatureProfile effective_optimizer_feature_profile(const CompileOptions& 
   return options.optimizer_feature_profile_override.value_or(options.feature_profile);
 }
 
+struct OptimizerLayoutContinuation;
+
 struct CompileResult {
   bool implemented = false;
   FeatureProfile feature_profile = FeatureProfile::Standard;
@@ -595,6 +602,9 @@ struct CompileResult {
   std::string listing;
   std::string setup_hex;
   std::string setup_listing;
+  // Immutable, compiler-private IR checkpoints. Copies/cache hits retain the
+  // same continuation; public reports contain only closed selected artifacts.
+  std::shared_ptr<const OptimizerLayoutContinuation> layout_search_continuation;
 };
 
 CompileResult compile_source_stub(std::string source, const CompileOptions& options);

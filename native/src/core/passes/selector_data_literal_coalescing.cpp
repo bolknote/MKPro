@@ -5,8 +5,10 @@
 #include "mkpro/core/natural_target_component_layout.hpp"
 #include "mkpro/core/opcodes.hpp"
 #include "mkpro/core/selector_writeback.hpp"
+#include "mkpro/core/layout_search_artifact.hpp"
 
 #include <algorithm>
+#include <bit>
 #include <map>
 #include <optional>
 #include <set>
@@ -366,7 +368,6 @@ SelectorChargeLiteralLayoutResult layout_after_literal_erasure(
     const PostLayoutControlFlowOptions& flow_options, const Family& family,
     const NaturalTargetComponentLayoutOptions& layout_options) {
   SelectorChargeLiteralLayoutResult best;
-  if (!layout_options.deferred_selector_reconciliations.empty()) return best;
   std::vector<MachineItem> erased;
   std::vector<std::optional<std::size_t>> mapping(items.size());
   for (std::size_t i = 0; i < items.size(); ++i) {
@@ -393,12 +394,35 @@ SelectorChargeLiteralLayoutResult layout_after_literal_erasure(
   options.required_absolute_targets = {
       {.target_item = *mapping[family.leaf], .target_address = data_address}};
   std::map<std::size_t, int> fixed{{*mapping[family.leaf], data_address}};
+  // Earlier edits in the same transaction may already owe exact addresses.
+  // Remap obligations by command identity; never drop them or refresh a
+  // growth allowance just because another edit removes cells.
+  for (const auto& required : layout_options.required_absolute_targets) {
+    if (required.target_item >= mapping.size() || !mapping[required.target_item]) return best;
+    const auto output = *mapping[required.target_item];
+    const auto [position, added] = fixed.emplace(output, required.target_address);
+    if (!added && position->second != required.target_address) return best;
+    if (added) options.required_absolute_targets.push_back({output, required.target_address});
+  }
+  options.deferred_selector_reconciliations.clear();
+  for (const auto& debt : layout_options.deferred_selector_reconciliations) {
+    if (debt.source_item >= mapping.size() || debt.target_item >= mapping.size() ||
+        !mapping[debt.source_item] || !mapping[debt.target_item]) return best;
+    options.deferred_selector_reconciliations.push_back({
+        *mapping[debt.source_item], *mapping[debt.target_item], debt.final_target_address});
+  }
   auto delivered_preloads = preloads;
   std::map<int, std::pair<int, int>> moved_targets;
   std::set<std::size_t> staged_companions;
   for (const auto& [source, targets] : before.indirect_flow_targets) {
     const int selector = items[source].opcode & 15;
     if (selector == reg) continue;
+    if (std::any_of(layout_options.deferred_selector_reconciliations.begin(),
+        layout_options.deferred_selector_reconciliations.end(),
+        [&](const auto& debt) { return debt.source_item == source; })) {
+      staged_companions.insert(source);
+      continue;
+    }
     for (const auto& target : targets) {
       if (target.item_index >= mapping.size() || !mapping[target.item_index])
         return best;
@@ -522,6 +546,208 @@ SelectorChargeLiteralLayoutResult layout_after_literal_erasure(
             std::to_string(input_cells - saved) + " cells."}};
   }
   return best;
+}
+
+struct ReleasedCallFamily {
+  int reg = -1;
+  std::set<std::size_t> calls;
+};
+
+// Collect whole immutable families, including ones which do not overlap the
+// desired literal address. A permutation of selectors can remove a geometric
+// obstruction without any individual family being an immediate blocker.
+std::vector<ReleasedCallFamily> releasable_call_families(
+    const std::vector<MachineItem>& items, const std::vector<PreloadReport>& preloads,
+    const AuthoritativePostLayoutControlFlow& flow, AddressSpaceModel model) {
+  std::vector<ReleasedCallFamily> result;
+  for (int reg = 7; reg <= 14; ++reg) {
+    const std::string name(1, "0123456789abcde"[reg]);
+    const PreloadReport* preload = nullptr;
+    bool valid = true;
+    for (const auto& value : preloads) {
+      if (register_from_text(value.register_name) != name) continue;
+      if (preload) valid = false;
+      preload = &value;
+    }
+    if (!valid || !preload || preload->setup_expression || preload->setup_target_name)
+      continue;
+    const auto decoded = evaluate_indirect_address(
+        name, preload->value, IndirectOperationKind::Flow, model);
+    if (!decoded || !decoded->actual_flow_target ||
+        noncanonical_indirect_flow_entries(decoded)) continue;
+    ReleasedCallFamily family{.reg = reg};
+    std::optional<std::size_t> target;
+    for (std::size_t i = 0; i < items.size(); ++i) {
+      const auto& item = items[i];
+      if (item.kind != MachineItemKind::Op) continue;
+      if (item.raw || item.opcode == 0x40 + reg) { valid = false; break; }
+      const bool memory = (item.opcode >= 0xb0 && item.opcode <= 0xbe) ||
+                          (item.opcode >= 0xd0 && item.opcode <= 0xde);
+      if (memory) {
+        const auto aliases = flow.indirect_memory_targets.find(i);
+        if ((item.opcode & 15) == reg || aliases == flow.indirect_memory_targets.end() ||
+            std::find(aliases->second.begin(), aliases->second.end(), reg) !=
+                aliases->second.end()) { valid = false; break; }
+      }
+      const auto targets = flow.indirect_flow_targets.find(i);
+      if (targets == flow.indirect_flow_targets.end() || (item.opcode & 15) != reg)
+        continue;
+      const bool continuous_call = item.opcode == 0xa0 + reg &&
+          item.manual_interaction &&
+          item.manual_interaction->kind == ManualInteractionAnchorKind::ContinuousResume;
+      if ((item.opcode != 0xa0 + reg && item.opcode != 0x80 + reg) ||
+          (item.manual_interaction && !continuous_call) || targets->second.size() != 1 ||
+          targets->second.front().address != *decoded->actual_flow_target ||
+          (target && *target != targets->second.front().item_index)) {
+        valid = false; break;
+      }
+      const auto& indirect = opcode_by_code(item.opcode);
+      const auto& direct = opcode_by_code(item.opcode == 0xa0 + reg ? 0x53 : 0x51);
+      if (indirect.stack_effect != direct.stack_effect ||
+          indirect.x2_effect != direct.x2_effect ||
+          indirect.conditional_x2_effect || direct.conditional_x2_effect ||
+          (!indirect_writeback_preserves_literal_value(*decoded, preload->value) &&
+           !selector_writeback_is_unobserved(items, flow, i, *preload, model))) {
+        valid = false; break;
+      }
+      target = targets->second.front().item_index;
+      family.calls.insert(i);
+    }
+    if (valid && !family.calls.empty()) result.push_back(std::move(family));
+  }
+  return result;
+}
+
+std::vector<SelectorChargeLiteralLayoutResult> joint_family_erasure_layout(
+    const std::vector<MachineItem>& items, const std::vector<PreloadReport>& preloads,
+    const AuthoritativePostLayoutControlFlow& before,
+    const PostLayoutControlFlowOptions& flow_options,
+    const NaturalTargetComponentLayoutOptions& layout_options) {
+  std::vector<SelectorChargeLiteralLayoutResult> results;
+  const auto groups = releasable_call_families(
+      items, preloads, before, layout_options.address_space_model);
+  if (groups.empty()) return results;
+  const auto input_index = index_of(items);
+  std::vector<Family> families;
+  for (std::size_t i = 0; i < items.size(); ++i)
+    if (auto family = family_at(items, before, i)) families.push_back(std::move(*family));
+  if (families.empty()) return results;
+
+  // Cardinality-first deterministic subsets, never a Cartesian product of
+  // every pass's beam. At most three complete families/eight operands are
+  // released per transaction; the incumbent search keeps its original budget.
+  std::vector<unsigned> subsets;
+  const unsigned end = 1U << static_cast<unsigned>(groups.size());
+  for (unsigned mask = 1; mask < end; ++mask)
+    if (std::popcount(mask) <= 3) subsets.push_back(mask);
+  std::stable_sort(subsets.begin(), subsets.end(), [](unsigned left, unsigned right) {
+    return std::pair{std::popcount(left), left} < std::pair{std::popcount(right), right};
+  });
+  int attempts = 0;
+  for (unsigned mask : subsets) {
+    std::set<std::size_t> calls;
+    std::string names;
+    for (std::size_t group = 0; group < groups.size(); ++group) {
+      if ((mask & (1U << static_cast<unsigned>(group))) == 0) continue;
+      calls.insert(groups[group].calls.begin(), groups[group].calls.end());
+      if (!names.empty()) names += ',';
+      names += "R" + std::string(1, "0123456789abcde"[groups[group].reg]);
+    }
+    if (calls.size() > 8) continue;
+    std::vector<MachineItem> expanded;
+    std::vector<std::optional<std::size_t>> mapping(items.size()), reverse;
+    PostLayoutExecutionRelocationOptions transport;
+    for (std::size_t i = 0; i < items.size(); ++i) {
+      auto item = items[i];
+      mapping[i] = expanded.size();
+      reverse.push_back(i);
+      if (calls.contains(i)) {
+        transport.direct_to_indirect_flow_items.push_back(expanded.size());
+        item.opcode = item.opcode >= 0xa0 ? 0x53 : 0x51;
+        item.mnemonic = opcode_by_code(item.opcode).name;
+        item.indirect_flow_targets.reset();
+      }
+      expanded.push_back(std::move(item));
+      if (calls.contains(i)) {
+        expanded.push_back(MachineItem::address(items[i].indirect_flow_targets->front()));
+        reverse.push_back(std::nullopt);
+      }
+    }
+    const auto index = index_of(expanded);
+    if (before.empty_return_target &&
+        index.addresses[*mapping[before.empty_return_target->item_index]] !=
+            before.empty_return_target->address) continue;
+    const auto flow = build_post_layout_control_flow(expanded, flow_options);
+    if (!flow.proved || !prove_post_layout_execution_relocation(
+        expanded, items, flow, before, reverse, transport).proved) continue;
+    auto options = layout_options;
+    auto delivered_preloads = preloads;
+    std::map<std::size_t, int> fixed;
+    bool complete = true;
+    for (const auto& [source, targets] : before.indirect_flow_targets) {
+      if (calls.contains(source)) continue;
+      const auto& item = items[source];
+      if (std::any_of(item.roles.begin(), item.roles.end(), [](const auto& value) {
+          return value == "late-decimal-selector-consumer" ||
+                 value.starts_with("runtime-charged-selector");
+      })) continue;
+      if (targets.size() != 1) { complete = false; break; }
+      const auto& target = targets.front();
+      const auto output = *mapping[target.item_index];
+      const int temporary_address = index.addresses[output];
+      if (temporary_address == target.address) continue;
+      const std::string name(1, "0123456789abcde"[item.opcode & 15]);
+      const auto original = std::find_if(preloads.begin(), preloads.end(),
+          [&](const auto& value) { return register_from_text(value.register_name) == name; });
+      auto delivered = std::find_if(delivered_preloads.begin(), delivered_preloads.end(),
+          [&](const auto& value) { return register_from_text(value.register_name) == name; });
+      if (original == preloads.end() || delivered == delivered_preloads.end()) {
+        complete = false; break;
+      }
+      const auto rebound = rebind_stable_preloaded_indirect_flow_selector(
+          items, *original, before, target.address, temporary_address,
+          layout_options.address_space_model);
+      if (rebound) { delivered->value = *rebound; continue; }
+      const auto [position, added] = fixed.emplace(output, target.address);
+      if (!added && position->second != target.address) { complete = false; break; }
+      if (added) options.required_absolute_targets.push_back({output, target.address});
+      options.deferred_selector_reconciliations.push_back({
+          *mapping[source], output, target.address});
+    }
+    if (!complete) continue;
+    options.allow_standalone_fallthrough_jump_fold = true;
+    for (const auto& original_family : families) {
+      if (++attempts > 12) return results;
+      const auto family = family_at(expanded, flow, *mapping[original_family.store], false);
+      if (!family || family->identity != original_family.identity ||
+          family->literal != original_family.literal ||
+          family->charges.size() != original_family.charges.size()) continue;
+      auto closed = layout_after_literal_erasure(
+          expanded, delivered_preloads, flow, flow_options, *family, options);
+      if (!closed.applied) continue;
+      const int saved = input_index.cells - index_of(closed.items).cells;
+      // This is an enabling edge, not a published optimization. Existing
+      // complete-artifact search must repay the entire (at most two-cell) debt.
+      if (saved < -2) continue;
+      closed.removed_cells = saved;
+      closed.optimizations.insert(closed.optimizations.begin(), {
+          .name = "joint-selector-allocation-and-erasure",
+          .detail = "Solved " + std::to_string(std::popcount(mask)) +
+              " complete call families (" + names + "), " +
+              std::to_string(calls.size()) +
+              " temporary direct operands and literal erasure in one placement; "
+              "verified typed entries, stack/X1/X2, aliases and exact return contexts. "
+              "Complete artifact: " + std::to_string(input_index.cells) + " -> " +
+              std::to_string(input_index.cells - saved) +
+              " cells. Any remaining debt must be repaid before selection."});
+      const LayoutSearchArtifact candidate{closed.items, closed.preloads, {}};
+      if (std::none_of(results.begin(), results.end(), [&](const auto& previous) {
+          return same_layout_search_artifact(candidate,
+              LayoutSearchArtifact{previous.items, previous.preloads, {}});
+      })) results.push_back(std::move(closed));
+    }
+  }
+  return results;
 }
 
 } // namespace
@@ -863,6 +1089,33 @@ SelectorDataLiteralLayoutFrontier selector_data_literal_layout_frontier(
       }
     }
   }
+  return frontier;
+}
+
+SelectorDataLiteralLayoutFrontier joint_selector_allocation_layout_frontier(
+    const std::vector<MachineItem>& items, const std::vector<PreloadReport>& preloads,
+    const AuthoritativePostLayoutControlFlow& control,
+    const NaturalTargetComponentLayoutOptions& layout_options) {
+  SelectorDataLiteralLayoutFrontier frontier;
+  if (!control.proved || !layout_options.required_absolute_targets.empty() ||
+      !layout_options.deferred_selector_reconciliations.empty()) return frontier;
+  const auto symbolic = symbolize(items);
+  if (!symbolic) return frontier;
+  PostLayoutControlFlowOptions flow_options;
+  flow_options.address_space_model = layout_options.address_space_model;
+  if (control.empty_return_target)
+    flow_options.empty_return_target = control.empty_return_target->address;
+  const auto before = build_post_layout_control_flow(*symbolic, flow_options);
+  if (!before.proved) return frontier;
+  auto options = layout_options;
+  options.reallocate_released_address_only_selectors = true;
+  auto joint = joint_family_erasure_layout(
+      *symbolic, preloads, before, flow_options, options);
+  std::stable_sort(joint.begin(), joint.end(), [](const auto& left, const auto& right) {
+    return left.removed_cells > right.removed_cells;
+  });
+  if (joint.size() > 4) joint.resize(4);
+  frontier.alternatives = std::move(joint);
   return frontier;
 }
 

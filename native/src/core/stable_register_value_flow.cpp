@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <deque>
+#include <set>
 #include <stdexcept>
 
 namespace mkpro::core {
@@ -33,8 +34,8 @@ std::string tracked_register_name(std::size_t slot) {
 
 // Number-entry buffer: absent while no entry is in progress, a digit string
 // while an exact integer entry is being typed, and poisoned when the entry
-// contains anything the analysis does not model (fraction, exponent, an
-// in-entry sign change, or an ambiguous join).
+// contains anything the analysis does not model (fraction, exponent, overlong
+// integer entry, or an ambiguous join). Sign closes a proved integer entry.
 struct EntryBuffer {
   bool poisoned = false;
   std::optional<std::string> digits;
@@ -52,7 +53,14 @@ struct AbstractState {
 
 std::optional<std::string> join_value(const std::optional<std::string>& left,
                                       const std::optional<std::string>& right) {
-  if (left.has_value() && right.has_value() && *left == *right)
+  // The selector evaluator canonicalizes the exponent marker to lower case.
+  // This is spelling only, unlike rewriting a scientific machine word as a
+  // fixed-point decimal (which can change its selector interpretation).
+  const auto same_character = [](char a, char b) {
+    return a == b || (a == 'E' && b == 'e') || (a == 'e' && b == 'E');
+  };
+  if (left.has_value() && right.has_value() && left->size() == right->size() &&
+      std::equal(left->begin(), left->end(), right->begin(), same_character))
     return left;
   return std::nullopt;
 }
@@ -135,7 +143,6 @@ AbstractState transfer(const AbstractState& input, const MachineItem& item,
     return state;
   }
 
-  const bool entry_active = state.entry.digits.has_value() || state.entry.poisoned;
   state.entry = EntryBuffer{};
 
   if (opcode == 0x0a || opcode == 0x0c) {  // '.' and ВП extend an entry
@@ -143,9 +150,15 @@ AbstractState transfer(const AbstractState& input, const MachineItem& item,
     state.x.reset();
     return state;
   }
-  if (opcode == 0x0b) {  // /-/ negates X, but an in-entry sign is not modeled
-    if (entry_active) {
+  if (opcode == 0x0b) {  // /-/ closes a proved integer entry
+    if (input.entry.poisoned) {
+      // Fractional/exponent entry and ambiguous buffers have different
+      // keyboard semantics and remain outside this integer-entry proof.
       state.entry.poisoned = true;
+      state.x.reset();
+    } else if (input.entry.digits && state.x && *state.x == "0") {
+      // Do not turn a typed signed zero into an ordinary-word certificate.
+      // The integer entry is nevertheless closed for the following digit.
       state.x.reset();
     } else {
       state.x = negated_value(state.x);
@@ -225,22 +238,14 @@ std::optional<std::size_t> previous_executable_item(const std::vector<MachineIte
 
 }  // namespace
 
-StableRegisterValueFlow analyze_stable_register_value_flow(
+PostLayoutInputBoundaryProof prove_post_layout_input_boundaries(
     const std::vector<MachineItem>& items,
-    const std::vector<PreloadReport>& preloads,
-    const AuthoritativePostLayoutControlFlow& flow, AddressSpaceModel model) {
-  StableRegisterValueFlow result;
+    const AuthoritativePostLayoutControlFlow& flow) {
+  PostLayoutInputBoundaryProof result;
   const auto fail = [&](std::string reason) {
     result.reasons.push_back(std::move(reason));
     return result;
   };
-  if (has_executable_address_words(items)) {
-    const auto image = materialize_post_layout_byte_image(
-        items, {.address_space_model = model});
-    if (!image.has_value())
-      return fail("stable-register value flow requires a valid final operand byte image");
-    return analyze_stable_register_value_flow(image->items, preloads, flow, model);
-  }
   if (!flow.proved || flow.execution_states.empty() ||
       flow.execution_successors.size() != flow.execution_states.size() ||
       flow.execution_edges.size() != flow.execution_states.size()) {
@@ -253,18 +258,6 @@ StableRegisterValueFlow analyze_stable_register_value_flow(
     }
   }
 
-  // Root classification. The main entry starts from the preload values;
-  // resumable stops and validated input phases inherit their predecessor's
-  // registers while user number entry forgets X. Arbitrary manual roots remain
-  // unproved; they must not acquire the setup state by assumption.
-  AbstractState main_entry_state;
-  for (const PreloadReport& preload : preloads) {
-    const int register_index_value = register_index(preload.register_name);
-    if (register_index_value >= 7 && register_index_value <= 0x0e)
-      main_entry_state.registers[static_cast<std::size_t>(register_index_value - 7)] =
-          preload.value;
-  }
-
   std::vector<std::vector<std::size_t>> predecessors(flow.execution_states.size());
   for (std::size_t state = 0; state < flow.execution_successors.size(); ++state) {
     for (const std::size_t successor : flow.execution_successors.at(state)) {
@@ -272,6 +265,15 @@ StableRegisterValueFlow analyze_stable_register_value_flow(
         return fail("the execution graph references a missing state");
       predecessors.at(successor).push_back(state);
     }
+    std::set<std::size_t> labelled;
+    for (const auto& edge : flow.execution_edges.at(state)) {
+      if (edge.target_state >= flow.execution_states.size())
+        return fail("an execution edge references a missing state");
+      labelled.insert(edge.target_state);
+    }
+    const auto& successors = flow.execution_successors.at(state);
+    if (labelled != std::set<std::size_t>(successors.begin(), successors.end()))
+      return fail("labelled execution edges do not match their successor projection");
   }
 
   // Match every external entry to the execution states carrying that exact
@@ -302,8 +304,9 @@ StableRegisterValueFlow analyze_stable_register_value_flow(
 
   // Resume values travel only along their exact execution edges. Grouping
   // roots by stop item would mix distinct caller return contexts.
-  std::vector<std::size_t> main_states;
-  std::vector<bool> input_boundary_states(flow.execution_states.size(), false);
+  auto& main_states = result.main_states;
+  auto& input_boundary_states = result.input_boundary_states;
+  input_boundary_states.resize(flow.execution_states.size(), false);
   for (const PostLayoutExternalEntryState& entry : flow.external_entries) {
     if (entry.entry.item_index >= items.size())
       return fail("an external entry references a missing item");
@@ -396,6 +399,43 @@ StableRegisterValueFlow analyze_stable_register_value_flow(
            !input_boundary_states.at(edge.target_state)))
         return fail("a resume edge has no validated external input boundary");
 
+  if (result.main_states.empty())
+    return fail("input-boundary proof requires a main entry");
+  result.proved = true;
+  return result;
+}
+
+StableRegisterValueFlow analyze_stable_register_value_flow(
+    const std::vector<MachineItem>& items,
+    const std::vector<PreloadReport>& preloads,
+    const AuthoritativePostLayoutControlFlow& flow, AddressSpaceModel model) {
+  StableRegisterValueFlow result;
+  const auto fail = [&](std::string reason) {
+    result.reasons.push_back(std::move(reason));
+    return result;
+  };
+  if (has_executable_address_words(items)) {
+    const auto image = materialize_post_layout_byte_image(
+        items, {.address_space_model = model});
+    if (!image.has_value())
+      return fail("stable-register value flow requires a valid final operand byte image");
+    return analyze_stable_register_value_flow(image->items, preloads, flow, model);
+  }
+  const auto boundaries = prove_post_layout_input_boundaries(items, flow);
+  if (!boundaries.proved) {
+    result.reasons = boundaries.reasons;
+    return result;
+  }
+  const auto& main_states = boundaries.main_states;
+  const auto& input_boundary_states = boundaries.input_boundary_states;
+  AbstractState main_entry_state;
+  for (const PreloadReport& preload : preloads) {
+    const int register_index_value = register_index(preload.register_name);
+    if (register_index_value >= 7 && register_index_value <= 0x0e)
+      main_entry_state.registers[static_cast<std::size_t>(register_index_value - 7)] =
+          preload.value;
+  }
+
   std::vector<std::optional<AbstractState>> in_value(flow.execution_states.size());
   std::vector<std::optional<AbstractState>> out_value(flow.execution_states.size());
 
@@ -451,10 +491,14 @@ StableRegisterValueFlow analyze_stable_register_value_flow(
   }
 
   result.total_states = flow.execution_states.size();
+  result.x_before_state.resize(flow.execution_states.size());
+  result.x_after_state.resize(flow.execution_states.size());
   for (std::size_t state = 0; state < flow.execution_states.size(); ++state) {
-    if (!in_value.at(state).has_value())
+    if (!in_value.at(state).has_value() || !out_value.at(state).has_value())
       continue;
     ++result.valued_states;
+    result.x_before_state[state] = in_value.at(state)->x;
+    result.x_after_state[state] = out_value.at(state)->x;
     const std::size_t item_index = flow.execution_states.at(state).item_index;
     const auto [existing, inserted] =
         result.before_item.emplace(item_index, in_value.at(state)->registers);

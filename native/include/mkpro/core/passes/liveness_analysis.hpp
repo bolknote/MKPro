@@ -72,6 +72,21 @@ struct GuardedDefinitionUseQuery {
 // effects and exhausted work budgets fail closed. This is the same demand
 // proof used for guarded equal-entry lifetime sharing, applied before webs
 // are irreversibly united by conservative reaching definitions.
+struct GuardedDefinitionUseProof {
+  std::set<GuardedDefinitionUseQuery> excluded_uses;
+  std::size_t work = 0;
+  bool exhausted = false;
+};
+
+// Budgeted form for consumers composing this proof with another analysis.
+// Work counts predicate fixed-point transfers across all queries together.
+// An exhausted result never exports a partially evaluated exclusion.
+GuardedDefinitionUseProof analyze_unreachable_definition_uses(
+    const std::vector<IrOp>& ops,
+    const core::AuthoritativePostLayoutControlFlow& flow,
+    const std::vector<GuardedDefinitionUseQuery>& queries,
+    LivenessOptions options = {}, std::size_t maximum_work = 400000U);
+
 std::set<GuardedDefinitionUseQuery> prove_unreachable_definition_uses(
     const std::vector<IrOp>& ops,
     const core::AuthoritativePostLayoutControlFlow& flow,

@@ -2,6 +2,7 @@
 
 #include "mkpro/core/passes/helpers.hpp"
 #include "mkpro/core/passes/liveness_analysis.hpp"
+#include "mkpro/core/post_layout_control_flow.hpp"
 
 #include <cstddef>
 #include <functional>
@@ -66,6 +67,15 @@ PassResult register_coalesce(const std::vector<IrOp>& ops, const PassContext& co
 // ordinary FL counter epochs may use any of the four counter registers.
 PassResult register_web_copy_coalesce(const std::vector<IrOp>& ops,
                                       const PassContext& context);
+// Conditional late-layout variant: selector origins refer to encoded command
+// identities, not provisional cell positions. The caller must retain and close
+// those equations before publishing. Typed manual input stores may change only
+// their physical register; phases, hardware roles and empty returns stay intact.
+// Every terminal execution exit observes the complete physical register bank.
+PassResult deferred_register_web_copy_coalesce(
+    const std::vector<IrOp>& ops, const PassContext& context,
+    const PostLayoutControlFlowOptions& control,
+    const std::map<std::string, int>& encoded_origins);
 // Equalities refer to static direct Store/Recall operands, not source names.
 // Analyze the immutable input once; independently recolor each request without
 // deleting instructions. The consumer must prove and price its own rewrite.

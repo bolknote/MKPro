@@ -402,6 +402,30 @@ bool indirect_writeback_preserves_literal_value(
          std::trunc(original) == original && original == result;
 }
 
+bool indirect_writeback_preserves_literal_word(
+    const IndirectAddressEvaluation& evaluation, std::string_view original_value) {
+  if (!indirect_writeback_preserves_literal_value(evaluation, original_value))
+    return false;
+  const std::string spelling = lower_ascii(trim_ascii(std::string(original_value)));
+  if (spelling.starts_with("0x"))
+    return false;
+  const std::string normalized = normalize_selector_value(original_value);
+  double ordinary = 0.0;
+  if (!parses_finite_number(normalized, ordinary))
+    return false;
+  // Positive-order addressing right-aligns the integer mantissa to order 7.
+  // Only an already full-width ordinary integer is a word fixed point.
+  if (std::trunc(ordinary) == ordinary && std::fabs(ordinary) >= 10000000.0 &&
+      std::fabs(ordinary) <= 99999999.0)
+    return true;
+  // The negative-order model explicitly preserves the complete scientific
+  // word only in its no-shift/no-fill cases. Do not identify equal decimals
+  // written in another order, nor infer preservation from a rounded value.
+  static const std::regex scientific(R"(^-?[1-9](?:\.[0-9]{0,7})?e-[0-9]{1,2}$)");
+  return std::regex_match(normalized, scientific) && evaluation.result_value &&
+      normalized == normalize_selector_value(*evaluation.result_value);
+}
+
 std::optional<std::vector<int>> noncanonical_indirect_flow_entries(
     const std::optional<IndirectAddressEvaluation>& evaluation) {
   if (!evaluation.has_value() || evaluation->operation != IndirectOperationKind::Flow ||

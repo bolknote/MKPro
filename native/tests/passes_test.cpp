@@ -994,10 +994,19 @@ void pass_pipeline_matches_initial_typescript_contract() {
         {cjump_to("==0", 0x5e, "then"), jump_to("tail"), label("then"), plain(0x31)}, false);
     require(disabled.applied == 0, "tail-branch-inversion ignored disabled option");
 
-    const core::passes::PassResult enabled = run_tail_branch_inversion(
+    const core::passes::PassResult unresolved = run_tail_branch_inversion(
         {cjump_to("==0", 0x5e, "then"), jump_to("tail"), label("then"), plain(0x31)}, true);
+    require(unresolved.applied == 0,
+            "tail-branch-inversion must not invent a continuation for a missing target");
+    IrOp terminal;
+    terminal.kind = IrKind::Stop;
+    terminal.opcode = 0x50;
+    terminal.meta.stop_disposition = StopDisposition::Terminal;
+    const core::passes::PassResult enabled = run_tail_branch_inversion(
+        {cjump_to("==0", 0x5e, "then"), jump_to("tail"), label("then"), recall("1"),
+         terminal, label("tail"), recall("2"), terminal}, true);
     require(enabled.applied == 1, "tail-branch-inversion did not invert tail branch");
-    require(enabled.ops.size() == 2, "tail-branch-inversion produced wrong op count");
+    require(enabled.ops.size() == 6, "tail-branch-inversion produced wrong op count");
     require(enabled.ops.at(0).kind == IrKind::CondJump, "tail-branch-inversion changed op kind");
     require(enabled.ops.at(0).condition == "!=0", "tail-branch-inversion condition mismatch");
     require(enabled.ops.at(0).opcode == 0x57, "tail-branch-inversion opcode mismatch");

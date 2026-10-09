@@ -126,6 +126,8 @@ void add_clique(RegisterInterferenceGraph& graph, const RegisterValueSet& regist
 struct GuardedLifetimeProof {
   std::set<std::pair<std::string, std::string>> disjoint_pairs;
   std::set<GuardedDefinitionUseQuery> excluded_uses;
+  std::size_t work = 0;
+  bool exhausted = false;
 };
 
 GuardedLifetimeProof guarded_register_lifetimes(
@@ -134,7 +136,8 @@ GuardedLifetimeProof guarded_register_lifetimes(
     const std::vector<std::vector<std::size_t>>& successors,
     const std::vector<std::vector<std::size_t>>& predecessors,
     const std::vector<std::size_t>& roots, const LivenessOptions& options,
-    const std::vector<GuardedDefinitionUseQuery>& queries = {}) {
+    const std::vector<GuardedDefinitionUseQuery>& queries = {},
+    std::size_t maximum_work = 400000U) {
   using Id = std::size_t;
   using Pair = std::pair<std::string, std::string>;
   GuardedLifetimeProof proved;
@@ -154,6 +157,21 @@ GuardedLifetimeProof guarded_register_lifetimes(
   std::vector<SelectWindow> windows;
   RegisterValueSet guards;
   const auto op_at = [&](Id id) -> const IrOp& { return ops.at(instructions.at(id)); };
+  // Branch encoding is not a predicate fact. Indirect conditions use the
+  // same zero/sign tests; their selector effects still come from the original
+  // IR and their exact alternatives still come from the caller's graph.
+  const auto condition_code = [](const IrOp& op) {
+    if (op.kind == IrKind::CondJump) return op.opcode;
+    if (op.kind == IrKind::IndirectCondJump) {
+      switch (op.opcode & 0xf0) {
+      case 0x70: return 0x57;
+      case 0x90: return 0x59;
+      case 0xc0: return 0x5c;
+      case 0xe0: return 0x5e;
+      }
+    }
+    return -1;
+  };
   const auto fallthrough_edge = [&](Id from, Id to) {
     // The IR liveness graph includes labels; the authoritative physical graph
     // skips them. Both describe the same fallthrough command.
@@ -193,18 +211,20 @@ GuardedLifetimeProof guarded_register_lifetimes(
         op_at(*select).opcode != 0x36 || op_at(*write).kind != IrKind::Store ||
         op_at(*write).register_name != input.register_name ||
         op_at(*difference).kind != IrKind::Plain || op_at(*difference).opcode != 0x11 ||
-        op_at(*branch).kind != IrKind::CondJump ||
-        (op_at(*branch).opcode != 0x5e && op_at(*branch).opcode != 0x57) ||
+        (condition_code(op_at(*branch)) != 0x5e && condition_code(op_at(*branch)) != 0x57) ||
         successors.at(*branch).size() != 2U)
       continue;
     const auto& edges = successors.at(*branch);
     const auto fallthrough = std::find_if(edges.begin(), edges.end(), [&](Id to) {
       return fallthrough_edge(*branch, to);
     });
-    if (fallthrough == edges.end())
+    if (fallthrough == edges.end() ||
+        std::count_if(edges.begin(), edges.end(), [&](Id to) {
+          return fallthrough_edge(*branch, to);
+        }) != 1)
       continue;
     const Id taken = edges.front() == *fallthrough ? edges.back() : edges.front();
-    const bool equality = op_at(*branch).opcode == 0x5e;
+    const bool equality = condition_code(op_at(*branch)) == 0x5e;
     windows.push_back({*write, *branch, equality ? *fallthrough : taken,
                        equality ? taken : *fallthrough, input.register_name});
     guards.insert(input.register_name);
@@ -217,7 +237,7 @@ GuardedLifetimeProof guarded_register_lifetimes(
 
   std::vector<Pair> pairs;
   for (auto left = options.equal_entry_value_classes.begin();
-       left != options.equal_entry_value_classes.end(); ++left) {
+       queries.empty() && left != options.equal_entry_value_classes.end(); ++left) {
     if (!left->second.starts_with("literal:"))
       continue;
     for (auto right = std::next(left); right != options.equal_entry_value_classes.end(); ++right) {
@@ -336,26 +356,25 @@ GuardedLifetimeProof guarded_register_lifetimes(
   };
   const auto permits = [&](Id from, Id to, const Facts& input) {
     const IrOp& op = op_at(from);
-    if (op.kind != IrKind::CondJump || op.meta.manual_interaction.has_value() ||
+    if (condition_code(op) < 0 || op.meta.manual_interaction.has_value() ||
         !input.x.has_value() || successors.at(from).size() != 2U)
       return true;
     std::optional<bool> predicate;
-    switch (op.opcode) {
+    switch (condition_code(op)) {
       case 0x5e: predicate = *input.x == 0; break;
       case 0x57: predicate = *input.x != 0; break;
       case 0x5c: predicate = *input.x < 0; break;
       case 0x59: predicate = *input.x >= 0; break;
       default: return true;
     }
-    const bool has_fallthrough = std::any_of(successors.at(from).begin(), successors.at(from).end(),
-        [&](Id edge) { return fallthrough_edge(from, edge); });
+    const bool has_fallthrough = std::count_if(successors.at(from).begin(), successors.at(from).end(),
+        [&](Id edge) { return fallthrough_edge(from, edge); }) == 1;
     return !has_fallthrough ||
         (fallthrough_edge(from, to) == *predicate);
   };
   using StateTable = std::vector<std::optional<Facts>>;
   using Seed = std::pair<Id, Facts>;
-  std::size_t remaining_work = 400000U;
-  bool exhausted = false;
+  bool& exhausted = proved.exhausted;
   const auto propagate = [&](const std::vector<Seed>& seeds, const std::vector<bool>* relevant,
                              const RegisterValueSet* payload, const std::set<Id>& retain,
                              std::optional<Id> observed_use = std::nullopt)
@@ -392,11 +411,11 @@ GuardedLifetimeProof guarded_register_lifetimes(
     for (const auto& [id, facts] : seeds)
       merge(id, facts);
     while (!work.empty()) {
-      if (remaining_work == 0U) {
+      if (proved.work >= maximum_work) {
         exhausted = true;
         return std::nullopt;
       }
-      --remaining_work;
+      ++proved.work;
       const Id id = work.front();
       work.pop_front();
       queued.at(id) = false;
@@ -772,9 +791,10 @@ std::optional<LivenessInfo> matched_call_liveness(const std::vector<IrOp>& ops,
 
 } // namespace
 
-std::set<GuardedDefinitionUseQuery> prove_unreachable_definition_uses(
+GuardedDefinitionUseProof analyze_unreachable_definition_uses(
     const std::vector<IrOp>& ops, const core::AuthoritativePostLayoutControlFlow& flow,
-    const std::vector<GuardedDefinitionUseQuery>& queries, LivenessOptions options) {
+    const std::vector<GuardedDefinitionUseQuery>& queries, LivenessOptions options,
+    std::size_t maximum_work) {
   if (queries.empty() || queries.size() > 64U || !flow.proved ||
       flow.execution_states.empty() ||
       flow.execution_states.size() != flow.execution_successors.size())
@@ -820,8 +840,17 @@ std::set<GuardedDefinitionUseQuery> prove_unreachable_definition_uses(
     }
   }
   options.closed_program_entry = false;
-  return guarded_register_lifetimes(ops, effects, instructions, flow.execution_successors,
-      predecessors, roots, options, queries).excluded_uses;
+  auto proof = guarded_register_lifetimes(ops, effects, instructions, flow.execution_successors,
+      predecessors, roots, options, queries, maximum_work);
+  return {proof.exhausted ? std::set<GuardedDefinitionUseQuery>{}
+                          : std::move(proof.excluded_uses),
+          proof.work, proof.exhausted};
+}
+
+std::set<GuardedDefinitionUseQuery> prove_unreachable_definition_uses(
+    const std::vector<IrOp>& ops, const core::AuthoritativePostLayoutControlFlow& flow,
+    const std::vector<GuardedDefinitionUseQuery>& queries, LivenessOptions options) {
+  return analyze_unreachable_definition_uses(ops, flow, queries, std::move(options)).excluded_uses;
 }
 
 RegisterEffects register_effects(const IrOp& op) {

@@ -4,6 +4,8 @@
 #include "mkpro/core/passes/helpers.hpp"
 #include "mkpro/core/shared_helper_continuation.hpp"
 
+#include <map>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -99,6 +101,12 @@ SharedHelperDualModePreparation prepare_shared_helper_dual_mode_layout(
     const AuthoritativePostLayoutControlFlow& control_flow,
     AddressSpaceModel model = AddressSpaceModel::Standard);
 
+// Exact per-MachineItem widths of this pending tail rewrite, including erased
+// caller tails, the expanded return and a possible new divergent operand.
+// They are sizing metadata only, never an executable intermediate artifact.
+std::optional<std::vector<int>> shared_helper_dual_mode_projected_widths(
+    const SharedHelperDualModePreparation& preparation);
+
 // Normalize a late artifact in which a dual-mode helper is still selected by
 // a fixed-address register. If the helper is immediately followed by another
 // independently returning procedure selected through a retunable decimal
@@ -141,6 +149,9 @@ SharedHelperDualModeLayoutResult finalize_shared_helper_dual_mode_layout(
     const std::vector<MachineItem>& placed_items,
     const std::vector<PreloadReport>& placed_preloads,
     const AuthoritativePostLayoutControlFlow& placed_control_flow,
-    AddressSpaceModel model = AddressSpaceModel::Standard);
+    AddressSpaceModel model = AddressSpaceModel::Standard,
+    // For deferred geometry, these are the selector's encoded origins, not
+    // the current provisional positions. Every non-runtime family is required.
+    const std::map<std::string, int>* encoded_selector_targets = nullptr);
 
 } // namespace mkpro::core

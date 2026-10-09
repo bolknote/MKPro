@@ -524,9 +524,11 @@ void flow_structure_passes_match_typescript_contract() {
 
   // --- tail-branch-inversion ----------------------------------------------
   {
+    IrOp terminal = halt();
+    terminal.meta.stop_disposition = StopDisposition::Terminal;
     const std::vector<IrOp> program = {plain(0x01, "1"),   cjump("else_path"), jump("terminal_tail"),
-                                       label("else_path"), plain(0x02, "2"),   halt(),
-                                       label("terminal_tail"), halt()};
+                                       label("else_path"), plain(0x02, "2"),   terminal,
+                                       label("terminal_tail"), terminal};
     mkpro::CompileOptions options = noop;
     options.tail_branch_inversion = true;
     const core::passes::PassContext enabled{.options = options};

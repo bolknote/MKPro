@@ -272,6 +272,20 @@ void compiler_feature_profile_expanded_program_space_contract() {
           "source feature program-space result should select the expanded profile");
   require(expanded_from_source.steps.size() > 105 && expanded_from_source.steps.size() <= 112,
           "source feature directive should allow the expanded 112-cell window");
+
+  CompileOptions memory_options = expanded_options;
+  memory_options.optimizer_feature_profile_override = FeatureProfile::Mk61SMiniExpanded;
+  const CompileResult memory_root = compile_source(source, memory_options);
+  expanded_options.optimizer_register_profile_override = FeatureProfile::Standard;
+  const CompileResult restricted = compile_source(source, expanded_options);
+  require(memory_root.implemented && memory_root.diagnostics.empty() &&
+              restricted.implemented && restricted.diagnostics.empty() &&
+              restricted.feature_profile == FeatureProfile::Mk61SMiniExpanded &&
+              step_opcodes(restricted) == step_opcodes(memory_root) &&
+              restricted.steps.at(105).address == 105,
+          "restricting register allocation must retain the expanded official memory window");
+  require(restricted.listing.find("A5 |") != std::string::npos,
+          "allocation-only restrictions must not relabel A5 as a stock side-space alias");
 }
 
 void compiler_feature_profile_rf_extends_optimizer_preloads_contract() {
@@ -321,6 +335,48 @@ program ExpandedPreloadedConstant {
           "expanded main listing should mark RF recalls as not keyboard-enterable");
   require(expanded.listing.find("X→П 0 alias") == std::string::npos,
           "expanded setup listing should not render RF stores as the stock 4F alias");
+
+  const std::string allocation_source = R"mkpro(
+feature mk61s-mini-expand
+program AllocationMemoryProduct {
+  state { value: counter 0..99999 = 0 }
+  loop {
+    value = 12345
+    halt(value + 12345)
+  }
+}
+)mkpro";
+  CompileOptions restricted_options = options;
+  restricted_options.optimizer_register_profile_override = FeatureProfile::Standard;
+  const CompileResult restricted = compile_source(allocation_source, restricted_options);
+  require(restricted.implemented && restricted.diagnostics.empty() &&
+              restricted.feature_profile == FeatureProfile::Mk61SMiniExpanded,
+          "allocation-only root must compile under the actual expanded target");
+  require(std::any_of(restricted.preloads.begin(), restricted.preloads.end(),
+                      [](const PreloadReport& preload) {
+                        return preload.register_name == "e" && preload.value == "12345";
+                      }) &&
+              std::none_of(restricted.preloads.begin(), restricted.preloads.end(),
+                           [](const PreloadReport& preload) { return preload.register_name == "f"; }),
+          "the restricted constant pool must use Re, not RF");
+  emulator::MK61 restricted_calc;
+  require(restricted_calc.load_program(step_opcodes(restricted)).diagnostics.empty(),
+          "small RF-free target-memory fixture must load on the stock ROM");
+  for (const auto& preload : restricted.preloads)
+    restricted_calc.set_register(preload.register_name, preload.value);
+  restricted_calc.press_sequence({"В/О", "С/П"});
+  require(restricted_calc.run_until_stable(400, 5).stopped &&
+              restricted_calc.display_text() == "24690,",
+          "allocation-only root must preserve the arithmetic result on ROM");
+
+  const CompileResult unrestricted = compile_source(allocation_source, options);
+  require(std::any_of(unrestricted.preloads.begin(), unrestricted.preloads.end(),
+                      [](const PreloadReport& preload) { return preload.register_name == "f"; }),
+          "the compile cache must distinguish restricted and unrestricted allocation roots");
+  const CompileResult repeated = compile_source(allocation_source, restricted_options);
+  require(step_opcodes(repeated) == step_opcodes(restricted) &&
+              repeated.listing == restricted.listing,
+          "repeated restricted compilation must retain its own preload and opcode identities");
 
   const std::string shared_preload_source = R"mkpro(
 program SharedPreloadOwner {
@@ -523,6 +579,17 @@ program ExpandedSixteenRegisters {
   const CompileResult standard = compile_source(standard_source, options);
   require(has_error_diagnostic(standard),
           "standard profile should exhaust registers on the same sixteen-state shape");
+
+  CompileOptions restricted_options = options;
+  restricted_options.optimizer_register_profile_override = FeatureProfile::Standard;
+  const CompileResult restricted = compile_source(expanded_source, restricted_options);
+  require(!restricted.implemented && has_error_diagnostic(restricted),
+          "a restricted allocation root must reject sixteen simultaneously live colors");
+  restricted_options.optimizer_register_profile_override = FeatureProfile::Mk61SMiniExpanded;
+  const CompileResult not_widened = compile_source(standard_source, restricted_options);
+  require(!not_widened.implemented && has_error_diagnostic(not_widened) &&
+              not_widened.feature_profile == FeatureProfile::Standard,
+          "an allocation override must never introduce RF into a stock target");
 
   CompileOptions lifetime_options;
   lifetime_options.fast_candidate_search = true;
@@ -1193,14 +1260,31 @@ void compiler_feature_profile_rf_optimizer_is_size_monotonic_contract() {
   };
   const auto standard_root = find_root(with_rf, "mk61-root");
   const auto expanded_root = find_root(with_rf, "mk61s-mini-expand-root");
+  const auto restricted_root =
+      find_root(with_rf, "mk61s-mini-expand-standard-allocation-root");
   require(standard_root != with_rf.candidates.end() &&
               standard_root->steps == static_cast<int>(without_rf.steps.size()) &&
               expanded_root != with_rf.candidates.end() && expanded_root->steps > 0 &&
-              standard_root->selected != expanded_root->selected,
-          "expanded optimizer report should expose both roots and select exactly one");
-  const auto& selected_root = standard_root->selected ? *standard_root : *expanded_root;
-  require(selected_root.steps == static_cast<int>(with_rf.steps.size()),
-          "the selected profile root should describe the delivered artifact");
+              restricted_root != with_rf.candidates.end() && restricted_root->steps > 0,
+          "expanded optimizer report must expose independent memory/allocation roots");
+  std::vector<const CandidateReport*> roots{
+      &*standard_root, &*expanded_root, &*restricted_root};
+  const auto continued_root =
+      find_root(with_rf, "mk61s-mini-expand-layout-continuation");
+  if (continued_root != with_rf.candidates.end()) {
+    roots.push_back(&*continued_root);
+    require(has_optimization(with_rf, "optimizer-layout-checkpoint-replay"),
+            "a selected IR continuation must carry its full closure certificate");
+  }
+  require(without_rf.layout_search_continuation != nullptr,
+          "oversized optimizer result must preserve proof-valid intermediate IR");
+  require(std::count_if(roots.begin(), roots.end(),
+                       [](const CandidateReport* candidate) { return candidate->selected; }) == 1,
+          "exactly one complete optimizer root may be selected");
+  for (const auto* candidate : roots)
+    if (candidate->selected)
+      require(candidate->steps == static_cast<int>(with_rf.steps.size()),
+              "the selected root must describe the delivered artifact");
   if (standard_root->selected)
     require(step_opcodes(with_rf) == step_opcodes(without_rf),
             "selected RF-free optimizer root should preserve its proved final byte sequence");
@@ -1230,7 +1314,7 @@ void compiler_feature_profile_rf_optimizer_is_size_monotonic_contract() {
   const CompileResult cached_with_rf = compile_full(source, with_rf_options);
   require(step_opcodes(cached_with_rf) == step_opcodes(with_rf),
           "cached RF-enabled search should preserve the selected final byte sequence");
-  for (const auto* original_root : {&*standard_root, &*expanded_root}) {
+  for (const auto* original_root : roots) {
     const auto cached_root = find_root(cached_with_rf, original_root->variant);
     require(cached_root != cached_with_rf.candidates.end() &&
                 cached_root->steps == original_root->steps &&

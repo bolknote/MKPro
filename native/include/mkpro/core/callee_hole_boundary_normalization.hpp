@@ -36,10 +36,17 @@ bool prove_stack_entry_equality(const StackEntryProofReader& reader,
 // requires X1/X2 equality; deeper differences remain live across its proved
 // entered() protocol and must be hidden before every subsequent use. Untyped
 // stops, raw cells and independent manual commands remain full-state barriers.
+struct PostLayoutStackEntryProofOptions {
+  // Disable while encoded selector words and speculative positions disagree.
+  bool refine_runtime_selectors = true;
+  // An explicit ROM-certified fact, not inferred from a closed-looking X.
+  bool numeric_entry_closed = false;
+};
+
 bool prove_post_layout_stack_entry_equality(
     const std::vector<MachineItem>& items,
     const AuthoritativePostLayoutControlFlow& flow, int entry_address,
-    StackValueEqualityState state);
+    StackValueEqualityState state, const PostLayoutStackEntryProofOptions& options = {});
 bool prove_ir_stack_entry_equality(const std::vector<IrOp>& ops,
                                    std::size_t entry, StackValueEqualityState state);
 

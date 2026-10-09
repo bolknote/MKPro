@@ -59,6 +59,9 @@ struct NaturalTargetComponentLayoutOptions {
   // Pure geometry cache, scoped to this invocation. Disabling it is useful
   // for differential tests; it never changes candidate/proof search limits.
   bool memoize_layout_geometry = true;
+  // Differential testing: eager and demand-driven X2 proofs have identical
+  // facts, candidate budgets and acceptance. Production computes on demand.
+  bool eager_symbolic_flow_analysis = false;
   // Anchor assignment and component-placement DP are different search
   // spaces. Zero preserves the historical behavior (reuse the subset-state
   // cap); compiler candidate search can bound only the already ranked anchor
@@ -111,6 +114,9 @@ struct NaturalTargetComponentLayoutOptions {
   // This is a bounded transaction; partial families and hidden-state changes
   // fail closed under the ordinary final-artifact proof.
   std::vector<int> released_flow_selector_registers;
+  // Opt-in only for an isolated complete-family allocation transaction.
+  // Preserve the ordinary candidate order and its bounded-search incumbent.
+  bool reallocate_released_address_only_selectors = false;
   // A larger atomic layout transaction may require an executable command
   // identity at one exact physical address before applying a separately
   // proved size-reducing machine rewrite. This mode never claims savings on
@@ -128,6 +134,9 @@ struct NaturalTargetComponentLayoutOptions {
   // external/return entry, stack/X2 effect, indirect target, and preload under
   // the final authoritative control-flow proof.
   bool allow_standalone_fallthrough_jump_fold = false;
+  // Complete-artifact search only: widen the stitch proof to neutral,
+  // unreferenced labels while retaining the ordinary greedy layout lane.
+  bool allow_unreferenced_jump_labels = false;
   std::vector<NaturalTargetDeferredSelectorReconciliation>
       deferred_selector_reconciliations;
 };
@@ -255,7 +264,10 @@ std::optional<std::string> rebind_proved_natural_fractional_selector_preload(
     AddressSpaceModel model = AddressSpaceModel::Standard);
 
 // Retarget one stable, unwritten indirect-flow selector. Address-only
-// selectors may use the new address directly; selectors with ordinary data
+// selectors use decimal words for 00..99 and canonical BCD words for the
+// remaining official cells (A0..A4 on stock, A0..B1 on mk61s). A short-side
+// alias is not extra storage. Runtime decimal charges keep their own codec.
+// Selectors with ordinary data
 // reads must belong to a proved retunable fractional family. Indirect memory
 // target aliases also count as data uses: checking only the encoded selector
 // would let a pointer expose a changed address word. Unknown aliases fail
@@ -331,5 +343,36 @@ NaturalTargetComponentLayoutResult optimize_natural_target_component_layout(
     const std::vector<PreloadReport>& preloads,
     const AuthoritativePostLayoutControlFlow& control_flow,
     const NaturalTargetComponentLayoutOptions& options = {});
+
+// A semantic allocation alternative, not an executable layout. Typed command
+// destinations are preserved; each selector's encoded origin remains attached
+// to the carrier, even after it serves a different target identity. The caller
+// must close every placement/preload equation before exposing these items.
+struct DeferredNaturalTargetSelectorAllocation {
+  std::vector<MachineItem> items;
+  std::map<std::string, int> encoded_selector_targets;
+  int changed_flows = 0;
+  int cell_delta = 0;
+};
+
+struct DeferredNaturalTargetSelectorAllocationOptions {
+  std::size_t maximum_assignments = 128;
+  std::size_t maximum_candidates = 24;
+  int maximum_growth_cells = 4;
+};
+
+// Assign complete stable R7..Re families and direct-flow groups together.
+// Reuses natural-target flow-effect, selector-writeback and identity-trace
+// proofs, but deliberately does not choose a physical component order. No
+// preload is changed here. Unknown aliases, generated setup and formal side
+// entries cannot be used as allocator permissions.
+std::vector<DeferredNaturalTargetSelectorAllocation>
+deferred_natural_target_selector_allocations(
+    const std::vector<MachineItem>& items,
+    const std::vector<PreloadReport>& preloads,
+    const AuthoritativePostLayoutControlFlow& control_flow,
+    const std::map<std::string, int>& encoded_selector_targets,
+    const PostLayoutControlFlowOptions& control_options,
+    const DeferredNaturalTargetSelectorAllocationOptions& options = {});
 
 } // namespace mkpro::core

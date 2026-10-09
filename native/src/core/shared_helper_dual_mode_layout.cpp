@@ -368,6 +368,7 @@ SharedHelperDualModePreparation prepare_shared_helper_dual_mode_layout(
   const SharedHelperContinuationOptions continuation_options{
       .address_space_model = model,
       .proved_indirect_flow_targets = proved_target_addresses(control_flow),
+      .allow_entry_prologues = true,
   };
   std::set<std::string> labels;
   for (const MachineItem& item : items) {
@@ -428,6 +429,7 @@ SharedHelperDualModePreparation prepare_shared_helper_dual_mode_layout(
       const std::string prefix =
           result.marker + ":ordinary-" + std::to_string(ordinary++);
       add_role(result.items.at(call.call_item_index), prefix + ":call");
+      add_role(result.items.at(call.entry_item_index), prefix + ":entry");
       add_role(result.items.at(call.join_item_index), prefix + ":join");
       add_role(result.items.at(call.store_item_index), prefix + ":store");
       const std::optional<std::size_t> trailing =
@@ -1347,12 +1349,52 @@ exchange_profitable_direct_indirect_call_families(
   return rejected;
 }
 
+std::optional<std::vector<int>> shared_helper_dual_mode_projected_widths(
+    const SharedHelperDualModePreparation& preparation) {
+  if (preparation.applied <= 0 || !preparation.continuation.proved)
+    return std::nullopt;
+  const auto& items = preparation.items;
+  std::vector<int> widths;
+  for (const auto& item : items)
+    widths.push_back(item.kind == MachineItemKind::Label ? 0 : 1);
+  std::set<std::size_t> changed;
+  const auto set = [&](const std::string& suffix, int expected, int width) {
+    const auto at = unique_role_item(items, preparation.marker + suffix);
+    if (!at || items[*at].kind != MachineItemKind::Op ||
+        items[*at].opcode != expected || !changed.insert(*at).second)
+      return false;
+    widths[*at] = width;
+    return true;
+  };
+  const bool trailing = preparation.trailing_store_opcode >= 0;
+  for (int ordinary = 0; ordinary < 2; ++ordinary) {
+    const auto prefix = ":ordinary-" + std::to_string(ordinary);
+    if (!set(prefix + ":join", preparation.continuation.join_opcode, 0) ||
+        !set(prefix + ":store", preparation.continuation.store_opcode, 0) ||
+        (trailing && !set(prefix + ":trailing-store", preparation.trailing_store_opcode, 0)))
+      return std::nullopt;
+  }
+  if (!set(":helper-return", 0x52, trailing ? 4 : 3))
+    return std::nullopt;
+  const auto divergent = unique_role_item(items, preparation.marker + ":divergent-call");
+  if (!divergent || items[*divergent].kind != MachineItemKind::Op)
+    return std::nullopt;
+  if (is_indirect_call_opcode(items[*divergent].opcode)) {
+    if (!changed.insert(*divergent).second) return std::nullopt;
+    widths[*divergent] = 2;
+  } else if (items[*divergent].opcode != 0x53) {
+    return std::nullopt;
+  }
+  return widths;
+}
+
 SharedHelperDualModeLayoutResult finalize_shared_helper_dual_mode_layout(
     const SharedHelperDualModePreparation& preparation,
     const std::vector<MachineItem>& placed_items,
     const std::vector<PreloadReport>& placed_preloads,
     const AuthoritativePostLayoutControlFlow& placed_control_flow,
-    AddressSpaceModel model) {
+    AddressSpaceModel model,
+    const std::map<std::string, int>* encoded_selector_targets) {
   SharedHelperDualModeLayoutResult result;
   result.items = placed_items;
   result.preloads = placed_preloads;
@@ -1374,6 +1416,10 @@ SharedHelperDualModeLayoutResult finalize_shared_helper_dual_mode_layout(
       unique_role_item(placed_items, marker + ":divergent-call");
   const auto ordinary0_call =
       unique_role_item(placed_items, marker + ":ordinary-0:call");
+  const auto ordinary0_entry =
+      unique_role_item(placed_items, marker + ":ordinary-0:entry");
+  const auto ordinary1_entry =
+      unique_role_item(placed_items, marker + ":ordinary-1:entry");
   const auto ordinary0_join =
       unique_role_item(placed_items, marker + ":ordinary-0:join");
   const auto ordinary0_store =
@@ -1390,7 +1436,7 @@ SharedHelperDualModeLayoutResult finalize_shared_helper_dual_mode_layout(
       unique_role_item(placed_items, marker + ":ordinary-1:trailing-store");
   const bool shared_trailing_store = preparation.trailing_store_opcode >= 0;
   if (!helper_root || !helper_return || !divergent_call ||
-      !ordinary0_call || !ordinary0_join || !ordinary0_store ||
+      !ordinary0_call || !ordinary0_entry || !ordinary1_entry || !ordinary0_join || !ordinary0_store ||
       !ordinary1_call || !ordinary1_join || !ordinary1_store ||
       (shared_trailing_store &&
        (!ordinary0_trailing_store || !ordinary1_trailing_store))) {
@@ -1536,7 +1582,8 @@ SharedHelperDualModeLayoutResult finalize_shared_helper_dual_mode_layout(
       // for the pre-rewrite address.  The atomic tail merge moves the helper
       // root, so retain the typed target identity and let the final resolver
       // encode its new official address instead of publishing a stale byte.
-      item.target = preparation.continuation.helper_label;
+      // Keep each ordinary entry identity, including its proved prologue.
+      // DirectFlowIdentity below re-encodes it after the tail is removed.
       item.formal_opcode.reset();
     }
     if (divergent_operand.has_value() &&
@@ -1649,47 +1696,6 @@ SharedHelperDualModeLayoutResult finalize_shared_helper_dual_mode_layout(
     }
   }
 
-  for (const auto& [reg, requirement] : required_by_register) {
-    if (requirement.old_target == requirement.new_target)
-      continue;
-    const std::optional<std::size_t> preload =
-        preload_for_register(result.preloads, reg);
-    if (!final_item_by_placed_item.contains(requirement.placed_flow_item))
-      return reject("selector command identity disappeared during rebinding");
-    const MachineItem& final_flow_item =
-        rewritten.at(final_item_by_placed_item.at(requirement.placed_flow_item));
-    if (!preload.has_value()) {
-      if (!runtime_bound_selector(final_flow_item))
-        return reject("moving indirect target has neither a preload nor a runtime binder");
-      continue;
-    }
-    PreloadReport& report = result.preloads.at(*preload);
-    std::optional<std::string> rebound =
-        rebind_stable_preloaded_indirect_flow_selector(
-            placed_items, report, placed_control_flow,
-            requirement.old_target, requirement.new_target, model);
-    if (!rebound.has_value()) {
-      // A transparent layout bridge is a newly synthesized consumer and has
-      // no pre-layout command marker for the stricter command-identity
-      // helper.  The authoritative graph above nevertheless proves that all
-      // uses of this selector move as one target family.  Retunable natural
-      // literals can therefore use their ordinary exact prefix rebinder.
-      rebound = rebind_proved_natural_fractional_selector_preload(
-          placed_items, report, requirement.old_target,
-          requirement.new_target, model);
-    }
-    if (!rebound.has_value())
-      return reject("stable selector preload index " + std::to_string(reg) +
-                    " could not be rebound by command identity " +
-                    std::to_string(requirement.old_target) + "->" +
-                    std::to_string(requirement.new_target));
-    if (*rebound != report.value) {
-      report.value = *rebound;
-      ++result.proof.rebound_preloads;
-    }
-  }
-  result.proof.selector_rebind_proved = true;
-
   final_index = index_artifact(rewritten);
   const auto root_address = final_index.label_addresses.find(
       preparation.continuation.helper_label);
@@ -1736,6 +1742,64 @@ SharedHelperDualModeLayoutResult finalize_shared_helper_dual_mode_layout(
   }
   result.proof.exact_layout_proved = true;
 
+  PostLayoutControlFlowOptions flow_options;
+  flow_options.address_space_model = model;
+  flow_options.empty_return_target = 1;
+  result.proof.final_control_flow =
+      build_post_layout_control_flow(rewritten, flow_options);
+  if (!result.proof.final_control_flow.proved) {
+    return reject("final command-identity CFG is not authoritative" +
+                  (result.proof.final_control_flow.reasons.empty()
+                       ? std::string{}
+                       : ": " + result.proof.final_control_flow.reasons.front()));
+  }
+  result.proof.final_control_flow_proved = true;
+
+  for (const auto& [reg, requirement] : required_by_register) {
+    if (reg < 0 || reg > 14)
+      return reject("selector register is outside the supported physical register set");
+    const std::string name(1, "0123456789abcde"[reg]);
+    if (!final_item_by_placed_item.contains(requirement.placed_flow_item))
+      return reject("selector command identity disappeared during rebinding");
+    const auto& final_flow_item =
+        rewritten.at(final_item_by_placed_item.at(requirement.placed_flow_item));
+    if (runtime_bound_selector(final_flow_item))
+      continue; // Its owned binder derives the charge from final target identities.
+    int encoded_target = requirement.old_target;
+    if (encoded_selector_targets) {
+      const auto origin = encoded_selector_targets->find(name);
+      if (origin == encoded_selector_targets->end())
+        return reject("deferred selector has no encoded-target provenance");
+      encoded_target = origin->second;
+    } else if (encoded_target == requirement.new_target) {
+      continue;
+    }
+    const auto preload = preload_for_register(result.preloads, reg);
+    if (!preload)
+      return reject("moving indirect target has neither a preload nor a runtime binder");
+    auto& report = result.preloads[*preload];
+    // Geometry is now real, including the side-space return. Data-read,
+    // mutation and alias proofs inspect the transformed consumers, while the
+    // old word is decoded against its original binding, not a provisional PC.
+    const auto rebound = rebind_stable_preloaded_indirect_flow_selector(
+        rewritten, report, result.proof.final_control_flow,
+        encoded_target, requirement.new_target, model);
+    if (!rebound)
+      return reject("stable selector " + name +
+                    " cannot preserve its data projection while rebinding " +
+                    std::to_string(encoded_target) + "->" +
+                    std::to_string(requirement.new_target));
+    if (*rebound != report.value) {
+      report.value = *rebound;
+      ++result.proof.rebound_preloads;
+    }
+  }
+  result.proof.selector_rebind_proved = true;
+
+  SharedHelperContinuationOptions entry_options;
+  entry_options.address_space_model = model;
+  entry_options.proved_indirect_flow_targets =
+      proved_target_addresses(result.proof.final_control_flow);
   const int formal = formal_side_opcode(result.proof.body_start_address, model);
   int ordinary_calls = 0;
   int divergent_calls = 0;
@@ -1745,6 +1809,15 @@ SharedHelperDualModeLayoutResult finalize_shared_helper_dual_mode_layout(
       continue;
     if (has_role(item, marker + ":ordinary-0:call") ||
         has_role(item, marker + ":ordinary-1:call")) {
+      const auto original_entry = has_role(item, marker + ":ordinary-0:call")
+          ? *ordinary0_entry : *ordinary1_entry;
+      const auto final_entry = final_item_by_placed_item.find(original_entry);
+      if (final_entry == final_item_by_placed_item.end())
+        return reject("ordinary prologue identity disappeared");
+      const int expected_entry = final_index.addresses.at(final_entry->second);
+      if (!shared_helper_entry_reaches_body(rewritten, expected_entry,
+              result.proof.body_start_address, entry_options))
+        return reject("ordinary prologue no longer reaches the shared body");
       if (item.opcode == 0x53) {
         const std::optional<std::size_t> operand =
             next_cell_item(rewritten, item_index);
@@ -1761,7 +1834,7 @@ SharedHelperDualModeLayoutResult finalize_shared_helper_dual_mode_layout(
           target_address = *numeric;
         }
         if (address.formal_opcode.has_value() || !target_address.has_value() ||
-            *target_address != preparation.required_final_start_address) {
+            *target_address != expected_entry) {
           return reject("ordinary direct helper call no longer uses the official entry");
         }
       } else if (is_indirect_call_opcode(item.opcode)) {
@@ -1779,7 +1852,7 @@ SharedHelperDualModeLayoutResult finalize_shared_helper_dual_mode_layout(
           target_address = *numeric;
         }
         if (!target_address.has_value() ||
-            *target_address != preparation.required_final_start_address) {
+            *target_address != expected_entry) {
           return reject("ordinary indirect helper call no longer uses the official entry");
         }
       } else {
@@ -1804,19 +1877,6 @@ SharedHelperDualModeLayoutResult finalize_shared_helper_dual_mode_layout(
   if (ordinary_calls != 2 || divergent_calls != 1)
     return reject("final artifact changed the proved two-plus-one call family");
   result.proof.side_entry_proved = true;
-
-  PostLayoutControlFlowOptions flow_options;
-  flow_options.address_space_model = model;
-  flow_options.empty_return_target = 1;
-  result.proof.final_control_flow =
-      build_post_layout_control_flow(rewritten, flow_options);
-  if (!result.proof.final_control_flow.proved) {
-    return reject("final command-identity CFG is not authoritative" +
-                  (result.proof.final_control_flow.reasons.empty()
-                       ? std::string{}
-                       : ": " + result.proof.final_control_flow.reasons.front()));
-  }
-  result.proof.final_control_flow_proved = true;
 
   result.proof.output_cells = final_index.cell_count;
   result.proof.removed_cells =

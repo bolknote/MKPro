@@ -18,6 +18,17 @@ struct SymbolicRegionLayout {
   std::vector<IrOp> ops;
   std::size_t work = 0;
   bool changed = false;
+  int projected_cells = 0;
+  std::map<std::string, int> projected_targets;
+};
+
+// Sizing obligations of a separately certified, pending rewrite. These widths
+// do not change the returned neutral IR and are not an executable proof.
+// The caller must apply its rewrite atomically, check every projected label
+// and total width, then discharge final selectors and the real hardware CFG.
+struct SymbolicRegionProjection {
+  std::vector<int> cell_widths; // One per IR operation; labels have width zero.
+  std::map<std::string, std::pair<int, int>> target_bounds;
 };
 
 // The caller owns the data proof for any changed runtime selectors. This
@@ -27,12 +38,39 @@ std::optional<SymbolicRegionLayout> layout_symbolic_regions(
     const std::vector<IrOp>& ops, const std::map<std::string, int>& required_targets,
     const PassContext& context, std::size_t maximum_work = 4096,
     const PostLayoutControlFlowOptions* control_options = nullptr,
-    bool preserve_compiler_selector_charges = false);
+    bool preserve_compiler_selector_charges = false,
+    const SymbolicRegionProjection* projection = nullptr);
+
+// Exchange a direct conditional's fallthrough suffix with a separately
+// placed, fallthrough-closed target region. These neutral alternatives change
+// component boundaries, not instruction count. The exact edge/return proof,
+// X2 and numeric-entry convergence are mandatory before joint placement.
+std::vector<PassResult> conditional_region_exchange_candidates(
+    const std::vector<IrOp>& ops, const PassContext& context,
+    const PostLayoutControlFlowOptions& control_options,
+    std::size_t maximum_candidates = 4);
+
+// Deferred enabling alternatives, never standalone size optimizations. The
+// added one-cell bridge reuses an unwritten, exactly preserved R7..Re word.
+// encoded_targets records the word's original target identities, not current
+// speculative PCs. The caller must discharge these bindings in final layout.
+std::vector<PassResult> stable_target_split_bridge_candidates(
+    const std::vector<IrOp>& ops, const std::vector<PreloadReport>& preloads,
+    const std::map<std::string, int>& encoded_targets,
+    const PassContext& context, const PostLayoutControlFlowOptions& control_options,
+    std::size_t maximum_candidates = 2);
 
 // Operand equalities are only allocator requests. The existing web allocator
 // proves interference, aliases and entry values; folding rechecks the result.
 std::vector<RegisterWebRecoloringRequest> semantic_region_register_requests(
-    const std::vector<IrOp>& ops);
+    const std::vector<IrOp>& ops, bool preserve_compiler_selector_charges = false);
+
+// Conditional region equivalence for a joint layout transaction. Every label
+// remains an alias of the same command, but physical indirect destinations
+// are obligations of the caller, not already discharged by this result.
+PassResult semantic_region_folding_with_deferred_layout(
+    const std::vector<IrOp>& ops, const PassContext& context,
+    const PostLayoutControlFlowOptions& control_options);
 
 PassResult semantic_region_folding(const std::vector<IrOp>& ops,
                                    const PassContext& context);

@@ -39,6 +39,25 @@ expanded-profile words.
 
 ## 1) Compilation flow and optimization scope
 
+### Joint selector allocation and erasure
+
+Whole immutable call families can be released into symbolic direct calls while
+removing a redundant literal, then assigned and placed together. This admits
+selector permutations which have no profitable intermediate layout. The solver
+transports existing address debts by command identity and checks the final
+literal/data equality, all delivered selectors, aliases, typed external entries,
+stack/X1/X2 and exact return contexts independently. An unobserved, unwritten
+preload remains an assignable address home after its old calls are released.
+
+The extension tries at most twelve transactions, each releasing at most three
+families and eight operands, retaining at most four alternatives. It runs after
+the established searches, from their fully finalized winner, in a separate
+frontier. A two-cell intermediate debt is reported, never published as a saving;
+the complete-artifact finalizer must produce a strictly smaller result. Continuous
+numeric resume calls may change direct/indirect spelling only with the same
+protocol and phase. Single-step input and opaque/manual observations remain
+protected. See [joint representation search](joint-representation-search.md).
+
 The optimizer works in multiple passes, not in a single “on/off” mode.
 
 1. Parse and normalize source.
@@ -71,6 +90,13 @@ lengths, main component, fixed and bounded placement constraints, padding budget
 bounded-address limit, and DP state cap. The cache does not reuse command
 identities or CFG/stack/X2/selector proofs. Reaching its entry cap merely stops
 new cache insertions; candidate enumeration continues unchanged.
+
+The symbolic X2 fixed point is also demand-driven. Ordinary call/jump
+substitutions with identical transfers do not construct it. The first
+conditional proof which needs symbolic entry equality or paired reconvergence
+computes the same must-analysis as before and shares it across placement trials.
+The eager differential-test mode preserves the identical artifact and search
+budgets; laziness does not weaken a proof or truncate an analysis.
 
 ## 2) Sources of reported information
 

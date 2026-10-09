@@ -58,12 +58,91 @@ struct TransactionSearchLimits {
   int maximum_growth_cells = 4;
 };
 
+// Every composing lane uses the immutable search root, never its current
+// parent or incumbent, as the growth origin. Subtract only ordered,
+// nonnegative counts so even the largest representable budget cannot overflow.
+constexpr bool transaction_growth_fits(
+    int original_cells, int candidate_cells, int maximum_growth_cells) {
+  return original_cells >= 0 && candidate_cells >= 0 && maximum_growth_cells >= 0 &&
+      (candidate_cells <= original_cells ||
+       candidate_cells - original_cells <= maximum_growth_cells);
+}
+
 template <class Node> struct ProvedSearchTransition {
   Node node;
   std::string rule;
   // Equivalence to the parent, not merely a valid CFG. Unknown is false.
   bool proved = false;
 };
+
+template <class Node> struct ProvedProductFrontier {
+  std::vector<ProvedSearchTransition<Node>> candidates;
+  std::size_t expanded = 0;
+  std::size_t duplicate = 0;
+  std::size_t rejected = 0;
+  bool budget_exhausted = false;
+};
+
+// Compose one further axis with independently proved parent representations.
+// Keep the established frontier outside this lane and fill only its caller's
+// remaining slots. Round-robin admission, not parent-major truncation or local
+// size ranking, lets later parents reach the downstream atomic closure.
+// Parents/edges are conditional artifacts, not publishable incumbents: the
+// caller must still close every equation and perform its final-artifact proof.
+template <class Node, class Cells, class Equal, class Expand>
+ProvedProductFrontier<Node> collect_proved_product_frontier(
+    const std::vector<Node>& parents, const std::vector<Node>& already_admitted,
+    int original_cells, const TransactionSearchLimits& limits,
+    Cells cells, Equal equal, Expand expand) {
+  ProvedProductFrontier<Node> result;
+  if (limits.maximum_expansions == 0 || limits.maximum_candidates == 0 ||
+      limits.maximum_depth == 0)
+    return result;
+  std::vector<std::vector<ProvedSearchTransition<Node>>> lanes;
+  const auto parent_count = std::min(parents.size(), limits.maximum_expansions);
+  for (std::size_t i = 0; i < parent_count; ++i) {
+    if (!transaction_growth_fits(
+            original_cells, cells(parents[i]), limits.maximum_growth_cells)) {
+      ++result.rejected;
+      continue;
+    }
+    lanes.push_back(expand(parents[i]));
+    ++result.expanded;
+  }
+  std::vector<std::size_t> next(lanes.size(), 0);
+  bool admitted = true;
+  while (admitted && result.candidates.size() < limits.maximum_candidates) {
+    admitted = false;
+    for (std::size_t lane = 0; lane < lanes.size(); ++lane) {
+      while (next[lane] < lanes[lane].size()) {
+        auto edge = std::move(lanes[lane][next[lane]++]);
+        if (!edge.proved || !transaction_growth_fits(
+                original_cells, cells(edge.node), limits.maximum_growth_cells)) {
+          ++result.rejected;
+          continue;
+        }
+        if (std::any_of(parents.begin(), parents.end(),
+                        [&](const Node& old) { return equal(old, edge.node); }) ||
+            std::any_of(already_admitted.begin(), already_admitted.end(),
+                        [&](const Node& old) { return equal(old, edge.node); }) ||
+            std::any_of(result.candidates.begin(), result.candidates.end(),
+                        [&](const auto& old) { return equal(old.node, edge.node); })) {
+          ++result.duplicate;
+          continue;
+        }
+        result.candidates.push_back(std::move(edge));
+        admitted = true;
+        break;
+      }
+      if (result.candidates.size() == limits.maximum_candidates)
+        break;
+    }
+  }
+  result.budget_exhausted = parent_count < parents.size();
+  for (std::size_t lane = 0; lane < lanes.size(); ++lane)
+    result.budget_exhausted = result.budget_exhausted || next[lane] < lanes[lane].size();
+  return result;
+}
 
 template <class Node> struct TransactionSearchResult {
   std::optional<Node> incumbent;
@@ -103,9 +182,8 @@ TransactionSearchResult<Node> search_proved_transactions(
   const auto admit = [&](ProvedSearchTransition<Node> transition,
                          std::vector<std::string> path, std::size_t lane) {
     const int count = cells(transition.node);
-    if (!transition.proved || count < 0 || limits.maximum_growth_cells < 0 ||
-        (count > original_cells &&
-         count - original_cells > limits.maximum_growth_cells)) {
+    if (!transition.proved ||
+        !transaction_growth_fits(original_cells, count, limits.maximum_growth_cells)) {
       ++result.rejected;
       return;
     }

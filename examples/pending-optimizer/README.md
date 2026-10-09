@@ -15,7 +15,7 @@ with a raw listing: the goal is to make the high-level source fit.
 
 | File | Current | Target | Gap | Status |
 | --- | ---: | ---: | ---: | --- |
-| `tic-tac-toe-4x4.mkpro` | 135 | 105 | +30 | pending optimizer |
+| `tic-tac-toe-4x4.mkpro` | 132 | 105 | +27 | pending optimizer |
 | `nekromant.mkpro` | 138 | 105 | +33 | pending optimizer; +3 after correctness fixes |
 | `podvodnaya-lodka-lazarev.mkpro` | 246 | 105 | +141 | pending optimizer; continuous symbolic display |
 
@@ -29,7 +29,7 @@ The natural-target solver can therefore consider more one-cell indirect
 branches without changing the source or weakening the final CFG/stack proofs.
 See [the proof contract](../../docs/entry-aware-selector-branches.md).
 
-The current reduction from 136 to 135 lets natural-target layout fold a tail
+The earlier reduction from 136 to 135 lets natural-target layout fold a tail
 jump carrying only descriptive call-provenance annotations into fallthrough.
 Address-binding and proof-sensitive annotations still block that rewrite;
 the final CFG, selector, return-stack, data-stack and X2 proofs remain mandatory.
@@ -37,8 +37,32 @@ The accompanying continuation proof follows compiler-typed manual input across
 resumes instead of treating every prompt as an unconditional full-stack barrier.
 It does not assume that the user necessarily enters a new number or that deeper
 stack slots are dead. Unrelated synthetic compiler/ROM tests cover both accepted
-and rejected cases. The game source is unchanged; the remaining gap is 30 cells.
+and rejected cases. At that stage the remaining gap was 30 cells.
 See [typed continuations and tail provenance](../../docs/typed-interaction-continuations.md).
+
+The earlier reduction from 135 to 134 uses joint whole-family selector
+allocation. Complete indirect-flow families can exchange carriers or become
+direct flows before another group reuses the freed register. Their encoded
+word origins remain separate from provisional target positions; allocation,
+region splits and projected continuation sharing can then close in one layout.
+Every borrowed cell counts against the immutable search root's growth budget.
+The source was unchanged; at that stage the remaining gap was 29 cells.
+See [joint representation search](../../docs/joint-representation-search.md).
+
+The current reduction from 134 to 133 fills unused joint-allocation slots with
+fair products of independently proved representations. Common-processor
+factoring and selector-seed projection can now meet a neutral branch inversion
+before whole-family allocation and projected tail sharing close together.
+The old search prefix, work/growth budgets and final selector/stack/return
+proofs are unchanged. No source edit or game recognizer is involved; the
+stock MK-61 gap is now 28 cells.
+
+The reduction from 133 to 132 composes available-definition web liveness with
+selector-consistent callback paths and typed input-store transport. Copy
+coalescing runs after representation and whole-family allocation, before the
+same final selector/region/tail closure. No input phase is erased, and the
+unchanged source still has a 27-cell gap to the stock MK-61 limit.
+See [available definition webs](../../docs/joint-representation-search.md#available-definition-webs-inside-deferred-layout).
 
 The high-level Lazarev submarine port uses `preview(frame(...))` for its live
 indicator and `random(min, max, seed)` for explicit generator input. Its separate

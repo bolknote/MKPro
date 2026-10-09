@@ -1,6 +1,9 @@
 #include "mkpro/core/post_layout_control_flow.hpp"
 
 #include "mkpro/core/callee_hole_boundary_normalization.hpp"
+#include "mkpro/core/passes/helpers.hpp"
+
+#include "mkpro/core/callee_hole_boundary_normalization.hpp"
 #include "mkpro/core/indirect_addressing.hpp"
 #include "mkpro/core/opcodes.hpp"
 #include "mkpro/core/register_allocator.hpp"
@@ -1117,15 +1120,56 @@ void prove_one_borrowed_register(const std::vector<MachineItem>& items,
 
 } // namespace
 
-SelectorConsistentExecutionGraph build_selector_consistent_execution_graph(
+static SelectorConsistentExecutionGraph build_selector_execution_graph_impl(
     const std::vector<MachineItem>& items,
     const AuthoritativePostLayoutControlFlow& control,
-    std::size_t maximum_states) {
+    std::size_t maximum_states, const std::map<std::string, int>* bindings) {
   SelectorConsistentExecutionGraph result;
   const std::size_t count = control.execution_states.size();
   if (!control.proved || count == 0 || count > maximum_states ||
       control.execution_successors.size() != count || control.execution_edges.size() != count)
     return result;
+
+
+  std::map<std::size_t, int> encoded_by_item;
+  if (bindings) {
+    std::map<std::string, std::size_t> labels;
+    std::vector<std::string> pending;
+    for (std::size_t i = 0; i < items.size(); ++i) {
+      const auto& item = items[i];
+      if (item.formal_opcode || item.indirect_flow_formal_targets)
+        return {};
+      if (item.kind == MachineItemKind::Label) {
+        pending.push_back(item.name);
+        continue;
+      }
+      for (const auto& label : pending)
+        if (!labels.emplace(label, i).second)
+          return {};
+      pending.clear();
+    }
+    std::map<int, std::size_t> identities;
+    for (const auto& [site, targets] : control.indirect_flow_targets) {
+      (void)targets;
+      if (site >= items.size() || !items[site].indirect_flow_targets)
+        return {};
+      for (const auto& target : *items[site].indirect_flow_targets) {
+        const auto* label = std::get_if<std::string>(&target);
+        if (!label || !bindings->contains(*label) || !labels.contains(*label))
+          return {};
+        const int encoded = bindings->at(*label);
+        if (encoded < 0 || encoded > 99)
+          return {};
+        const auto command = labels.at(*label);
+        const auto [old, inserted] = encoded_by_item.emplace(command, encoded);
+        if (!inserted && old->second != encoded)
+          return {};
+        const auto [identity, unique] = identities.emplace(encoded, command);
+        if (!unique && identity->second != command)
+          return {};
+      }
+    }
+  }
 
   // A hardware counter and a logical layout address are different domains.
   // Distinct hardware aliases of one physical cell must remain distinct too.
@@ -1135,6 +1179,10 @@ SelectorConsistentExecutionGraph build_selector_consistent_execution_graph(
     auto operator<=>(const Choice&) const = default;
   };
   const auto choice_for = [&](const PostLayoutExecutionEdge& edge) {
+    const auto found = encoded_by_item.find(
+        control.execution_states[edge.target_state].item_index);
+    if (found != encoded_by_item.end())
+      return Choice{address_to_opcode(found->second, control.address_space_model), -1};
     return Choice{edge.indirect_formal_opcode,
                   edge.indirect_formal_opcode.has_value()
                       ? -1 : control.execution_states[edge.target_state].address};
@@ -1172,6 +1220,7 @@ SelectorConsistentExecutionGraph build_selector_consistent_execution_graph(
     for (std::size_t i = 0; i < count; ++i)
       result.original_states.push_back(i);
     result.successors = control.execution_successors;
+    result.execution_edges = control.execution_edges;
     result.proved = true;
     return result;
   }
@@ -1238,6 +1287,7 @@ SelectorConsistentExecutionGraph build_selector_consistent_execution_graph(
     states.push_back(state);
     result.original_states.push_back(state.original);
     result.successors.emplace_back();
+    result.execution_edges.emplace_back();
     return id;
   };
   bool has_main = false;
@@ -1331,6 +1381,11 @@ SelectorConsistentExecutionGraph build_selector_consistent_execution_graph(
       auto& successors = result.successors[i];
       if (std::find(successors.begin(), successors.end(), *target) == successors.end())
         successors.push_back(*target);
+      auto labelled = edge;
+      labelled.target_state = *target;
+      auto& edges = result.execution_edges[i];
+      if (std::find(edges.begin(), edges.end(), labelled) == edges.end())
+        edges.push_back(std::move(labelled));
     }
     // Refinement is not a license to turn a reachable call into an exit.
     // Contradictory selector and target facts must fall back to the complete
@@ -1340,6 +1395,81 @@ SelectorConsistentExecutionGraph build_selector_consistent_execution_graph(
   }
   result.proved = true;
   return result;
+}
+
+
+SelectorConsistentExecutionGraph build_selector_consistent_execution_graph(
+    const std::vector<MachineItem>& items,
+    const AuthoritativePostLayoutControlFlow& control, std::size_t maximum_states) {
+  return build_selector_execution_graph_impl(items, control, maximum_states, nullptr);
+}
+
+DeferredSelectorExecutionGraph build_deferred_selector_consistent_execution_graph(
+    const std::vector<MachineItem>& items,
+    const AuthoritativePostLayoutControlFlow& control,
+    const std::map<std::string, int>& encoded_target_origins, std::size_t maximum_states) {
+  auto execution = build_selector_execution_graph_impl(
+      items, control, maximum_states, &encoded_target_origins);
+  if (!execution.proved)
+    return {};
+  return {std::move(execution), encoded_target_origins};
+}
+
+bool prove_post_layout_direct_conditional_inversion_effects(
+    const std::vector<MachineItem>& items,
+    const AuthoritativePostLayoutControlFlow& control, std::size_t command_item) {
+  if (!control.proved || command_item >= items.size() ||
+      control.execution_edges.size() != control.execution_states.size())
+    return false;
+  const auto& command = items[command_item];
+  if (command.kind != MachineItemKind::Op || command.raw || command.manual_interaction ||
+      (command.opcode != 0x57 && command.opcode != 0x59 &&
+       command.opcode != 0x5c && command.opcode != 0x5e))
+    return false;
+  std::set<int> continuations;
+  for (std::size_t state = 0; state < control.execution_states.size(); ++state) {
+    if (control.execution_states[state].item_index != command_item) continue;
+    bool fallthrough = false, target = false;
+    for (const auto& edge : control.execution_edges[state]) {
+      if (edge.target_state >= control.execution_states.size()) return false;
+      if (edge.kind == PostLayoutExecutionEdgeKind::Fallthrough) fallthrough = true;
+      else if (edge.kind == PostLayoutExecutionEdgeKind::DirectTarget) target = true;
+      else return false;
+      continuations.insert(control.execution_states[edge.target_state].address);
+    }
+    if (!fallthrough || !target) return false;
+  }
+  if (continuations.empty()) return false;
+  // Direct F conditions close numeric entry on both outcomes (ROM fact).
+  // Their taken/skipped X2 effects still differ, so a dot is not a kill.
+  StackValueEqualityState equality;
+  equality.stack_equal = {true, true, true, true};
+  equality.x1_equal = true;
+  equality.x2_equal = false;
+  bool converges = true;
+  for (const int continuation : continuations)
+    converges = converges && prove_post_layout_stack_entry_equality(
+        items, control, continuation, equality,
+        {.refine_runtime_selectors = false, .numeric_entry_closed = true});
+  if (converges) return true;
+
+  // A differing edge effect is also harmless when X2 already denotes the
+  // exact same word as X. Require singleton value AND representation facts;
+  // equal sets of possible values do not establish path correlation.
+  const auto ir = raise_machine_to_ir(items);
+  const auto states = passes::compute_x2_value_states(ir);
+  std::size_t item = 0;
+  for (std::size_t i = 0; i < ir.size(); ++i) {
+    if (item == command_item) {
+      if (i >= states.size() || !states[i]) return false;
+      const auto& state = *states[i];
+      return state.x.size() == 1U && state.x == state.x2 &&
+          state.xShape.size() == 1U && state.xShape == state.x2Shape;
+    }
+    item += ir[i].kind == IrKind::Label ? 1U
+        : static_cast<std::size_t>(passes::cells_per_op(ir[i]));
+  }
+  return false;
 }
 
 PostLayoutExecutionRelocationProof prove_post_layout_execution_relocation(
@@ -1466,10 +1596,19 @@ PostLayoutExecutionRelocationProof prove_post_layout_execution_relocation(
         !converted_direct_flows.insert(source).second ||
         before.at(source).kind != MachineItemKind::Op ||
         after.at(*target).kind != MachineItemKind::Op ||
-        before.at(source).raw || after.at(*target).raw ||
-        before.at(source).manual_interaction.has_value() ||
-        after.at(*target).manual_interaction.has_value())
+        before.at(source).raw || after.at(*target).raw)
       return reject("invalid direct-to-indirect command transport");
+    // Continuous numeric resume executes the complete call, not just one
+    // instruction step. Keep its exact protocol/phase and prove its callee,
+    // continuation and return frames below. A prompt or a single-step
+    // command is a different observable boundary and remains ineligible.
+    const auto& old_manual = before.at(source).manual_interaction;
+    const auto& new_manual = after.at(*target).manual_interaction;
+    if ((old_manual || new_manual) &&
+        (old_manual != new_manual || !old_manual ||
+         old_manual->kind != ManualInteractionAnchorKind::ContinuousResume ||
+         before.at(source).opcode != 0x53))
+      return reject("direct-to-indirect transport changes a manual interaction");
     int family = -1;
     switch (before.at(source).opcode) {
     case 0x51: family = 0x80; break;
@@ -1483,6 +1622,29 @@ PostLayoutExecutionRelocationProof prove_post_layout_execution_relocation(
     const int selector = after.at(*target).opcode - family;
     if (family < 0 || selector < 7 || selector > 14)
       return reject("direct-to-indirect transport changes the branch family or mutates its selector");
+  }
+
+  std::set<std::size_t> inverted_direct_conditions;
+  for (const std::size_t source : options.inverted_direct_conditional_items) {
+    const auto target = mapped_item(source);
+    if (source >= before.size() || !target ||
+        !inverted_direct_conditions.insert(source).second ||
+        converted_direct_flows.contains(source) ||
+        before[source].kind != MachineItemKind::Op ||
+        after[*target].kind != MachineItemKind::Op ||
+        before[source].raw || after[*target].raw ||
+        before[source].manual_interaction || after[*target].manual_interaction)
+      return reject("invalid direct-condition inversion");
+    const int old_code = before[source].opcode;
+    const int new_code = after[*target].opcode;
+    if (!((old_code == 0x57 && new_code == 0x5e) ||
+          (old_code == 0x5e && new_code == 0x57) ||
+          (old_code == 0x59 && new_code == 0x5c) ||
+          (old_code == 0x5c && new_code == 0x59)))
+      return reject("condition inversion must use the complementary direct F opcode");
+    if (!prove_post_layout_direct_conditional_inversion_effects(
+            before, before_control, source))
+      return reject("condition inversion exposes hidden X2 on a continuation");
   }
 
   using EdgeKey = std::tuple<PostLayoutExecutionEdgeKind, std::size_t, std::vector<int>>;
@@ -1501,12 +1663,41 @@ PostLayoutExecutionRelocationProof prove_post_layout_execution_relocation(
       if (edge.kind == PostLayoutExecutionEdgeKind::IndirectTarget &&
           edge.indirect_formal_opcode != target.formal_opcode)
         return std::nullopt;
-      const auto item = remap ? mapped_item(target.item_index)
-                              : std::optional<std::size_t>(target.item_index);
+      auto item = remap ? mapped_item(target.item_index)
+                        : std::optional<std::size_t>(target.item_index);
+      // A deleted transparent jump has no command mapping of its own. Resolve
+      // just its one proved control edge for grouping, but still enqueue the
+      // jump's original state below: the paired walk checks its entry labels,
+      // return frames and complete rooted correspondence independently.
+      if (!item && remap && options.allow_bypassed_direct_jumps &&
+          target.item_index < before.size()) {
+        const auto& jump = before[target.item_index];
+        const auto& outgoing = control.execution_edges.at(edge.target_state);
+        if (jump.kind == MachineItemKind::Op && jump.opcode == kJumpOpcode &&
+            !jump.raw && !jump.manual_interaction &&
+            old_entries->labels.at(edge.target_state).empty() &&
+            outgoing.size() == 1U &&
+            outgoing.front().kind == PostLayoutExecutionEdgeKind::DirectTarget &&
+            outgoing.front().target_state < control.execution_states.size()) {
+          const auto& reached = control.execution_states[outgoing.front().target_state];
+          if (reached.return_stack == target.return_stack &&
+              reached.formal_return_stack == target.formal_return_stack)
+            item = mapped_item(reached.item_index);
+        }
+      }
       const auto frames = frame_addresses(target.return_stack, remap);
       if (!item.has_value() || !frames.has_value())
         return std::nullopt;
       auto kind = edge.kind;
+      if (remap && inverted_direct_conditions.contains(
+                       control.execution_states.at(state_index).item_index)) {
+        if (kind == PostLayoutExecutionEdgeKind::DirectTarget)
+          kind = PostLayoutExecutionEdgeKind::Fallthrough;
+        else if (kind == PostLayoutExecutionEdgeKind::Fallthrough)
+          kind = PostLayoutExecutionEdgeKind::DirectTarget;
+        else
+          return std::nullopt;
+      }
       if (remap && converted_direct_flows.contains(
                        control.execution_states.at(state_index).item_index) &&
           kind == PostLayoutExecutionEdgeKind::DirectTarget)
@@ -1567,7 +1758,8 @@ PostLayoutExecutionRelocationProof prove_post_layout_execution_relocation(
     const auto& new_item = after.at(new_state.item_index);
     const bool converted_direct = converted_direct_flows.contains(old_state.item_index);
     if (old_item.kind != MachineItemKind::Op || new_item.kind != MachineItemKind::Op ||
-        (!converted_direct && old_item.opcode != new_item.opcode) ||
+        (!converted_direct && !inverted_direct_conditions.contains(old_state.item_index) &&
+         old_item.opcode != new_item.opcode) ||
         old_item.raw != new_item.raw ||
         old_item.stop_disposition != new_item.stop_disposition ||
         old_item.manual_interaction != new_item.manual_interaction)

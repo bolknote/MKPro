@@ -251,6 +251,20 @@ int main() {
         conflict, preloads, core::build_post_layout_control_flow(conflict), {});
     require(!frontier.alternatives.empty(), frontier.reasons.empty() ?
         "conflicting selector must be released" : frontier.reasons.front().c_str());
+    const auto allocated = core::passes::joint_selector_allocation_layout_frontier(
+        conflict, preloads, core::build_post_layout_control_flow(conflict), {});
+    const auto joint = std::find_if(allocated.alternatives.begin(), allocated.alternatives.end(),
+        [](const auto& alternative) {
+          return std::any_of(alternative.optimizations.begin(), alternative.optimizations.end(),
+              [](const auto& report) { return report.name == "joint-selector-allocation-and-erasure"; });
+        });
+    require(joint != allocated.alternatives.end(),
+            "family allocation must also compose with erasure-before-layout");
+    require(joint->final_control_flow.proved && joint->removed_cells >= 1,
+            "the complete joint synthetic baseline must repay every temporary operand");
+    for (const std::string seed : {"0", "-7", "3.25"})
+      require(run(conflict, seed, preloads) == run(joint->items, seed, joint->preloads),
+              "atomic family allocation must preserve ROM stack, X1/X2 and observed data");
     const auto best = std::min_element(frontier.alternatives.begin(), frontier.alternatives.end(),
         [](const auto& left, const auto& right) { return left.removed_cells > right.removed_cells; });
     require(best->removed_cells >= 1, "joint transaction must repay call expansion and save cells");
@@ -340,6 +354,68 @@ int main() {
       require(core::passes::optimize_selector_data_literal_coalescing(
           original, duplicate, core::build_post_layout_control_flow(original), {}).applied == 0,
           "ambiguous immutable preload provenance must reject");
+    }
+    // Two complete immutable families participate in one allocation. Neither
+    // their names nor their physical addresses are fixed by the optimizer.
+    for (const char second_register : {'c', 'd'}) {
+      auto original = fixture(20, 'a');
+      for (std::size_t i = 1; i < original.size(); ++i) {
+        if (original[i].kind != MachineItemKind::Address) continue;
+        int reg = -1;
+        if (original[i].target == IrTarget{std::string("producer")})
+          reg = second_register - 'a' + 10;
+        if (original[i].target == IrTarget{std::string("alternate")}) reg = 7;
+        if (reg < 0) continue;
+        const auto destination = original[i].target;
+        original[i - 1] = MachineItem::op(0xa0 + reg, "immutable call");
+        original[i - 1].indirect_flow_targets = std::vector<IrTarget>{destination};
+        original.erase(original.begin() + static_cast<std::ptrdiff_t>(i));
+        --i;
+      }
+      const auto bound = core::rebind_late_bound_decimal_selectors(
+          original, {.minimum_target_address = 0});
+      require(bound.diagnostics.empty(), "two-family fixture must bind");
+      original = bound.items;
+      int address = 0;
+      std::vector<PreloadReport> preloads;
+      for (const auto& item : original) {
+        if (item.kind != MachineItemKind::Label) { ++address; continue; }
+        if (item.name == "producer")
+          preloads.push_back({.register_name = std::string(1, second_register),
+                              .value = std::to_string(address)});
+        if (item.name == "alternate")
+          preloads.push_back({.register_name = "7", .value = std::to_string(address)});
+      }
+      const auto frontier = core::passes::joint_selector_allocation_layout_frontier(
+          original, preloads, core::build_post_layout_control_flow(original), {});
+      const auto joint = std::find_if(frontier.alternatives.begin(), frontier.alternatives.end(),
+          [](const auto& candidate) {
+            return std::any_of(candidate.optimizations.begin(), candidate.optimizations.end(),
+                [](const auto& report) {
+                  return report.name == "joint-selector-allocation-and-erasure" &&
+                         report.detail.find("2 complete call families") != std::string::npos;
+                });
+          });
+      require(joint != frontier.alternatives.end() && joint->removed_cells == 1 &&
+                  resolve_machine_items(original).steps.size() == 42 &&
+                  resolve_machine_items(joint->items).steps.size() == 41,
+              "two-family atomic baseline must shrink 42 to 41 cells");
+      for (const std::string seed : {"0", "-7", "3.25"})
+        require(run(original, seed, preloads) == run(joint->items, seed, joint->preloads),
+                "two-family allocation must preserve full ROM observations");
+      auto written = original;
+      written.insert(written.begin(), MachineItem::op(
+          0x40 + second_register - 'a' + 10, "write selector"));
+      const auto rejected = core::passes::joint_selector_allocation_layout_frontier(
+          written, preloads, core::build_post_layout_control_flow(written), {});
+      require(std::none_of(rejected.alternatives.begin(), rejected.alternatives.end(),
+          [](const auto& candidate) {
+            return std::any_of(candidate.optimizations.begin(), candidate.optimizations.end(),
+                [](const auto& report) {
+                  return report.name == "joint-selector-allocation-and-erasure" &&
+                         report.detail.find("2 complete call families") != std::string::npos;
+                });
+          }), "joint allocation cannot release a runtime-written member");
     }
     std::cout << "selector data/literal coalescing compiler and ROM tests passed\n";
   } catch (const std::exception& error) {

@@ -32,20 +32,43 @@ void finish(std::vector<MachineItem>& items) {
   items.back().stop_disposition = StopDisposition::Terminal;
 }
 enum class Variant { Normal, Unknown, UnknownJoin, Zero, Negative, TooSmall,
-                     Overflow, Alias, LastX, LiveZ, Resume, MixedProduct };
+                     Overflow, Alias, LastX, LiveZ, Resume, MixedProduct,
+                     PredicateValue, PredicateStack, PredicateStop, InvertedEncoding,
+                     FractionalScore };
 
 std::vector<MachineItem> fixture(Variant variant = Variant::Normal,
-                               int reg = 8, int seed = 1, int iterations = 2) {
+                               int reg = 8, int seed = 1, int iterations = 2,
+                               int predicate = 0) {
   std::vector<MachineItem> items;
   append(items, {0x45, seed, 0x40 + reg});
   items.push_back(MachineItem::label("products"));
   for (int product = 0; product < 3; ++product) {
-    append(items, {0x6b, 0x60 + reg, 1, 0, 0x13, 0x12, 0x4a});
+    append(items, {0x6b, 0x60 + reg, 1, 0});
+    if (variant == Variant::InvertedEncoding)
+      append(items, {0x0b});
+    append(items, {0x13, 0x12, 0x4a});
     if (product == 0 && variant == Variant::LiveZ)
       append(items, {0x25, 0x25, 0x47});
   }
   append(items, {iterations, 0x40});
   items.push_back(MachineItem::label("again"));
+  if (predicate != 0) {
+    append(items, {0x60 + reg});
+    target(items, predicate, "predicate-taken");
+    if (variant == Variant::PredicateValue)
+      append(items, {0x47});
+    if (variant == Variant::PredicateStack)
+      append(items, {0x0e, 0x14, 0x47});
+    if (variant == Variant::PredicateStop) {
+      append(items, {0x50});
+      items.back().stop_disposition = StopDisposition::Resumable;
+    }
+    append(items, {2, 0x46});
+    target(items, 0x51, "predicate-joined");
+    items.push_back(MachineItem::label("predicate-taken"));
+    append(items, {5, 0x46});
+    items.push_back(MachineItem::label("predicate-joined"));
+  }
   append(items, {0x6b});
   target(items, 0x57, "high");
   append(items, {0x46, variant == Variant::UnknownJoin ? 0x6b : 3});
@@ -61,7 +84,7 @@ std::vector<MachineItem> fixture(Variant variant = Variant::Normal,
   if (variant == Variant::Overflow)
     append(items, {9, 0, 0, 0, 0, 0, 0, 0, 0x49});
   if (variant == Variant::Alias) {
-    append(items, {0xb7});
+    append(items, {0x6b, 0xb7}); // Unknown input may overwrite the bounded score.
     items.back().indirect_memory_targets = std::vector<int>{9};
   }
   if (variant == Variant::Resume) {
@@ -79,6 +102,13 @@ std::vector<MachineItem> fixture(Variant variant = Variant::Normal,
   append(items, {0x60 + reg, 0x44});
   finish(items);
   items.push_back(MachineItem::label("score"));
+  if (variant == Variant::FractionalScore) {
+    // A positive reduction assembled from a loop counter, a fractional
+    // runtime preload and nested decimal arithmetic, not an integer literal.
+    append(items, {9, 8, 0x69, 0x60, 0x15, 0x13, 0x35, 0x6e,
+                   0x11, 0x22, 0x10, 0x52});
+    return items;
+  }
   target(items, 0x53, "square");
   append(items, {0x52});
   items.push_back(MachineItem::label("square"));
@@ -90,18 +120,22 @@ int cells(const std::vector<MachineItem>& items) {
   return static_cast<int>(std::count_if(items.begin(), items.end(),
       [](const auto& item) { return item.kind != MachineItemKind::Label; }));
 }
-std::vector<passes::PassResult> candidates(const std::vector<MachineItem>& items) {
+std::vector<passes::PassResult> candidates(
+    const std::vector<MachineItem>& items,
+    const std::vector<PreloadReport>* preloads = nullptr) {
   CompileOptions options;
   options.defer_return_suffix_until_callee_hole = true;
   return passes::finite_mode_representation_candidates(
-      raise_machine_to_ir(items), {options}, {.maximum_candidates = 32});
+      raise_machine_to_ir(items), {options},
+      {.maximum_candidates = 32, .runtime_preloads = preloads});
 }
 bool mixed(const passes::PassResult& result) {
   return std::any_of(result.optimizations.begin(), result.optimizations.end(),
       [](const auto& report) { return report.name == "mixed-epoch-coefficient-state-carrier"; });
 }
 std::vector<std::string> observe(const std::vector<MachineItem>& items,
-                                 const std::string& input) {
+                                 const std::string& input,
+                                 const std::vector<PreloadReport>* preloads = nullptr) {
   const auto resolved = resolve_machine_items(items);
   require(resolved.diagnostics.empty(), "mixed fixture must resolve");
   std::vector<int> codes;
@@ -114,6 +148,9 @@ std::vector<std::string> observe(const std::vector<MachineItem>& items,
   for (std::size_t i = 0; i < names.size(); ++i)
     calc.set_register(names[i], std::to_string(i + 2U));
   calc.set_register("b", input);
+  if (preloads)
+    for (const auto& preload : *preloads)
+      calc.set_register(preload.register_name, preload.value);
   calc.press_sequence({"В/О", "С/П"});
   require(calc.run_until_stable(15000, 8).stopped, "mixed fixture must stop");
   std::vector<std::string> values{calc.display_text(true)};
@@ -155,6 +192,42 @@ void negative_contracts() {
     require(std::none_of(results.begin(), results.end(), mixed),
             "unsafe mixed boundary must reject: " + std::to_string(static_cast<int>(variant)));
   }
+}
+
+void predicate_epoch_contracts() {
+  for (const int reg : {2, 8})
+    for (const int predicate : {0x57, 0x59, 0x5c, 0x5e})
+      for (const int seed : {1, 4}) {
+        const auto source = fixture(Variant::Normal, reg, seed, 2, predicate);
+        const auto results = candidates(source);
+        const auto found = std::find_if(results.begin(), results.end(), mixed);
+        require(found != results.end(), "predicate join must not merge finite and dynamic codecs");
+        const auto after = lower_ir_to_machine(found->ops);
+        require(cells(after) == cells(source) - 7,
+                "predicate observations retain the seven-cell mixed-epoch saving");
+        require(std::any_of(found->optimizations.begin(), found->optimizations.end(),
+            [](const auto& report) {
+              return report.detail.find("predicate-only observations") != std::string::npos;
+            }), "explain must identify the independently proved predicate observation");
+        for (const char* input : {"-7", "0", "13"})
+          require(observe(source, input) == observe(after, input),
+                  "mixed predicate continuations must preserve all registers and hidden stack state");
+      }
+  for (const auto variant : {Variant::PredicateValue, Variant::PredicateStack,
+                            Variant::PredicateStop, Variant::InvertedEncoding}) {
+    const auto results = candidates(fixture(variant, 8, 1, 2, 0x5c));
+    require(std::none_of(results.begin(), results.end(), mixed),
+            "equal predicate outcomes alone do not prove numerical or hidden-state observations: " +
+                std::to_string(static_cast<int>(variant)));
+  }
+  // Equality/non-equality ignores the sign, unlike the two ordering tests.
+  const auto source = fixture(Variant::InvertedEncoding, 8, 1, 2, 0x57);
+  const auto results = candidates(source);
+  const auto found = std::find_if(results.begin(), results.end(), mixed);
+  require(found != results.end(), "predicate certificate must use its actual truth table");
+  for (const char* input : {"-7", "0", "13"})
+    require(observe(source, input) == observe(lower_ir_to_machine(found->ops), input),
+            "inverted nonzero encoding must preserve both mixed continuations");
 }
 
 std::size_t boundary_item(const std::vector<MachineItem>& items) {
@@ -205,6 +278,59 @@ void range_contracts() {
     const auto facts = prove_post_layout_numeric_ranges(items, graph, *lift, {at}, &preloads);
     require(facts.x_before.contains(at) != resume, "preload facts apply only to the main entry");
   }
+}
+
+void iterative_range_contracts() {
+  for (const int distance : {0, 600})
+    for (const bool growing : {false, true}) {
+      std::vector<MachineItem> items;
+      append(items, {0x45, 7, 0x49, 2, 0x40});
+      items.push_back(MachineItem::label("range-loop"));
+      for (int i = 0; i < distance; ++i)
+        append(items, {0x54});
+      if (growing)
+        append(items, {0x69, 1, 0x10, 0x49});
+      append(items, {0x69});
+      items.push_back(MachineItem::label("boundary"));
+      target(items, 0x5d, "range-loop");
+      finish(items);
+      const auto flow = build_post_layout_control_flow(items);
+      require(flow.proved, "iterative range fixture must have a proved logical CFG");
+      const auto entry = analyze_post_layout_automatic_entry_lift(items, flow, 100000);
+      require(entry.has_value(), "iterative range fixture entry facts");
+      const auto requested = boundary_item(items);
+      const auto result = prove_post_layout_numeric_ranges(items, flow, *entry, {requested});
+      require(!result.exhausted, "transport distance must not exhaust a recursion-depth limit");
+      if (growing)
+        require(result.x_before.empty(), "expanding recurrence must widen, not freeze a partial range");
+      else
+        require(result.x_before.at(requested) == OrdinaryNumericRange{7, 7, true},
+                "grounded loop invariant must survive arbitrarily many transparent transports");
+      const auto limited = prove_post_layout_numeric_ranges(items, flow, *entry, {requested}, nullptr, 1);
+      require(limited.exhausted && limited.x_before.empty(),
+              "an interrupted fixed point must never publish partial bounds");
+    }
+}
+
+void fractional_score_composition() {
+  const std::vector<PreloadReport> preloads{
+      {.register_name = "e", .value = "4.1200076E-1"}};
+  const auto source = fixture(Variant::FractionalScore);
+  const auto results = candidates(source, &preloads);
+  const auto found = std::find_if(results.begin(), results.end(), mixed);
+  require(found != results.end(),
+          "FL and fractional range proofs must compose with finite carrier encoding");
+  const auto after = lower_ir_to_machine(found->ops);
+  require(cells(after) == cells(source) - 7,
+          "composed range/carrier transformation must retain its seven-cell saving");
+  for (const char* input : {"-7", "0", "13"})
+    require(observe(source, input, &preloads) == observe(after, input, &preloads),
+            "fractional reduction composition must preserve registers and hidden stack state");
+  auto unknown = preloads;
+  unknown.front().value = "A-2";
+  const auto rejected = candidates(source, &unknown);
+  require(std::none_of(rejected.begin(), rejected.end(), mixed),
+          "an opaque runtime coefficient must not gain an ordinary range");
 }
 
 void production_frontier() {
@@ -287,9 +413,12 @@ void laid_out_production_frontier() {
 int main() {
   try {
     range_contracts();
+    iterative_range_contracts();
     positive_compiler_rom_and_sizes();
     negative_contracts();
+    predicate_epoch_contracts();
     production_frontier();
+    fractional_score_composition();
     laid_out_production_frontier();
     std::cout << "mixed finite/dynamic carrier compiler and ROM contracts passed\n";
     return 0;

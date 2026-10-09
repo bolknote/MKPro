@@ -152,6 +152,12 @@ struct PostLayoutExecutionRelocationOptions {
   // must still follow the command-identity mapping. Selector values and X2
   // observability remain obligations of the caller's data proof.
   std::vector<std::size_t> direct_to_indirect_flow_items;
+  // Complementary direct F conditions may exchange their target/fallthrough
+  // edges. The proof also requires X2 convergence on BOTH continuations:
+  // taken and skipped direct conditions do not have identical hidden effects.
+  // Indirect conditions, FL counters, raw/manual commands and arbitrary
+  // opcode replacements are not authorized by this certificate.
+  std::vector<std::size_t> inverted_direct_conditional_items;
   // A hardware continuation may bypass an existing unconditional jump.
   // Admit only a single-target BP with no external/manual observation; calls,
   // returns, conditions and state-changing instructions are never transparent.
@@ -163,6 +169,13 @@ struct PostLayoutExecutionRelocationProof {
   std::size_t state_pairs = 0;
   std::vector<std::string> reasons;
 };
+
+// ROM-certified direct-condition inversion preserves visible stack/X1 but can
+// change X2. Prove the latter unobservable through every admitted continuation,
+// without relying on physical selector values in a possibly deferred layout.
+bool prove_post_layout_direct_conditional_inversion_effects(
+    const std::vector<MachineItem>& items,
+    const AuthoritativePostLayoutControlFlow& control, std::size_t command_item);
 
 // Compare rooted, labelled execution contexts under a command relocation.
 // This is a control-flow transport proof, not a replacement for the caller's
@@ -201,12 +214,32 @@ struct SelectorConsistentExecutionGraph {
   bool proved = false;
   std::vector<std::size_t> original_states;
   std::vector<std::vector<std::size_t>> successors;
+  // Preserve branch/resume kinds after product-state expansion. Data proofs
+  // must not reconstruct these labels from physical adjacency.
+  std::vector<std::vector<PostLayoutExecutionEdge>> execution_edges;
   std::size_t pruned_edges = 0;
 };
 
 SelectorConsistentExecutionGraph build_selector_consistent_execution_graph(
     const std::vector<MachineItem>& items,
     const AuthoritativePostLayoutControlFlow& control,
+    std::size_t maximum_states = 20000);
+
+// A conditional data-proof view, not an executable CFG certificate. Origins
+// name the addresses currently encoded in selector words, before pending
+// command relocation. Every symbolic indirect target must have one origin;
+// aliases must agree and distinct commands must not collide. Formal/dark
+// counters are deliberately excluded. Callers must retain these equations,
+// rebind the final words and independently validate the published artifact.
+struct DeferredSelectorExecutionGraph {
+  SelectorConsistentExecutionGraph execution;
+  std::map<std::string, int> encoded_target_origins;
+};
+
+DeferredSelectorExecutionGraph build_deferred_selector_consistent_execution_graph(
+    const std::vector<MachineItem>& items,
+    const AuthoritativePostLayoutControlFlow& control,
+    const std::map<std::string, int>& encoded_target_origins,
     std::size_t maximum_states = 20000);
 
 PostLayoutBorrowedSelectorProof

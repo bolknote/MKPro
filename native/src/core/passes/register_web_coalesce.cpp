@@ -1,7 +1,9 @@
 #include "mkpro/core/passes/register_coalesce.hpp"
 #include "mkpro/core/opcodes.hpp"
 
+#include "mkpro/core/callee_hole_boundary_normalization.hpp"
 #include "mkpro/core/post_layout_control_flow.hpp"
+#include "mkpro/core/stable_register_value_flow.hpp"
 
 #include <array>
 #include <cstdlib>
@@ -122,7 +124,9 @@ struct Copy {
 static PassResult process_register_webs(
     const std::vector<IrOp>& ops, const PassContext& context,
     const std::vector<RegisterWebRecoloringRequest>* recoloring_requests,
-    const RegisterWebRecoloringConsumer* consume) {
+    const RegisterWebRecoloringConsumer* consume,
+    const PostLayoutControlFlowOptions* deferred_control = nullptr,
+    const std::map<std::string, int>* encoded_origins = nullptr) {
   const bool recolor_only = recoloring_requests != nullptr;
   const bool trace = std::getenv("MKPRO_NATIVE_TRACE_REGISTER_WEBS") != nullptr;
   const auto unchanged = [&](const char* reason = "no admissible copy merge") {
@@ -173,8 +177,9 @@ static PassResult process_register_webs(
     address += cells_per_op(op);
   }
   const auto machine = lower_ir_to_machine(ops);
-  auto flow = build_post_layout_control_flow(machine);
-  if (!flow.proved) {
+  auto flow = deferred_control ? build_post_layout_control_flow(machine, *deferred_control)
+                               : build_post_layout_control_flow(machine);
+  if (!flow.proved && !deferred_control) {
     PostLayoutControlFlowOptions options;
     options.empty_return_target = IrTarget{1};
     flow = build_post_layout_control_flow(machine, options);
@@ -183,6 +188,19 @@ static PassResult process_register_webs(
     if (trace && !flow.reasons.empty())
       std::cerr << "[register-web-copy-coalesce] CFG: " << flow.reasons.front() << '\n';
     return unchanged("exact execution graph unavailable");
+  }
+
+  if (encoded_origins) {
+    const auto selector = build_deferred_selector_consistent_execution_graph(
+        machine, flow, *encoded_origins).execution;
+    if (!selector.proved)
+      return unchanged("deferred selector equations have no execution certificate");
+    const auto states = flow.execution_states;
+    flow.execution_states.clear();
+    for (const auto original : selector.original_states)
+      flow.execution_states.push_back(states.at(original));
+    flow.execution_successors = selector.successors;
+    flow.execution_edges = selector.execution_edges;
   }
 
   std::vector<std::size_t> sites;
@@ -284,6 +302,7 @@ static PassResult process_register_webs(
 
   // An emitted instruction has one physical operand, even when reached from
   // different callers. Join all definitions that can reach that static use.
+  std::vector<bool> observes_final_bank(sites.size(), false);
   std::vector<std::map<int, Nodes>> uses(ops.size());
   std::vector<std::vector<std::size_t>> predecessors(sites.size());
   for (std::size_t state = 0; state < sites.size(); ++state) {
@@ -299,6 +318,13 @@ static PassResult process_register_webs(
       append(uses[site][reg], incoming[state][static_cast<std::size_t>(reg)]);
       uses[site][reg].insert(definitions[site].at(reg));
     }
+    // Late artifact rewrites have no source-level dead-output contract. A
+    // terminal observation exposes the physical bank, even when the program
+    // itself never recalls the final value. Preserve every reaching epoch.
+    observes_final_bank[state] = encoded_origins && flow.execution_successors[state].empty();
+    if (observes_final_bank[state])
+      for (int reg = 0; reg < kRegisters; ++reg)
+        append(uses[site][reg], incoming[state][static_cast<std::size_t>(reg)]);
     for (const auto next : flow.execution_successors[state])
       predecessors[next].push_back(state);
   }
@@ -314,12 +340,26 @@ static PassResult process_register_webs(
            !is_display_focus_sensitive(op) && op.meta.roles.empty() &&
            op.target_meta.roles.empty();
   };
+  const auto boundaries = encoded_origins
+      ? prove_post_layout_input_boundaries(machine, flow) : PostLayoutInputBoundaryProof{};
+  const auto transportable_input = [&](const IrOp& op) {
+    const auto reg = physical(op.register_name);
+    if (!boundaries.proved || op.kind != IrKind::Store || !reg ||
+        op.opcode != 0x40 + *reg || !op.meta.manual_interaction ||
+        op.meta.manual_interaction->kind != ManualInteractionAnchorKind::SingleStepCommand)
+      return false;
+    auto ordinary = op;
+    ordinary.meta.manual_interaction.reset();
+    return !has_rewrite_barrier(ordinary) && !is_display_focus_sensitive(ordinary) &&
+        ordinary.meta.roles.empty() && ordinary.target_meta.roles.empty();
+  };
+
   const auto anchored = [&](std::size_t site) {
     const auto& op = ops[site];
     if (recolor_only && (!reachable.contains(site) || !op.meta.roles.empty() ||
                         !op.target_meta.roles.empty()))
       return true;
-    if (movable_counter(site))
+    if (movable_counter(site) || transportable_input(op))
       return false;
     return (op.kind != IrKind::Store && op.kind != IrKind::Recall) ||
            has_rewrite_barrier(op) || is_display_focus_sensitive(op);
@@ -354,7 +394,7 @@ static PassResult process_register_webs(
   std::vector<Copy> copies;
   for (std::size_t site = 1; site < ops.size(); ++site) {
     if (ops[site - 1].kind != IrKind::Recall || ops[site].kind != IrKind::Store ||
-        anchored(site - 1) || anchored(site))
+        anchored(site - 1) || anchored(site) || ops[site].meta.manual_interaction)
       continue;
     const int source = *physical(ops[site - 1].register_name);
     const int destination = *physical(ops[site].register_name);
@@ -378,6 +418,27 @@ static PassResult process_register_webs(
   if (copies.empty() && !recolor_only)
     return unchanged("no exact movable copy predecessor");
 
+  // Backward demand is meaningful only for a definition that can reach this
+  // exact execution state. In particular, a guarded use must not resurrect
+  // an older loop iteration's web through a later physical-register overwrite.
+  std::vector<Nodes> available_in(sites.size()), available_out(sites.size());
+  for (std::size_t state = 0; state < sites.size(); ++state) {
+    const auto site = sites[state];
+    auto values = incoming[state];
+    for (const auto& by_register : values)
+      for (const Node node : by_register) available_in[state].insert(webs.root(node));
+    for (const auto& name : effects[site].must_defs) {
+      const int reg = *physical(name);
+      values[static_cast<std::size_t>(reg)] = {definitions[site].at(reg)};
+    }
+    for (const auto& name : effects[site].may_defs) {
+      const int reg = *physical(name);
+      values[static_cast<std::size_t>(reg)].insert(definitions[site].at(reg));
+    }
+    for (const auto& by_register : values)
+      for (const Node node : by_register) available_out[state].insert(webs.root(node));
+  }
+
   std::vector<Nodes> live_in(sites.size()), live_out(sites.size());
   std::vector<Nodes> read(sites.size()), must_def(sites.size()), all_def(sites.size());
   for (std::size_t state = 0; state < sites.size(); ++state) {
@@ -385,6 +446,9 @@ static PassResult process_register_webs(
     for (const auto& name : effects[site].uses)
       for (const Node node : incoming[state][static_cast<std::size_t>(*physical(name))])
         read[state].insert(webs.root(node));
+    if (observes_final_bank[state])
+      for (const auto& by_register : incoming[state])
+        for (const Node node : by_register) read[state].insert(webs.root(node));
     for (const auto& name : effects[site].must_defs)
       must_def[state].insert(webs.root(definitions[site].at(*physical(name))));
     for (const auto& [reg, node] : definitions[site]) {
@@ -404,10 +468,12 @@ static PassResult process_register_webs(
     Nodes out;
     for (const auto next : flow.execution_successors[state])
       append(out, live_in[next]);
+    std::erase_if(out, [&](Node node) { return !available_out[state].contains(node); });
     Nodes in = out;
     for (const Node node : must_def[state])
       in.erase(node);
     append(in, read[state]);
+    std::erase_if(in, [&](Node node) { return !available_in[state].contains(node); });
     live_out[state] = std::move(out);
     if (in == live_in[state])
       continue;
@@ -690,6 +756,32 @@ static PassResult process_register_webs(
 
   int relocated_counters = 0;
   std::vector<IrOp> result = emit_recolored(relocated_counters);
+  if (deferred_control) {
+    const auto after_machine = lower_ir_to_machine(result);
+    const auto after_flow = build_post_layout_control_flow(after_machine, *deferred_control);
+    if (!after_flow.proved ||
+        !prove_post_layout_input_boundaries(after_machine, after_flow).proved ||
+        !build_deferred_selector_consistent_execution_graph(
+             after_machine, after_flow, *encoded_origins).execution.proved)
+      return unchanged("coalesced callback/input obligations did not survive transport");
+    // An empty return may name a physical command instead of a label. Do not
+    // move or delete that command merely because the rebuilt graph is valid.
+    if (flow.empty_return_target) {
+      const int before_target = flow.empty_return_target->address;
+      int old_address = 0, new_address = 0;
+      bool preserved = false;
+      for (std::size_t site = 0; site < ops.size(); ++site) {
+        if (ops[site].kind != IrKind::Label && old_address == before_target) {
+          preserved = !removed.contains(site) && after_flow.empty_return_target &&
+              after_flow.empty_return_target->address == new_address;
+          break;
+        }
+        old_address += cells_per_op(ops[site]);
+        if (!removed.contains(site)) new_address += cells_per_op(ops[site]);
+      }
+      if (!preserved) return unchanged("empty-return command identity would move");
+    }
+  }
   if (trace)
     std::cerr << "[register-web-copy-coalesce] removed=" << removed.size()
               << " definitions=" << webs.parents.size()
@@ -698,6 +790,12 @@ static PassResult process_register_webs(
       "Removed " + std::to_string(removed.size()) +
       " copy store(s) by coalescing exact reaching-definition webs; preserved "
       "entry values, hardware-sensitive epochs and matched caller lifetimes."}};
+  if (encoded_origins)
+    optimizations.push_back({"deferred-selector-web-coalescing",
+        "Coalesced available definition webs on the selector-consistent execution graph; "
+        "transported typed input stores without deleting or reordering a manual phase. "
+        "Re-proved callback/input boundaries and empty-return identity; physical selector "
+        "rebinding and final layout remain mandatory closure obligations."});
   if (!excluded.empty())
     optimizations.push_back({"guarded-definition-webs",
         "Excluded " + std::to_string(excluded.size()) +
@@ -732,6 +830,13 @@ void for_each_register_web_recoloring(
     const RegisterWebRecoloringConsumer& consume) {
   if (!requests.empty() && consume)
     (void)process_register_webs(ops, context, &requests, &consume);
+}
+
+PassResult deferred_register_web_copy_coalesce(
+    const std::vector<IrOp>& ops, const PassContext& context,
+    const PostLayoutControlFlowOptions& control,
+    const std::map<std::string, int>& encoded_origins) {
+  return process_register_webs(ops, context, nullptr, nullptr, &control, &encoded_origins);
 }
 
 IrPass register_web_copy_coalesce_pass() {

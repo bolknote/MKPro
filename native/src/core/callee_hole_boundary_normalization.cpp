@@ -127,7 +127,7 @@ bool prove_stack_entry_equality(const StackEntryProofReader& reader,
 bool prove_post_layout_stack_entry_equality(
     const std::vector<MachineItem>& items,
     const AuthoritativePostLayoutControlFlow& flow, int entry_address,
-    StackValueEqualityState initial) {
+    StackValueEqualityState initial, const PostLayoutStackEntryProofOptions& options) {
   const bool trace = std::getenv("MKPRO_NATIVE_TRACE_STACK_ENTRY_EQUALITY") != nullptr;
   const auto reject = [&](const char* reason) {
     if (trace)
@@ -139,7 +139,9 @@ bool prove_post_layout_stack_entry_equality(
       flow.execution_states.size() != flow.execution_successors.size())
     return reject("exact execution graph is unavailable");
 
-  auto graph = build_selector_consistent_execution_graph(items, flow);
+  auto graph = options.refine_runtime_selectors
+      ? build_selector_consistent_execution_graph(items, flow)
+      : SelectorConsistentExecutionGraph{};
   if (!graph.proved) {
     // A bounded refinement must never weaken the ordinary conservative proof.
     graph.successors = flow.execution_successors;
@@ -190,6 +192,7 @@ bool prove_post_layout_stack_entry_equality(
   for (std::size_t index = 0; index < graph.original_states.size(); ++index) {
     if (flow.execution_states[graph.original_states[index]].address == entry_address) {
       incoming[index] = initial;
+      if (options.numeric_entry_closed) entry_modes[index] = DecimalEntry::Closed;
       pending.push_back(index);
     }
   }

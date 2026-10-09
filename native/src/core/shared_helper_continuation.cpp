@@ -144,6 +144,62 @@ std::optional<int> address_target(const MachineItem& item, const ArtifactIndex& 
   return found == index.label_addresses.end() ? std::nullopt : std::optional<int>(found->second);
 }
 
+
+bool entry_reaches_body(const std::vector<MachineItem>& items,
+                        const ArtifactIndex& index, int entry, int body,
+                        const SharedHelperContinuationOptions& options) {
+  if (entry == body) return true;
+  if (entry < 0 || entry > body || body - entry > 48) return false;
+  const auto closed_leaf = [&](int address) {
+    for (int n = 0; n < 48; ++n, ++address) {
+      const auto found = index.cell_items.find(address);
+      if (found == index.cell_items.end()) return false;
+      const auto& item = items[found->second];
+      if (item.kind != MachineItemKind::Op || item.raw || item.manual_interaction ||
+          item.indirect_flow_formal_targets || item.opcode == 0x1f)
+        return false;
+      const auto kind = basic_kind_for_opcode(item.opcode);
+      if (kind == IrKind::Return) return n > 0;
+      // No nested calls or memory effects in a replayable prologue callee.
+      if (kind != IrKind::Plain || opcode_by_code(item.opcode).takes_address) return false;
+    }
+    return false;
+  };
+  for (int address = entry; address < body;) {
+    const auto found = index.cell_items.find(address);
+    if (found == index.cell_items.end()) return false;
+    const auto& item = items[found->second];
+    if (item.kind != MachineItemKind::Op || item.raw || item.manual_interaction ||
+        item.indirect_flow_formal_targets || item.opcode == 0x1f)
+      return false;
+    const auto kind = basic_kind_for_opcode(item.opcode);
+    // Raising an isolated address-taking opcode has no operand and cannot
+    // classify a direct call. Its adjacent operand is checked explicitly.
+    if (item.opcode == 0x53) {
+      const auto operand = index.cell_items.find(address + 1);
+      if (operand == index.cell_items.end() || items[operand->second].formal_opcode)
+        return false;
+      const auto destination = address_target(items[operand->second], index,
+                                               options.address_space_model);
+      if (!destination || !closed_leaf(*destination)) return false;
+      address += 2;
+    } else if (kind == IrKind::IndirectCall) {
+      const auto destinations = options.proved_indirect_flow_targets.find(found->second);
+      if (item.opcode < 0xa7 || item.opcode > 0xae ||
+          destinations == options.proved_indirect_flow_targets.end() ||
+          destinations->second.size() != 1U ||
+          !closed_leaf(destinations->second.front())) return false;
+      ++address;
+    } else if (kind == IrKind::Plain || kind == IrKind::Store || kind == IrKind::Recall) {
+      ++address;
+    } else {
+      return false;
+    }
+    if (address > body) return false;
+  }
+  return true;
+}
+
 bool direct_address_artifact_is_relocatable(const std::vector<MachineItem>& items,
                                             const ArtifactIndex& index,
                                             AddressSpaceModel model,
@@ -656,51 +712,69 @@ verify_shared_helper_continuation(const std::vector<MachineItem>& items,
     proof.reasons.push_back("helper has no straight-line body");
 
   std::vector<SharedHelperContinuationCall> calls;
+  const auto accepts_entry = [&](int entry) {
+    return entry == proof.helper_body_start_address ||
+        (options.allow_entry_prologues &&
+         entry_reaches_body(items, index, entry, proof.helper_body_start_address, options));
+  };
   for (std::size_t item_index = 0; item_index < items.size(); ++item_index) {
-    const MachineItem& item = items.at(item_index);
+    const auto& item = items[item_index];
     if (item.kind == MachineItemKind::Op) {
-      const IrKind kind = basic_kind_for_opcode(item.opcode);
-      if (is_indirect_flow_kind(kind) &&
-          !options.proved_indirect_flow_targets.contains(item_index)) {
-        proof.reasons.push_back("indirect flow lacks a complete target map");
-      }
-      if (kind == IrKind::IndirectCall) {
+      const auto kind = basic_kind_for_opcode(item.opcode);
+      if (is_indirect_flow_kind(kind)) {
         const auto targets = options.proved_indirect_flow_targets.find(item_index);
-        if (targets != options.proved_indirect_flow_targets.end() &&
-            targets->second.size() == 1U &&
-            targets->second.front() == proof.helper_body_start_address) {
-          const ContinuationShape shape = continuation_shape(items, item_index);
-          calls.push_back(SharedHelperContinuationCall{
-              .call_item_index = item_index,
-              .operand_item_index = item_index,
-              .join_item_index = shape.join_item,
-              .store_item_index = shape.store_item,
-              .call_address = index.item_addresses.at(item_index),
-              .indirect = true,
-          });
+        if (targets == options.proved_indirect_flow_targets.end()) {
+          proof.reasons.push_back("indirect flow lacks a complete target map");
+          continue;
+        }
+        for (int entry : targets->second) {
+          if (!accepts_entry(entry)) continue;
+          if (kind != IrKind::IndirectCall || targets->second.size() != 1U) {
+            proof.reasons.push_back("helper/prologue has a non-call or ambiguous entry");
+            continue;
+          }
+          const auto shape = continuation_shape(items, item_index);
+          calls.push_back({.call_item_index = item_index, .operand_item_index = item_index,
+              .join_item_index = shape.join_item, .store_item_index = shape.store_item,
+              .call_address = index.item_addresses[item_index],
+              .entry_address = entry, .entry_item_index = index.cell_items.at(entry),
+              .indirect = true});
         }
       }
     }
-    if (item.kind != MachineItemKind::Address)
-      continue;
-    const auto* label = std::get_if<std::string>(&item.target);
-    if (label == nullptr || *label != helper_label)
-      continue;
-    const std::optional<std::size_t> call = previous_cell_item(items, item_index);
-    if (!call.has_value() || items.at(*call).kind != MachineItemKind::Op ||
-        items.at(*call).opcode != 0x53) {
-      proof.reasons.push_back("helper has a non-direct-call reference");
+    if (item.kind != MachineItemKind::Address) continue;
+    const auto entry = address_target(item, index, options.address_space_model);
+    if (!entry || !accepts_entry(*entry)) continue;
+    const auto call = previous_cell_item(items, item_index);
+    if (!call || items[*call].kind != MachineItemKind::Op || items[*call].opcode != 0x53 ||
+        (options.allow_entry_prologues && item.formal_opcode)) {
+      proof.reasons.push_back("helper/prologue has a non-direct-call reference");
       continue;
     }
-    const ContinuationShape shape = continuation_shape(items, item_index);
-    calls.push_back(SharedHelperContinuationCall{
-        .call_item_index = *call,
-        .operand_item_index = item_index,
-        .join_item_index = shape.join_item,
-        .store_item_index = shape.store_item,
-        .call_address = index.item_addresses.at(*call),
-        .indirect = false,
-    });
+    const auto shape = continuation_shape(items, item_index);
+    calls.push_back({.call_item_index = *call, .operand_item_index = item_index,
+        .join_item_index = shape.join_item, .store_item_index = shape.store_item,
+        .call_address = index.item_addresses[*call], .entry_address = *entry,
+        .entry_item_index = index.cell_items.at(*entry), .indirect = false});
+  }
+  int first_entry = proof.helper_body_start_address;
+  for (const auto& call : calls) first_entry = std::min(first_entry, call.entry_address);
+  if (first_entry < proof.helper_body_start_address) {
+    const auto before = index.cell_items.find(first_entry - 1);
+    bool closed = false;
+    if (before != index.cell_items.end()) {
+      const auto& item = items[before->second];
+      const auto kind = item.kind == MachineItemKind::Op
+          ? basic_kind_for_opcode(item.opcode) : IrKind::OrphanAddress;
+      closed = kind == IrKind::Return || kind == IrKind::IndirectJump ||
+          (kind == IrKind::Stop && item.stop_disposition == StopDisposition::Terminal);
+      if (item.kind == MachineItemKind::Address) {
+        const auto flow = previous_cell_item(items, before->second);
+        closed = flow && items[*flow].kind == MachineItemKind::Op &&
+            items[*flow].opcode == 0x51;
+      }
+    }
+    if (!closed) proof.reasons.push_back("helper prologue has an unproved fallthrough entry");
   }
   if (calls.size() != 3U)
     proof.reasons.push_back(
@@ -756,6 +830,8 @@ verify_shared_helper_continuation(const std::vector<MachineItem>& items,
           }
         }
       } else {
+        if (call.entry_address != proof.helper_body_start_address)
+          proof.reasons.push_back("divergent call must enter the common body directly");
         proof.divergent_call_item_index = call.call_item_index;
       }
     }
@@ -785,6 +861,12 @@ verify_shared_helper_continuation(const std::vector<MachineItem>& items,
 
   proof.proved = proof.reasons.empty();
   return proof;
+}
+
+bool shared_helper_entry_reaches_body(
+    const std::vector<MachineItem>& items, int entry_address, int body_address,
+    const SharedHelperContinuationOptions& options) {
+  return entry_reaches_body(items, index_artifact(items), entry_address, body_address, options);
 }
 
 SharedHelperContinuationProof

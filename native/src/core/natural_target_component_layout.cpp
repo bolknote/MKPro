@@ -839,7 +839,8 @@ bool apply_transparent_fallthrough_jump_fold(
     const TransparentFallthroughJumpFold& requested,
     const std::vector<DirectReference>& references,
     const AuthoritativePostLayoutControlFlow& control_flow,
-    std::size_t main_command_origin, std::string* failure_reason = nullptr) {
+    std::size_t main_command_origin, std::string* failure_reason = nullptr,
+    bool allow_unreferenced_labels = false) {
   const auto fail = [&](std::string reason) {
     if (failure_reason != nullptr)
       *failure_reason = std::move(reason);
@@ -928,7 +929,19 @@ bool apply_transparent_fallthrough_jump_fold(
         return role == "statement-proc-call" || role == "x-argument-call" ||
                role == "empty-return-startup-tail-call";
       });
-  if (!command_cell.labels.empty() || !operand_is_transparent ||
+  // A zero-width annotation does not make this jump an executable entry.
+  // Keep its identity, but require all real references and externally
+  // admitted entries to pass the same closed-world checks below. Protected
+  // labels remain barriers even when no current branch names them.
+  const bool transparent_labels =
+      (command_cell.labels.empty() || allow_unreferenced_labels) && std::all_of(
+      command_cell.labels.begin(), command_cell.labels.end(), [](const OwnedItem& owned) {
+        const MachineItem& label = owned.item;
+        return label.kind == MachineItemKind::Label && !label.raw &&
+               label.roles.empty() && !label.manual_interaction &&
+               !label.procedure_boundary && !label.formal_opcode;
+      });
+  if (!transparent_labels || !operand_is_transparent ||
       command.kind != MachineItemKind::Op ||
       (!direct_jump && !stable_indirect_jump) ||
       (direct_jump && command.opcode != kJumpOpcode) ||
@@ -976,9 +989,13 @@ bool apply_transparent_fallthrough_jump_fold(
     return fail("jump-fold pair is the empty-return target");
   }
 
+  const auto transported_labels = command_cell.labels;
   Segment merged = std::move(segments.at(source->first));
   merged.cells.resize(merged.cells.size() - (direct_jump ? 2U : 1U));
   Segment& target_segment = segments.at(target->first);
+  target_segment.cells.front().labels.insert(
+      target_segment.cells.front().labels.begin(),
+      transported_labels.begin(), transported_labels.end());
   for (Cell& cell : target_segment.cells)
     merged.cells.push_back(std::move(cell));
   std::vector<Segment> rewritten;
@@ -1629,7 +1646,11 @@ std::vector<SelectorCandidate> selector_candidates(
         }
       }
 
-      if (!uses.empty() && !register_has_nonflow_use(items, index) &&
+      // A transaction can release every old flow before allocating the
+      // family again. A still-unwritten, completely unobserved preload does
+      // not regain a fixed-address constraint merely because uses is empty.
+      if ((!uses.empty() || options.reallocate_released_address_only_selectors) &&
+          !register_has_nonflow_use(items, index) &&
           has_proved_address_projection(value)) {
         if (exact_existing_uses) {
           result.push_back(SelectorCandidate{
@@ -3747,6 +3768,7 @@ struct ConvertedFlowEffectProofContext {
   std::set<std::size_t> external_entry_commands;
   std::map<std::size_t, IrOp> raised_command_by_item;
   std::map<TraceState, passes::X2ValueDataflowState> symbolic_x2_entries;
+  bool symbolic_x2_ready = false;
 };
 
 ConvertedFlowEffectProofContext build_converted_flow_effect_proof_context(
@@ -3776,7 +3798,16 @@ ConvertedFlowEffectProofContext build_converted_flow_effect_proof_context(
     result.raised_command_by_item.emplace(item_index, raised.at(raised_index));
     ++raised_index;
   }
+  return result;
+}
 
+void ensure_symbolic_flow_entries(
+    const TraceGraph& trace, ConvertedFlowEffectProofContext& result) {
+  if (result.symbolic_x2_ready) return;
+  result.symbolic_x2_ready = true;
+  // Unconditional PP/BP substitutions have identical stack/X2 transfers.
+  // Build the unchanged must-analysis only when a conditional proof actually
+  // needs symbolic entries; share its fixed point across all layout trials.
   std::deque<TraceState> pending;
   for (const auto& [state, edges] : trace) {
     (void)edges;
@@ -3825,7 +3856,6 @@ ConvertedFlowEffectProofContext build_converted_flow_effect_proof_context(
       pending.push_back(edge.target);
     }
   }
-  return result;
 }
 
 bool converted_flow_effects_equivalent(
@@ -3887,6 +3917,7 @@ bool converted_flow_effects_equivalent(
     converted_opcode_by_command.emplace(flow.command_origin, flow.direct_opcode);
 
   const auto symbolic_entry_has_x2_equal_x = [&](std::size_t command) {
+    ensure_symbolic_flow_entries(trace, proof_context);
     bool found = false;
     for (const auto& [state, edges] : trace) {
       (void)edges;
@@ -3906,6 +3937,7 @@ bool converted_flow_effects_equivalent(
 
   const auto paired_x2_reconverges_after_fallthrough =
       [&](std::size_t command) {
+        ensure_symbolic_flow_entries(trace, proof_context);
         const auto raised_command = raised_command_by_item.find(command);
         const auto converted_opcode = converted_opcode_by_command.find(command);
         if (raised_command == raised_command_by_item.end() ||
@@ -5072,7 +5104,7 @@ std::optional<CandidateArtifact> try_candidate(
       std::string fold_failure;
       if (apply_transparent_fallthrough_jump_fold(
               items, segments, fold, references, control_flow, *main,
-              &fold_failure)) {
+              &fold_failure, options.allow_unreferenced_jump_labels)) {
         jump_folds.push_back(fold);
       } else {
         if (!fold_failures.empty())
@@ -5788,6 +5820,316 @@ bool better_candidate(const CandidateArtifact& left, const CandidateArtifact& ri
 
 } // namespace
 
+std::vector<DeferredNaturalTargetSelectorAllocation>
+deferred_natural_target_selector_allocations(
+    const std::vector<MachineItem>& items,
+    const std::vector<PreloadReport>& preloads,
+    const AuthoritativePostLayoutControlFlow& control_flow,
+    const std::map<std::string, int>& encoded_selector_targets,
+    const PostLayoutControlFlowOptions& control_options,
+    const DeferredNaturalTargetSelectorAllocationOptions& options) {
+  std::vector<DeferredNaturalTargetSelectorAllocation> result;
+  const auto model = control_options.address_space_model;
+  if (!control_flow.proved || control_flow.address_space_model != model ||
+      options.maximum_assignments == 0 || options.maximum_candidates == 0 ||
+      options.maximum_growth_cells < 0 || items.size() > 640U ||
+      has_executable_address_words(items))
+    return result;
+  // This is the ordinary logical space. Side-entry consumers need a separate
+  // encoded-counter transport certificate, not just an equal physical target.
+  if (std::any_of(items.begin(), items.end(), [](const auto& item) {
+        return item.raw || item.formal_opcode || item.indirect_flow_formal_targets ||
+            (item.kind == MachineItemKind::Address &&
+             !std::holds_alternative<std::string>(item.target));
+      }))
+    return result;
+  bool unique = false;
+  const auto preload_by_register = preload_index(preloads, unique);
+  if (!unique) return result;
+  const auto index = index_artifact(items);
+  const auto references = collect_direct_references(items, index, model);
+  if (!references) return result;
+  const auto direct = shortenable_direct_flows(*references, items);
+
+  struct Carrier {
+    int reg = -1;
+    std::size_t preload = 0;
+    int encoded = -1;
+    std::optional<std::size_t> old_target;
+  };
+  std::vector<Carrier> carriers;
+  for (int reg = 7; reg <= 14; ++reg) {
+    const auto name = register_name(reg);
+    const auto found = preload_by_register.find(name);
+    if (found == preload_by_register.end() ||
+        !is_literal_runtime_preload(preloads[found->second]) ||
+        register_is_written(items, control_flow, reg))
+      continue;
+    const auto& preload = preloads[found->second];
+    if (!has_proved_address_projection(preload.value)) continue;
+    std::optional<IndirectAddressEvaluation> decoded;
+    try {
+      decoded = evaluate_indirect_address(name, preload.value,
+                                           IndirectOperationKind::Flow, model);
+    } catch (const std::exception&) {
+      continue;
+    }
+    if (!decoded || !decoded->actual_flow_target || !decoded->formal_address ||
+        decoded->formal_address->kind != FormalAddressKind::Official)
+      continue;
+    Carrier carrier{reg, found->second, *decoded->actual_flow_target, {}};
+    bool valid = true;
+    for (const auto source : indirect_flow_uses(items, reg)) {
+      const auto target = target_origin_for_flow_use(control_flow, source);
+      const auto origin = encoded_selector_targets.find(name);
+      const auto& command = items[source];
+      if (!target || (carrier.old_target && carrier.old_target != target) ||
+          origin == encoded_selector_targets.end() || origin->second != carrier.encoded ||
+          command.manual_interaction || command.borrowed_entry_phase_selector ||
+          is_proved_dynamic_selector_consumer(command) ||
+          !command.indirect_flow_targets || command.indirect_flow_targets->empty() ||
+          !std::all_of(command.indirect_flow_targets->begin(),
+                       command.indirect_flow_targets->end(), [](const auto& target_value) {
+                         return std::holds_alternative<std::string>(target_value);
+                       }) ||
+          !selector_writeback_is_unobserved(items, control_flow, source, preload, model)) {
+        valid = false;
+        break;
+      }
+      carrier.old_target = target;
+    }
+    if (valid && (!carrier.old_target &&
+        register_has_nonflow_use(items, reg) &&
+        !indirect_writeback_preserves_literal_word(*decoded, preload.value)))
+      valid = false;
+    if (valid) carriers.push_back(carrier);
+  }
+  // A single-carrier conversion already belongs to ordinary natural-target
+  // layout. This lane searches coupled allocation choices without stealing
+  // that older lane's finite candidate budget.
+  if (carriers.size() < 2U) return result;
+
+  struct Group {
+    std::size_t target = 0;
+    std::string label;
+    int old_indirect = 0;
+    int direct_count = 0;
+  };
+  std::vector<Group> groups;
+  const auto add_group = [&](std::size_t target) -> std::optional<std::size_t> {
+    const auto old = std::find_if(groups.begin(), groups.end(),
+        [&](const auto& group) { return group.target == target; });
+    if (old != groups.end()) return static_cast<std::size_t>(old - groups.begin());
+    std::optional<std::string> label;
+    for (const auto& [name, address] : index.label_addresses)
+      if (address == index.item_addresses[target] && (!label || name < *label)) label = name;
+    if (!label) return std::nullopt;
+    groups.push_back({target, *label, 0, 0});
+    return groups.size() - 1U;
+  };
+  for (const auto& carrier : carriers)
+    if (carrier.old_target) {
+      const auto group = add_group(*carrier.old_target);
+      if (!group) return result;
+      groups[*group].old_indirect +=
+          static_cast<int>(indirect_flow_uses(items, carrier.reg).size());
+    }
+  std::map<std::size_t, DirectFlowSite> direct_by_command;
+  for (const auto& site : direct) {
+    if (items[site.command].manual_interaction || items[site.command].borrowed_entry_phase_selector)
+      continue;
+    const auto group = add_group(site.target);
+    if (!group) continue;
+    ++groups[*group].direct_count;
+    direct_by_command.emplace(site.command, site);
+  }
+  if (groups.size() < 2U || groups.size() > 16U) return result;
+  std::map<int, std::size_t> carrier_by_register;
+  for (std::size_t c = 0; c < carriers.size(); ++c)
+    carrier_by_register.emplace(carriers[c].reg, c);
+  std::map<std::size_t, std::size_t> group_by_target;
+  for (std::size_t g = 0; g < groups.size(); ++g) group_by_target.emplace(groups[g].target, g);
+
+  std::map<std::size_t, std::size_t> identity;
+  for (std::size_t i = 0; i < items.size(); ++i) identity.emplace(i, i);
+  const auto trace = build_trace_graph(items, control_flow, identity, model,
+                                       static_cast<int>(control_options.maximum_execution_states));
+  const auto external = external_identities(control_flow, identity);
+  if (!trace || !external) return result;
+  auto effects = build_converted_flow_effect_proof_context(items, control_flow, *trace);
+
+  struct Assignment {
+    std::vector<int> group_by_carrier;
+    int delta = 0;
+  };
+  std::vector<Assignment> assignments;
+  std::vector<int> chosen(carriers.size(), -1);
+  std::set<int> occupied;
+  std::size_t work = 0;
+  // Enumerate a bounded matching, not a sequence of pairwise greedy swaps.
+  // Whole-family permutations run first; replacements by direct-only groups
+  // and complete releases then use their own remaining assignment choices.
+  const auto enumerate = [&](auto&& self, std::size_t at, bool incumbent_groups_only) -> void {
+    if (assignments.size() >= options.maximum_assignments || ++work > 20000U) return;
+    if (at == carriers.size()) {
+      int delta = 0;
+      for (std::size_t g = 0; g < groups.size(); ++g)
+        delta += occupied.contains(static_cast<int>(g))
+            ? -groups[g].direct_count : groups[g].old_indirect;
+      bool same = true;
+      for (std::size_t c = 0; c < carriers.size(); ++c)
+        same = same && ((chosen[c] < 0 && !carriers[c].old_target) ||
+            (chosen[c] >= 0 && carriers[c].old_target ==
+                                      groups[static_cast<std::size_t>(chosen[c])].target));
+      if (same || delta > options.maximum_growth_cells ||
+          std::any_of(assignments.begin(), assignments.end(),
+              [&](const auto& old) { return old.group_by_carrier == chosen; }))
+        return;
+      assignments.push_back({chosen, delta});
+      return;
+    }
+    std::vector<int> choices;
+    if (carriers[at].old_target)
+      choices.push_back(static_cast<int>(group_by_target.at(*carriers[at].old_target)));
+    for (std::size_t g = 0; g < groups.size(); ++g)
+      if ((!incumbent_groups_only || groups[g].old_indirect > 0) &&
+          std::find(choices.begin(), choices.end(), static_cast<int>(g)) == choices.end())
+        choices.push_back(static_cast<int>(g));
+    if (incumbent_groups_only && !carriers[at].old_target) choices.clear();
+    if (!incumbent_groups_only || !carriers[at].old_target) choices.push_back(-1);
+    for (int group : choices) {
+      if (group >= 0 && !occupied.insert(group).second) continue;
+      chosen[at] = group;
+      self(self, at + 1U, incumbent_groups_only);
+      if (group >= 0) occupied.erase(group);
+      if (assignments.size() >= options.maximum_assignments || work > 20000U) break;
+    }
+    chosen[at] = -1;
+  };
+  enumerate(enumerate, 0, true);
+  enumerate(enumerate, 0, false);
+  std::stable_sort(assignments.begin(), assignments.end(),
+      [](const auto& a, const auto& b) { return a.delta < b.delta; });
+
+  for (const auto& assignment : assignments) {
+    std::map<std::size_t, const Carrier*> selected;
+    std::vector<NaturalTargetAnchorCandidate> anchors;
+    std::vector<int> released;
+    for (std::size_t c = 0; c < carriers.size(); ++c) {
+      released.push_back(carriers[c].reg);
+      const int g = assignment.group_by_carrier[c];
+      if (g < 0) continue;
+      selected.emplace(groups[static_cast<std::size_t>(g)].target, &carriers[c]);
+      anchors.push_back({.selector = {
+            .register_index = carriers[c].reg,
+            .register_name = register_name(carriers[c].reg),
+            .value = preloads[carriers[c].preload].value,
+            .fixed_target = carriers[c].encoded},
+          .target_origin = groups[static_cast<std::size_t>(g)].target});
+    }
+    std::vector<NaturalTargetFlowRewrite> shortened;
+    std::vector<DisplacedIndirectFlowRewrite> expanded;
+    std::set<std::size_t> erased;
+    std::map<std::size_t, std::pair<int, std::string>> replacements;
+    bool valid = true;
+    for (std::size_t source = 0; source < items.size(); ++source) {
+      const auto& old = items[source];
+      if (old.kind != MachineItemKind::Op) continue;
+      std::optional<std::size_t> target;
+      std::optional<int> direct_opcode;
+      if (const auto site = direct_by_command.find(source); site != direct_by_command.end()) {
+        target = site->second.target;
+        direct_opcode = site->second.direct_opcode;
+      } else if (is_indirect_flow(old.opcode) &&
+                 carrier_by_register.contains(encoded_register(old.opcode))) {
+        target = target_origin_for_flow_use(control_flow, source);
+        direct_opcode = direct_opcode_for_indirect_flow(old.opcode);
+      } else {
+        continue;
+      }
+      if (!target || !direct_opcode || !group_by_target.contains(*target)) {
+        valid = false;
+        break;
+      }
+      const auto pick = selected.find(*target);
+      const int next_opcode = pick == selected.end() ? *direct_opcode
+          : *indirect_family_for_direct_flow(*direct_opcode) + pick->second->reg;
+      if (next_opcode == old.opcode) continue;
+      const auto& label = groups[group_by_target.at(*target)].label;
+      replacements.emplace(source, std::pair{next_opcode, label});
+      if (is_indirect_flow(old.opcode)) {
+        if (pick == selected.end())
+          expanded.push_back({source, items.size() + expanded.size(), *target, next_opcode});
+        // Same-family R7..Re substitutions have identical conditional X2,
+        // stack and number-entry transfers; only their separately proved
+        // selector writebacks differ.
+      } else {
+        erased.insert(direct_by_command.at(source).operand);
+        shortened.push_back({source, *target, register_name(pick->second->reg), old.opcode});
+      }
+    }
+    if (!valid || replacements.empty() ||
+        !converted_flow_effects_equivalent(items, anchors, shortened, expanded,
+                                           *trace, effects, released))
+      continue;
+    DeferredNaturalTargetSelectorAllocation candidate;
+    for (const auto& [target, carrier] : selected) {
+      (void)target;
+      candidate.encoded_selector_targets.emplace(register_name(carrier->reg), carrier->encoded);
+    }
+    std::map<std::size_t, std::size_t> origin_by_item;
+    std::map<std::size_t, std::size_t> new_by_origin;
+    for (std::size_t source = 0; source < items.size(); ++source) {
+      if (erased.contains(source)) {
+        if (source > 0 && items[source - 1U].kind == MachineItemKind::Label) valid = false;
+        continue;
+      }
+      auto item = items[source];
+      const auto change = replacements.find(source);
+      if (change != replacements.end()) {
+        item.opcode = change->second.first;
+        item.mnemonic = opcode_by_code(item.opcode).name;
+        item.logical_register_name.reset();
+        item.indirect_flow_targets.reset();
+        if (is_indirect_flow(item.opcode))
+          item.indirect_flow_targets = std::vector<IrTarget>{change->second.second};
+      }
+      new_by_origin.emplace(source, candidate.items.size());
+      origin_by_item.emplace(candidate.items.size(), source);
+      candidate.items.push_back(std::move(item));
+      if (change != replacements.end() && is_indirect_flow(items[source].opcode) &&
+          !is_indirect_flow(change->second.first))
+        candidate.items.push_back(MachineItem::address(change->second.second));
+    }
+    if (!valid) continue;
+    const auto final_flow = build_post_layout_control_flow(candidate.items, control_options);
+    if (!final_flow.proved) continue;
+    for (const auto& [source, change] : replacements) {
+      const auto final_source = new_by_origin.at(source);
+      if (is_indirect_flow(change.first)) {
+        const auto& carrier = carriers[carrier_by_register.at(encoded_register(change.first))];
+        if (!selector_writeback_is_unobserved(candidate.items, final_flow, final_source,
+                                               preloads[carrier.preload], model)) {
+          valid = false;
+          break;
+        }
+      }
+    }
+    if (!valid || !indirect_memory_facts_equivalent(control_flow, final_flow, origin_by_item) ||
+        build_trace_graph(candidate.items, final_flow, origin_by_item, model,
+                          static_cast<int>(control_options.maximum_execution_states)) != trace ||
+        external_identities(final_flow, origin_by_item) != external)
+      continue;
+    candidate.changed_flows = static_cast<int>(replacements.size());
+    candidate.cell_delta = index_artifact(candidate.items).cells - index.cells;
+    if (candidate.cell_delta != assignment.delta) continue;
+    result.push_back(std::move(candidate));
+    if (result.size() >= options.maximum_candidates) break;
+  }
+  return result;
+}
+
+
 std::optional<std::string> rebind_proved_natural_fractional_selector_preload(
     const std::vector<MachineItem>& items, const PreloadReport& preload,
     int old_target, int new_target, AddressSpaceModel model) {
@@ -5846,7 +6188,13 @@ std::optional<std::string> rebind_stable_preloaded_indirect_flow_selector(
       preload.value == std::to_string(old_target) &&
       prove_discarded_indirect_selector_reads_unobserved(items, control_flow, reg);
   if (!register_has_nonflow_use(items, reg) || discarded_data_only) {
-    const std::string address_value = std::to_string(new_target);
+    if (new_target < 0 || new_target > official_program_last_address(model))
+      return std::nullopt;
+    // A decimal 100 selects 00, not A0. Preloaded address-only words can use
+    // canonical BCD counters in the entire official window; runtime decimal
+    // charges and data-bearing words do not inherit this wider codec.
+    const std::string address_value = new_target <= 99
+        ? std::to_string(new_target) : format_official_address(new_target, model);
     if (preload_value_targets(preload.register_name, address_value, new_target,
                               model)) {
       return address_value;
@@ -6288,6 +6636,8 @@ NaturalTargetComponentLayoutResult optimize_natural_target_component_layout(
   ConvertedFlowEffectProofContext flow_effect_proof_context =
       build_converted_flow_effect_proof_context(logical_items, *logical_flow,
                                                 *original_trace);
+  if (options.eager_symbolic_flow_analysis)
+    ensure_symbolic_flow_entries(*original_trace, flow_effect_proof_context);
 
   std::vector<SelectorCandidate> selectors = selector_candidates(
       logical_items, preloads, *logical_flow, options);

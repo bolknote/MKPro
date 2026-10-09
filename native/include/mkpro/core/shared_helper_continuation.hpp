@@ -24,6 +24,10 @@ struct SharedHelperContinuationCall {
   std::size_t join_item_index = 0;
   std::size_t store_item_index = 0;
   int call_address = -1;
+  // Ordinary calls may enter through a linear prologue before the shared body.
+  // This identity is retained through layout; the divergent call enters the body.
+  int entry_address = -1;
+  std::size_t entry_item_index = 0;
   bool indirect = false;
   bool ordinary = false;
 };
@@ -41,6 +45,9 @@ struct SharedHelperContinuationOptions {
   // targets, opaque entries and non-converged cycles fail closed. This is a
   // safety limit, not an optimization heuristic.
   int maximum_convergence_states = 512;
+  // Opt-in for the atomic common-processor/dual-mode transaction. Wrapper-only
+  // clients retain the original same-entry contract.
+  bool allow_entry_prologues = false;
 };
 
 struct SharedHelperContinuationProof {
@@ -73,6 +80,13 @@ SharedHelperContinuationProof
 verify_shared_helper_continuation(const std::vector<MachineItem>& items,
                                   const std::string& helper_label,
                                   const SharedHelperContinuationOptions& options = {});
+
+// Prove a bounded linear route into a body, including calls to closed,
+// straight-line leaf procedures. No branch, raw/manual command, formal alias,
+// mutable selector, stop or recursive call is admitted in that route.
+bool shared_helper_entry_reaches_body(
+    const std::vector<MachineItem>& items, int entry_address, int body_address,
+    const SharedHelperContinuationOptions& options = {});
 
 // Scan every label and return the first fully proved candidate.  This function
 // is intentionally analysis-only. shared_helper_wrapper consumes this
