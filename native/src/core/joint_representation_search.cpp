@@ -375,6 +375,147 @@ bool charged_constraint_consumer(const MachineItem& item) {
                    "late-decimal-selector-consumer") != item.roles.end();
 }
 
+// A literal may pay for a different placement of a whole stable selector family.
+// This is a conditional semantic edge: no intermediate geometry is executable.
+// The existing joint solver must close every target and preload before publishing.
+
+std::vector<ConstrainedRepresentation> literal_selector_equations(
+    const ConstrainedRepresentation& parent, const PostLayoutControlFlowOptions& options,
+    std::size_t maximum_candidates) {
+  std::vector<ConstrainedRepresentation> result;
+  if (maximum_candidates == 0) return result;
+  const auto& items = parent.artifact.items;
+  const auto ordinary = [&](std::size_t at) {
+    if (at >= items.size()) return false;
+    const auto& item = items[at];
+    return item.kind == MachineItemKind::Op && !item.raw && item.roles.empty() &&
+        !item.manual_interaction && !item.indirect_flow_targets &&
+        !item.indirect_memory_targets && !item.indirect_flow_formal_targets &&
+        !item.logical_register_name && !item.logical_indirect_memory_targets &&
+        !item.procedure_boundary && item.semantic_call_origins.empty() &&
+        !item.discarded_indirect_recall_value && !item.borrowed_entry_phase_selector &&
+        !item.formal_opcode;
+  };
+  const auto literal_start = [&](std::size_t at) {
+    return at + 2U < items.size() && ordinary(at) && ordinary(at + 1U) &&
+        ordinary(at + 2U) && items[at].opcode >= 1 && items[at].opcode <= 9 &&
+        items[at + 1U].opcode >= 0 && items[at + 1U].opcode <= 9 &&
+        items[at + 2U].opcode >= 0x10 && items[at + 2U].opcode <= 0x13;
+  };
+  bool potential = false;
+  for (std::size_t at = 0; at < items.size() && !potential; ++at)
+    potential = literal_start(at);
+  if (!potential) return result;
+  const auto flow = build_post_layout_control_flow(items, options);
+  if (!flow.proved) return result;
+  const auto lift = analyze_post_layout_automatic_entry_lift(items, flow);
+  if (!lift) return result;
+  std::vector<std::vector<std::size_t>> predecessors(flow.execution_states.size());
+  std::map<std::size_t, std::vector<std::size_t>> contexts;
+  for (std::size_t state = 0; state < flow.execution_states.size(); ++state) {
+    contexts[flow.execution_states[state].item_index].push_back(state);
+    for (const auto next : flow.execution_successors[state])
+      predecessors[next].push_back(state);
+  }
+  std::set<std::size_t> entries;
+  for (const auto& entry : flow.external_entries) entries.insert(entry.entry.item_index);
+  std::map<int, std::vector<std::size_t>> literals;
+  for (std::size_t at = 0; at + 2U < items.size(); ++at) {
+    if (!literal_start(at) || !contexts.contains(at) || !contexts.contains(at + 1U) ||
+        !contexts.contains(at + 2U) || entries.contains(at) || entries.contains(at + 1U))
+      continue;
+    bool safe = std::all_of(contexts.at(at).begin(), contexts.at(at).end(),
+        [&](std::size_t state) { return (*lift)[state]; });
+    for (const auto state : contexts[at + 1U]) {
+      safe = safe && !predecessors[state].empty();
+      for (const auto previous : predecessors[state])
+        safe = safe && flow.execution_states[previous].item_index == at;
+    }
+    // Digit entry and a recall have identical value and stack lift here, but
+    // not X2 or entry mode. The retained arithmetic closes both entry modes;
+    // every exact continuation must independently kill the old X2 difference.
+    StackValueEqualityState equal{{true, true, true, true}, false, true};
+    safe = safe && transfer_stack_value_equality(
+        equal, items[at + 2U].opcode, StackValueEqualityStepKind::Plain) !=
+            StackValueEqualityTransfer::Rejected;
+    std::set<int> continuations;
+    for (const auto state : contexts.at(at + 2U)) {
+      safe = safe && !flow.execution_successors[state].empty();
+      for (const auto next : flow.execution_successors[state])
+        continuations.insert(flow.execution_states[next].address);
+    }
+    for (const int address : continuations)
+      safe = safe && prove_post_layout_stack_entry_equality(items, flow, address, equal,
+          {.refine_runtime_selectors = false, .numeric_entry_closed = true});
+    if (safe) literals[10 * items[at].opcode + items[at + 1U].opcode].push_back(at);
+  }
+  for (const auto& [value, sites] : literals) {
+    const auto spelling = std::to_string(value);
+    for (std::size_t p = 0; p < parent.artifact.preloads.size(); ++p) {
+      const auto& preload = parent.artifact.preloads[p];
+      if (preload.register_name.size() != 1U ||
+          std::string("789abcde").find(preload.register_name.front()) == std::string::npos)
+        continue;
+      const int reg = static_cast<int>(std::string("0123456789abcde").find(
+          preload.register_name.front()));
+      const auto decoded = evaluate_indirect_address(preload.register_name, preload.value,
+          IndirectOperationKind::Flow, options.address_space_model);
+      if (!decoded || !decoded->actual_flow_target) continue;
+      const int old_target = *decoded->actual_flow_target;
+      const auto known = parent.encoded_selectors.find(preload.register_name);
+      if (known != parent.encoded_selectors.end() && known->second != old_target) continue;
+      const auto word = rebind_stable_preloaded_indirect_flow_selector(items, preload, flow,
+          old_target, value, options.address_space_model, &parent.artifact.preloads);
+      if (!word || *word != spelling) continue;
+      std::set<std::string> labels;
+      bool consistent = true;
+      for (const auto& item : items) {
+        if (!item.indirect_flow_targets || (item.opcode & 15) != reg) continue;
+        if (charged_constraint_consumer(item)) { consistent = false; break; }
+        for (const auto& target : *item.indirect_flow_targets) {
+          const auto* label = std::get_if<std::string>(&target);
+          if (!label || !parent.targets.contains(*label) ||
+              (known == parent.encoded_selectors.end() &&
+               parent.targets.at(*label) != old_target)) {
+            consistent = false; break;
+          }
+          labels.insert(*label);
+        }
+      }
+      if (!consistent || labels.empty()) continue;
+      ConstrainedRepresentation next = parent;
+      next.artifact.preloads[p].value = spelling;
+      // Preserve immutable source/setup provenance; only the proved runtime word changes.
+      next.encoded_selectors[preload.register_name] = value;
+      for (const auto& label : labels) next.targets[label] = value;
+      std::set<std::size_t> starts(sites.begin(), sites.end());
+      next.artifact.items.clear();
+      for (std::size_t at = 0; at < items.size(); ++at) {
+        if (starts.contains(at)) {
+          auto recall = items[at];
+          recall.opcode = 0x60 + reg;
+          recall.mnemonic = opcode_by_code(recall.opcode).name;
+          recall.comment = "joint literal/address constant";
+          next.artifact.items.push_back(std::move(recall));
+          ++at;
+        } else next.artifact.items.push_back(items[at]);
+      }
+      if (!refresh_constraint_targets(next) ||
+          !build_post_layout_control_flow(next.artifact.items, options).proved) continue;
+      next.artifact.optimizations.push_back({"joint-literal-selector-co-synthesis",
+          "Shared numeric literal " + spelling + " with stable selector R" +
+          preload.register_name + "; removed " + std::to_string(sites.size()) +
+          " cells under one deferred target equation and full stack/X1/X2 continuation proofs."});
+      if (std::getenv("MKPRO_NATIVE_TRACE_JOINT_LAYOUT_SEARCH"))
+        std::cerr << "[literal-selector] R" << preload.register_name << "=" << value
+                  << " removed=" << sites.size() << '\n';
+      result.push_back(std::move(next));
+      if (result.size() == maximum_candidates) return result;
+    }
+  }
+  return result;
+}
+
 std::optional<LayoutSearchArtifact> close_representation_constraints(
     const ConstrainedRepresentation& node, const passes::PassContext& context,
     const PostLayoutControlFlowOptions& control_options, bool complete_preloads,
@@ -711,6 +852,9 @@ TransactionSearchResult<LayoutSearchArtifact> search_joint_representation_constr
       for (auto& proposal : passes::stable_target_split_bridge_candidates(
                ops, parent.artifact.preloads, parent.targets, context, control_options))
         add(std::move(proposal), "stable-target-region-split");
+    if (preload_environment_complete)
+      for (auto& next : literal_selector_equations(parent, control_options, 6))
+        edges.push_back({std::move(next), "literal-selector-equations", true});
     return edges;
   };
 

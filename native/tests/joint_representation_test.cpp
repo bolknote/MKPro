@@ -357,6 +357,136 @@ void representation_and_composition_tests() {
   std::cout << "joint: " << cells(combined) << " -> " << cells(result) << " cells\n";
 }
 
+LayoutSearchArtifact literal_selector_fixture(int repetitions, const std::string& reg,
+                                             bool recall_entry = false) {
+  LayoutSearchArtifact fixture;
+  auto& items = fixture.items;
+  append(items, {recall_entry ? 0x60 : 0x40});
+  for (int i = 0; i < repetitions; ++i)
+    append(items, {2, 0, 0x12, 0x61, 0x10});
+  append(items, {0xa0 + static_cast<int>(std::string("0123456789abcde").find(reg))});
+  items.back().indirect_flow_targets = std::vector<IrTarget>{std::string{"numeric_worker"}};
+  call(items, "other_worker");
+  append(items, {0x62, 0x50});
+  items.back().stop_disposition = StopDisposition::Terminal;
+  const int target = cells(items);
+  items.push_back(MachineItem::label("numeric_worker"));
+  append(items, {0x61, 2, 0x10, 0x44, 0x52});
+  items.push_back(MachineItem::label("other_worker"));
+  for (int i = 1; i < 14 - 4 * repetitions; ++i)
+    append(items, {0x62});
+  append(items, {0x52});
+  fixture.preloads.push_back({.register_name = reg, .value = std::to_string(target),
+      .lowered_data_value = "source-address-owner"});
+  return fixture;
+}
+
+std::vector<std::string> observe_literal_selector(
+    const LayoutSearchArtifact& artifact, const std::string& selector) {
+  const auto resolved = resolve_machine_items(artifact.items);
+  require(resolved.diagnostics.empty(), "literal/selector fixture must resolve");
+  std::vector<int> codes;
+  for (const auto& step : resolved.steps) codes.push_back(step.opcode);
+  emulator::MK61 calc;
+  require(calc.load_program(codes).diagnostics.empty(), "literal/selector ROM load");
+  for (const char reg : std::string("0123456789abcde"))
+    calc.set_register(std::string(1, reg), "7");
+  for (const auto& preload : artifact.preloads)
+    calc.set_register(preload.register_name, preload.value);
+  calc.set_register("X", "7");
+  calc.set_register("Y", "11");
+  calc.set_register("Z", "13");
+  calc.set_register("T", "17");
+  calc.press_sequence({"В/О", "С/П"});
+  require(calc.run_until_stable(12000, 8).stopped, "literal/selector ROM stop");
+  std::vector<std::string> observation;
+  for (const char* name : {"X", "Y", "Z", "T", "X1"})
+    observation.push_back(calc.read_register(name));
+  for (const char reg : std::string("0123456789abcde"))
+    if (std::string(1, reg) != selector)
+      observation.push_back(calc.read_register(std::string(1, reg)));
+  calc.press(".");
+  observation.push_back(calc.display_text(true));
+  return observation;
+}
+
+bool used_literal_selector_equations(
+    const TransactionSearchResult<LayoutSearchArtifact>& result) {
+  return result.incumbent &&
+      std::any_of(result.incumbent->optimizations.begin(), result.incumbent->optimizations.end(),
+          [](const auto& report) { return report.name == "joint-literal-selector-co-synthesis"; });
+}
+
+void literal_selector_tests() {
+  for (const std::string reg : {"8", "c", "e"})
+    for (int repetitions = 1; repetitions <= 3; ++repetitions)
+      for (const bool recalled : {false, true}) {
+        const auto before = literal_selector_fixture(repetitions, reg, recalled);
+        const auto result = search_joint_representation_constraints(before, {});
+        require(used_literal_selector_equations(result),
+                "joint search must synthesize a literal/address word and its new placement");
+        require(cells(before.items) == 25 + repetitions &&
+                    cells(result.incumbent->items) <= 25,
+                "all literal copies must repay one joint layout, without added registers");
+        require(result.incumbent->preloads.size() == before.preloads.size() &&
+                    result.incumbent->preloads.front().lowered_data_value ==
+                        before.preloads.front().lowered_data_value,
+                "co-synthesis must preserve setup ownership and immutable data provenance");
+        require(observe_literal_selector(before, reg) ==
+                    observe_literal_selector(*result.incumbent, reg),
+                "co-synthesis must preserve ROM results, stack, X1, X2, data and returns");
+        const auto repeated = search_joint_representation_constraints(before, {});
+        require(repeated.incumbent &&
+                    same_layout_search_artifact(*result.incumbent, *repeated.incumbent),
+                "joint word/layout choice must be deterministic");
+      }
+
+  const auto reject = [](LayoutSearchArtifact fixture, const char* message) {
+    // Fixture edits retain the command identity but may move its initial PC.
+    int address = 0;
+    for (const auto& item : fixture.items) {
+      if (item.kind == MachineItemKind::Label && item.name == "numeric_worker")
+        fixture.preloads.front().value = std::to_string(address);
+      if (item.kind != MachineItemKind::Label) ++address;
+    }
+    require(!used_literal_selector_equations(search_joint_representation_constraints(fixture, {})),
+            message);
+  };
+  auto exposed = literal_selector_fixture(1, "c");
+  exposed.items.insert(exposed.items.begin(),
+      {MachineItem::op(0x6c, "observe selector"), MachineItem::op(0x45, "observable copy")});
+  reject(std::move(exposed), "an observed preload must not acquire a different data value");
+  auto shadow = literal_selector_fixture(1, "c");
+  shadow.items[4] = MachineItem::op(0x0a, "observe X2 before synchronization");
+  reject(std::move(shadow), "an observable entry shadow must block literal replacement");
+  auto suppressed = literal_selector_fixture(1, "c");
+  suppressed.items[0] = MachineItem::op(0x0e, "suppress next literal lift");
+  reject(std::move(suppressed), "Enter suppression must not be mistaken for a fresh recall");
+  auto raw = literal_selector_fixture(1, "c");
+  raw.items[1].raw = true;
+  reject(std::move(raw), "raw literals must retain their exact command sequence");
+  auto written = literal_selector_fixture(1, "c");
+  written.items[0] = MachineItem::op(0x4c, "mutable selector");
+  reject(std::move(written), "a mutable selector must not become an immutable literal");
+  auto generated = literal_selector_fixture(1, "c");
+  generated.preloads.front().setup_expression = true;
+  reject(std::move(generated), "computed setup must not be changed by rewriting its report");
+  auto side = literal_selector_fixture(1, "c");
+  side.items.insert(side.items.begin() + 2, MachineItem::label("literal_interior"));
+  side.items.insert(side.items.begin(),
+      {MachineItem::op(0x53, "side entry"), MachineItem::address(std::string{"literal_interior"})});
+  reject(std::move(side), "an independent entry into the literal must reject pooling");
+  const auto complete = literal_selector_fixture(1, "c");
+  require(!used_literal_selector_equations(
+              search_joint_representation_constraints(complete, {}, {}, {}, false)),
+          "an incomplete preload environment cannot authorize word co-synthesis");
+  require(!used_literal_selector_equations(search_joint_representation_constraints(
+              complete, {}, {}, {.maximum_expansions = 0, .maximum_candidates = 0,
+                                  .maximum_depth = 0, .maximum_growth_cells = 0})),
+          "an exhausted search must not publish an unchecked literal equation");
+  std::cout << "joint literal/address: 26/27/28 -> at most 25 cells; ROM and rejection contracts passed\n";
+}
+
 void layout_tests() {
   CompileOptions options;
   const passes::PassContext context{options};
@@ -383,6 +513,7 @@ int main() {
     region_tests();
     interactive_region_tests();
     layout_tests();
+    literal_selector_tests();
     representation_and_composition_tests();
     std::cout << "joint representation: compiler, constraints and ROM passed\n";
     return 0;

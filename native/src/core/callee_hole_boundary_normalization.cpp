@@ -661,8 +661,11 @@ bool selector_charge_entry_closer_opcode(int opcode) {
   // These commands finish numeric entry and enable the next digit's
   // automatic lift. Direct predicates and FL0..FL3 do so on BOTH edges,
   // including after open mantissa/exponent and Enter-suppressed input.
-  // This is independent of the visible stack/X2 effect or branch outcome.
-  return (opcode >= 0x10 && opcode <= 0x13) || opcode == 0x15 ||
+  // Direct recalls also enable the next digit's lift, independently of the
+  // recalled value or prior entry mode. This does not assert X2 equality.
+  // The shared ROM contract covers every stock register and entry prefix.
+  return (opcode >= 0x60 && opcode <= 0x6e) ||
+         (opcode >= 0x10 && opcode <= 0x13) || opcode == 0x15 ||
          opcode == 0x22 || opcode == 0x31 || opcode == 0x34 || opcode == 0x35 ||
          opcode == 0x53 || (opcode >= 0x57 && opcode <= 0x5e) ||
          (opcode >= 0x40 && opcode <= 0x4e) ||

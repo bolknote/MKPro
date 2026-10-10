@@ -95,13 +95,15 @@ std::vector<std::string> observe(const std::vector<IrOp>& ops,
   return observations;
 }
 
-enum class ChargeCase { Direct, ThroughCall, UnknownEntry, UnknownWrite, Resume, Raw };
+enum class ChargeCase { Direct, ThroughCall, AfterRecall, UnknownEntry, UnknownWrite, Resume, Raw };
 
 std::vector<IrOp> charged_fixture(ChargeCase kind = ChargeCase::Direct,
                                   const std::string& reg = "a", bool shortened = false) {
   std::vector<IrOp> ops{recall("e"), store("0"), label("charge_digits"), op(0), op(0)};
-  if (kind == ChargeCase::UnknownEntry)
+  if (kind == ChargeCase::AfterRecall)
     ops.erase(ops.begin() + 1);
+  if (kind == ChargeCase::UnknownEntry)
+    ops.erase(ops.begin(), ops.begin() + 2);
   if (kind == ChargeCase::UnknownWrite)
     ops.push_back(recall("e"));
   ops.push_back(kind == ChargeCase::ThroughCall ? call("charge_store") : store(reg));
@@ -144,7 +146,7 @@ bool charged_lift_is_unobserved(const std::vector<IrOp>& ops) {
 }
 
 void literal_selector_contracts() {
-  for (const auto kind : {ChargeCase::Direct, ChargeCase::ThroughCall})
+  for (const auto kind : {ChargeCase::Direct, ChargeCase::ThroughCall, ChargeCase::AfterRecall})
     for (const char* reg : {"7", "a", "c", "e"}) {
       const auto source = charged_fixture(kind, reg);
       require(charged_lift_is_unobserved(source),
@@ -268,7 +270,7 @@ void stable_selector_continuations_preserve_contracts() {
 }
 
 void emulator_stable_selector_continuations_match_rom() {
-  for (const auto kind : {ChargeCase::Direct, ChargeCase::ThroughCall}) {
+  for (const auto kind : {ChargeCase::Direct, ChargeCase::ThroughCall, ChargeCase::AfterRecall}) {
     const auto source = charged_fixture(kind);
     const auto shorter = charged_fixture(kind, "a", true);
     require(charged_lift_is_unobserved(source), "literal-directed deletion must have a data proof");

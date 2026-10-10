@@ -133,7 +133,7 @@ void append(std::vector<MachineItem>& items, std::initializer_list<int> codes) {
 std::vector<MachineItem> fixture(bool unknown = false, bool last_x = false,
                                  bool alias = false, bool bare_read = false) {
   std::vector<MachineItem> items;
-  // Store enables automatic stack lift; recall does not certify it.
+  // Store establishes fresh numeric entry; direct recall has the same lift fact.
   append(items, {0x4b});
   for (int mode = 1; mode <= 8; ++mode) {
     if (unknown && mode == 1)
@@ -237,8 +237,11 @@ void compiler_and_rom() {
     return items;
   };
   check(branch_return(false));
+  auto recalled_entry = original;
+  recalled_entry.front() = MachineItem::op(0x6b, "ROM-certified recall entry");
+  check(recalled_entry);
   auto open_entry = original;
-  open_entry.front() = MachineItem::op(0x6b, "unproved recall entry");
+  open_entry.front() = MachineItem::op(0x0e, "suppressed numeric-entry lift");
   auto open_return = original;
   open_return.insert(open_return.end() - 1, MachineItem::op(2, "returned open entry"));
   for (const auto& bad : {fixture(true), fixture(false, true), fixture(false, false, true),

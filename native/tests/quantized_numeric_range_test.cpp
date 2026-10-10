@@ -92,6 +92,13 @@ void recall_entry_lift_contracts() {
         stop(items);
         const std::vector<PreloadReport> preloads{
             {.register_name = names[reg], .value = word}};
+        const auto flow = build_post_layout_control_flow(items);
+        const auto shared_lift = analyze_post_layout_automatic_entry_lift(items, flow);
+        require(shared_lift.has_value(), "shared entry analysis must accept the ROM fixture");
+        for (std::size_t state = 0; state < flow.execution_states.size(); ++state)
+          if (flow.execution_states[state].item_index == prefixes[prefix].size() + 1U)
+            require((*shared_lift)[state],
+                    "the general entry proof, not only range inference, must know recall lift");
         require(ranges(items, {query}, preloads).x_before.at(query) ==
                     *bound_ordinary_decimal(word),
                 "direct recall must certify the next fresh digit's lift in every register");

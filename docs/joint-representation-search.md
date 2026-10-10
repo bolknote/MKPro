@@ -1091,3 +1091,31 @@ prefixes. Negative tests cover live stack/X2, arithmetic, raw/manual/padding
 barriers and a second unsafe caller. The 4x4 integration also executes generated
 setup and compares its register words with the final preload report.
 
+### Numeric literals and stable selector words in one constraint search
+
+A two-digit positive integer consumed by ordinary arithmetic can share a
+stable R7..Re flow selector. The candidate changes the complete selector family
+and replaces every independently proved copy of that literal with a recall.
+It remains a conditional artifact: the numeric word fixes the destination's
+address, and the existing joint search must solve region order, register-family
+choices, other preloads and runtime callbacks before publishing any result.
+The rule uses opcode effects and command identities, not source names.
+
+The original graph proves fresh numeric entry and excludes side entries into
+the removed digit. A retained arithmetic command synchronizes entry modes;
+the relational continuation proof separately discharges the changed X2 on
+every matched caller path. Raw commands, observable entry shadows, mutable
+selectors, unproved memory aliases, generated setup and incomplete preload
+ownership reject. Retargeting uses the existing data/writeback certificate.
+Immutable source-data provenance is retained rather than overwritten with
+the new numeric role. Only the complete finalized size competes with the
+independent compiler incumbent.
+
+Direct stock-register recall now supplies its ROM-certified next-digit lift
+to the common entry analysis, not just to numeric range inference. This fact
+does not certify a numeric input range or equate the hidden entry shadow.
+Compiler/ROM fixtures combine repeated literals, different selector registers,
+shared callees and their new physical placement; negative fixtures retain
+live X2, Enter suppression, raw input, selector mutation and side entries.
+This mechanism alone has not reduced the 130-cell 4x4 baseline.
+

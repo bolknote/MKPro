@@ -65,6 +65,8 @@ StackValueEqualityState xyz_preserving_selector_charge_state();
 // These ROM-certified entry-closing commands let the first decimal digit
 // supply the lift. Direct predicates and FL0..FL3 close entry on both edges;
 // their tested counter/condition value need not have a known numeric range.
+// Direct R0..Re recalls establish the same next-digit lift without proving
+// anything about the recalled number or equality of the hidden entry shadow.
 // The explicit whitelist is not inferred from visible stack effects. A
 // literal/Enter/manual-input predecessor is deliberately not such a proof.
 bool selector_charge_entry_closer_opcode(int opcode);
