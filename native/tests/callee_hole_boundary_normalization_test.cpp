@@ -3,6 +3,7 @@
 #include "mkpro/core/compiler_static_proof_gate.hpp"
 #include "mkpro/core/late_bound_decimal_selector.hpp"
 #include "mkpro/core/passes/shared_straight_line_helper.hpp"
+#include "mkpro/core/post_layout_control_flow.hpp"
 #include "mkpro/emulator/mk61.hpp"
 
 #include "test_support.hpp"
@@ -200,9 +201,119 @@ bool fused(const core::passes::PassResult& result) {
   });
 }
 
+void dead_stack_producer_contract() {
+  const auto fixture_for = [](bool enter, int entry_mode) {
+    std::vector<IrOp> ops{
+        transfer(IrKind::Jump, "start"), named("leaf"), recall(2),
+        transfer(IrKind::Call, "inner"), returning(), named("inner"),
+        recall(3), recall(4), recall(5), operation(0x10), returning(),
+        named("start"), recall(6)};
+    if (entry_mode == 1) {
+      ops.push_back(operation(7));
+      ops.push_back(operation(8));
+    } else if (entry_mode == 2) {
+      ops.push_back(operation(0x0e));
+    }
+    ops.push_back(named("discard"));
+    ops.push_back(enter ? operation(0x0e) : recall(0));
+    ops.push_back(enter ? make_store("9") : recall(1));
+    ops.push_back(transfer(IrKind::Call, "leaf"));
+    ops.push_back(operation(0x0a)); // Observe decimal-entry X2 after convergence.
+    auto resume = stopping(false);
+    resume.meta.stop_disposition = StopDisposition::Resumable;
+    ops.push_back(resume);
+    ops.push_back(transfer(IrKind::Call, "leaf"));
+    ops.push_back(operation(0x0a));
+    ops.push_back(stopping(true));
+    return ops;
+  };
+  const auto erased_ir_index = [](const std::vector<IrOp>& ops) {
+    for (std::size_t i = 0; i < ops.size(); ++i)
+      if (ops[i].kind == IrKind::Label && ops[i].name == "discard") return i + 1;
+    throw std::runtime_error("missing synthetic producer identity");
+  };
+  const auto proved = [](const std::vector<IrOp>& ops) {
+    const auto items = lower_ir_to_machine(ops);
+    const auto flow = core::build_post_layout_control_flow(items);
+    for (std::size_t i = 0; i < items.size(); ++i)
+      if (items[i].kind == MachineItemKind::Label && items[i].name == "discard")
+        return core::prove_post_layout_stack_producer_erasure(items, flow, i + 1);
+    return false;
+  };
+  const auto remove = [&](std::vector<IrOp> ops) {
+    ops.erase(ops.begin() + static_cast<std::ptrdiff_t>(erased_ir_index(ops)));
+    return ops;
+  };
+  const auto observe = [](const std::vector<IrOp>& ops, const std::string& input,
+                          int stops = 2) {
+    emulator::MK61 calc;
+    require(calc.load_program(bytecode(ops)).diagnostics.empty(),
+            "dead stack producer fixture must fit the physical machine");
+    for (std::size_t r = 0; r < 15U; ++r)
+      calc.set_register(std::string(1, "0123456789abcde"[r]), std::to_string(10U + r));
+    calc.input_number(input, true);
+    calc.press_sequence({"В/О", "С/П"});
+    std::vector<std::string> result;
+    for (int stop = 0; stop < stops; ++stop) {
+      require(calc.run_until_stable(3000, 6).stopped,
+              "nested returns must reach the original stop continuation");
+      result.push_back(calc.display_text());
+      for (const auto* reg : {"X", "Y", "Z", "T", "X1"})
+        result.push_back(calc.read_register(reg));
+      for (std::size_t r = 0; r < 15U; ++r)
+        result.push_back(calc.read_register(std::string(1, "0123456789abcde"[r])));
+      if (stop + 1 < stops) calc.press("С/П");
+    }
+    return result;
+  };
+  for (const bool enter : {false, true}) {
+    for (int mode = 0; mode < 3; ++mode) {
+      const auto original = fixture_for(enter, mode);
+      require(proved(original), "dead values may be flushed across nested exact returns");
+      const auto reduced = remove(original);
+      require(bytecode(reduced).size() + 1U == bytecode(original).size(),
+              "a proved stack producer must save exactly one cell");
+      for (const auto* input : {"0", "-13", "0.125"})
+        require(observe(original, input) == observe(reduced, input),
+                "erasure must preserve registers, stack, X1, X2 and both returns");
+    }
+    const auto original = fixture_for(enter, 0);
+    const auto index = erased_ir_index(original);
+    for (int barrier = 0; barrier < 4; ++barrier) {
+      auto blocked = original;
+      if (barrier == 0) blocked[index].meta.raw = true;
+      if (barrier == 1) blocked[index].meta.manual_interaction.emplace();
+      if (barrier == 2) blocked[index].meta.roles.push_back(kResumableErrorPaddingRole);
+      if (barrier == 3) blocked[index + 1].meta.raw = true;
+      require(!proved(blocked), "raw/manual/padding cells must not acquire an erasure proof");
+    }
+    auto visible = original;
+    visible.insert(visible.begin() + static_cast<std::ptrdiff_t>(index + 2), stopping(true));
+    require(!proved(visible), "a stop observing a differing deeper stack slot blocks erasure");
+    auto x2 = original;
+    x2.insert(x2.begin() + static_cast<std::ptrdiff_t>(index + 2),
+              {operation(0x0a), stopping(true)});
+    require(!proved(x2), "decimal entry must not restore a differing X2 before convergence");
+    if (!enter)
+      require(observe(x2, "13", 1) != observe(remove(x2), "13", 1),
+              "ROM must witness the rejected hidden-X2 difference");
+    auto arithmetic = original;
+    arithmetic.insert(arithmetic.begin() + static_cast<std::ptrdiff_t>(index + 2),
+                      operation(0x10));
+    require(!proved(arithmetic), "even a later-discarded arithmetic operand remains observable");
+  }
+  const std::vector<IrOp> callers{
+      transfer(IrKind::Jump, "start"), named("discard"), recall(0), recall(1), returning(),
+      named("start"), transfer(IrKind::Call, "discard"),
+      recall(2), recall(3), recall(4), recall(5),
+      transfer(IrKind::Call, "discard"), stopping(true)};
+  require(!proved(callers), "one safe caller cannot hide an unsafe second return context");
+}
+
 } // namespace
 
 void callee_hole_boundary_fusion_preserves_stack_and_control() {
+  dead_stack_producer_contract();
   const auto unequal = core::xyz_preserving_selector_charge_state();
   const std::vector<IrOp> returned_value{
       transfer(IrKind::Call, "leaf"), recall(1), operation(0x10), stopping(true),

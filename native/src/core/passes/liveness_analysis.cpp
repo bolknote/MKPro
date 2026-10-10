@@ -3,6 +3,8 @@
 #include "mkpro/core/indirect_addressing.hpp"
 #include "mkpro/core/passes/cfg.hpp"
 #include "mkpro/core/post_layout_control_flow.hpp"
+#include "mkpro/core/opcodes.hpp"
+#include "mkpro/core/stable_register_value_flow.hpp"
 
 #include <algorithm>
 #include <charconv>
@@ -851,6 +853,132 @@ std::set<GuardedDefinitionUseQuery> prove_unreachable_definition_uses(
     const std::vector<IrOp>& ops, const core::AuthoritativePostLayoutControlFlow& flow,
     const std::vector<GuardedDefinitionUseQuery>& queries, LivenessOptions options) {
   return analyze_unreachable_definition_uses(ops, flow, queries, std::move(options)).excluded_uses;
+}
+
+PostLayoutRegisterDeadnessProof prove_post_layout_register_deadness(
+    const std::vector<IrOp>& ops, const core::AuthoritativePostLayoutControlFlow& flow,
+    std::size_t maximum_work) {
+  PostLayoutRegisterDeadnessProof result;
+  const auto fail = [&](const char* reason) {
+    result.before_state.clear();
+    result.reasons.emplace_back(reason);
+    return result;
+  };
+  const auto items = lower_ir_to_machine(ops);
+  const auto inputs = prove_post_layout_input_boundaries(items, flow);
+  if (!inputs.proved)
+    return fail("register lifetime proof requires validated input continuations");
+
+  std::set<int> typed_protocols;
+  for (const auto& item : items)
+    if (!item.raw && item.manual_interaction &&
+        item.manual_interaction->kind == ManualInteractionAnchorKind::PromptStop &&
+        std::find(item.roles.begin(), item.roles.end(), kTypedDisplayObservationRole) !=
+            item.roles.end())
+      typed_protocols.insert(item.manual_interaction->protocol_id);
+
+  std::map<std::size_t, RegisterEffects> effects;
+  std::size_t machine = 0;
+  for (auto op : ops) {
+    if (op.kind == IrKind::Label) {
+      ++machine;
+      continue;
+    }
+    // A discarded source value may still reach the physical stack.
+    op.meta.discarded_indirect_recall_value = false;
+    auto effect = register_effects(op);
+    const bool opaque = op.meta.raw || op.meta.logical_register_analysis ||
+        op.kind == IrKind::OrphanAddress || op.opcode == 0x4f || op.opcode == 0x6f ||
+        (op.opcode >= 0x70 && (op.opcode & 15) == 15) ||
+        // Decimal entry only touches stack/entry state, never R0..Re.
+        (op.kind == IrKind::Plain && op.opcode > 0x0f &&
+         (opcode_by_code(op.opcode).risk == OpcodeRisk::Dangerous ||
+          opcode_by_code(op.opcode).stack_effect == StackEffect::Unknown ||
+          opcode_by_code(op.opcode).stack_effect == StackEffect::Barrier));
+    if (opaque)
+      effect.uses_all_registers = true;
+    effects.emplace(machine, std::move(effect));
+    machine += static_cast<std::size_t>(cells_per_op(op));
+  }
+  if (machine != items.size())
+    return fail("register lifetime proof has an inconsistent command mapping");
+
+  const auto universe = physical_register_universe();
+  const auto count = flow.execution_states.size();
+  std::vector<RegisterEffects> transfers;
+  std::vector<std::vector<std::size_t>> predecessors(count);
+  transfers.reserve(count);
+  for (std::size_t state = 0; state < count; ++state) {
+    const auto item_index = flow.execution_states[state].item_index;
+    const auto found = effects.find(item_index);
+    if (found == effects.end())
+      return fail("register lifetime context does not reference a typed instruction");
+    auto effect = found->second;
+    const auto& item = items[item_index];
+    if (item.manual_interaction) {
+      const auto& anchor = *item.manual_interaction;
+      if (!typed_protocols.contains(anchor.protocol_id) ||
+          (anchor.kind != ManualInteractionAnchorKind::PromptStop &&
+           !inputs.input_boundary_states[state]))
+        effect.uses_all_registers = true;
+    } else if (item.opcode == 0x50 || item.opcode == 0x29) {
+      // Do not leave private memory unequal at arbitrary stops or exits.
+      effect.uses_all_registers = true;
+    }
+    transfers.push_back(std::move(effect));
+    for (const auto next : flow.execution_successors[state])
+      predecessors[next].push_back(state);
+  }
+
+  // Greatest safety fixed point: a word can remain dead around a cycle.
+  // Reads and untyped exits remove facts backwards; definite writes cut
+  // the demand. A cycle with ANY path to an old-word observation is rejected.
+  result.before_state.assign(count, universe);
+  std::deque<std::size_t> work;
+  std::vector<bool> queued(count, true);
+  for (std::size_t state = count; state-- > 0;)
+    work.push_back(state);
+  while (!work.empty()) {
+    if (++result.work > maximum_work) {
+      result.exhausted = true;
+      return fail("register lifetime proof budget exhausted");
+    }
+    const auto state = work.front();
+    work.pop_front();
+    queued[state] = false;
+    const auto& effect = transfers[state];
+    RegisterValueSet next;
+    if (!effect.uses_all_registers && !effect.may_define_any_register) {
+      const auto& successors = flow.execution_successors[state];
+      if (!successors.empty()) {
+        next = universe;
+        for (const auto successor : successors) {
+          if (++result.work > maximum_work) {
+            result.exhausted = true;
+            return fail("register lifetime proof budget exhausted");
+          }
+          RegisterValueSet common;
+          const auto& suffix = result.before_state[successor];
+          std::set_intersection(next.begin(), next.end(), suffix.begin(), suffix.end(),
+                                std::inserter(common, common.end()));
+          next = std::move(common);
+        }
+      }
+      next.insert(effect.must_defs.begin(), effect.must_defs.end());
+      for (const auto& used : effect.uses)
+        next.erase(used);
+    }
+    if (next == result.before_state[state])
+      continue;
+    result.before_state[state] = std::move(next);
+    for (const auto predecessor : predecessors[state])
+      if (!queued[predecessor]) {
+        queued[predecessor] = true;
+        work.push_back(predecessor);
+      }
+  }
+  result.proved = true;
+  return result;
 }
 
 RegisterEffects register_effects(const IrOp& op) {

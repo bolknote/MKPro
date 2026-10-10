@@ -4,12 +4,14 @@
 #include "mkpro/core/constant_synthesis.hpp"
 #include "mkpro/core/multirole_word_synthesis.hpp"
 #include "mkpro/core/passes/semantic_region_folding.hpp"
+#include "mkpro/core/passes/liveness_analysis.hpp"
 #include "mkpro/core/indirect_addressing.hpp"
 #include "mkpro/core/opcodes.hpp"
 #include "mkpro/core/post_layout_control_flow.hpp"
 #include "mkpro/core/post_layout_numeric_ranges.hpp"
 #include "mkpro/core/register_allocator.hpp"
 #include "mkpro/core/stack_value_equivalence.hpp"
+#include "mkpro/core/stable_register_value_flow.hpp"
 
 #include <algorithm>
 #include <array>
@@ -18,6 +20,7 @@
 #include <cstdlib>
 #include <deque>
 #include <iostream>
+#include <iterator>
 #include <map>
 #include <numeric>
 #include <optional>
@@ -318,6 +321,8 @@ struct Plan {
   std::vector<std::string> finite_encoding;
   std::map<std::size_t, std::vector<int>> exit_recoveries;
   std::size_t epoch_pruned_edges = 0;
+  std::set<std::size_t> dead_manual_items;
+  std::set<std::size_t> retired_manual_items;
 };
 
 // A physical register is not a single source value. Build reaching definitions
@@ -1221,6 +1226,15 @@ std::optional<int> free_carrier_seed(
     const std::vector<PreloadReport>* preloads) {
   if (!preloads)
     return std::nullopt;
+  // A typed input protocol changes X and executes its declared commands, not
+  // an arbitrary register bank. Its stores/selectors are accounted for below.
+  // Keep the old rejection for malformed or opaque manual entry boundaries.
+  const bool has_manual = std::any_of(ops.begin(), ops.end(), [](const IrOp& op) {
+    return op.meta.manual_interaction.has_value();
+  });
+  if (has_manual &&
+      !prove_post_layout_input_boundaries(lower_ir_to_machine(ops), flow).proved)
+    return std::nullopt;
   std::array<bool, 15> used{};
   for (const auto& preload : *preloads) {
     std::string name = preload.register_name;
@@ -1237,7 +1251,7 @@ std::optional<int> free_carrier_seed(
       return std::nullopt;
   }
   for (const auto& op : ops) {
-    if (op.meta.raw || op.meta.manual_interaction || op.kind == IrKind::OrphanAddress)
+    if (op.meta.raw || op.kind == IrKind::OrphanAddress)
       return std::nullopt;
     const int family = op.opcode & 0xf0;
     if (op.kind != IrKind::Label &&
@@ -2198,17 +2212,19 @@ struct Equality {
   bool entry = false;
   bool encoded_input = false;
   bool coefficient_ready = false;
+  // A dead private word is physically unequal until its next write.
+  bool retired = false;
 
   int key() const {
     return stack_value_equality_key(stack) | (initialized ? 64 : 0) |
            (entry ? 128 : 0) | (encoded_input ? 256 : 0) |
-           (coefficient_ready ? 512 : 0);
+           (coefficient_ready ? 512 : 0) | (retired ? 1024 : 0);
   }
 };
 
 bool prove(const std::vector<MachineItem>& items,
            const AuthoritativePostLayoutControlFlow& flow,
-           const std::vector<std::size_t>& machine, const Plan& plan,
+           const std::vector<std::size_t>& machine, Plan& plan,
            const std::vector<bool>& automatic_entry_lift,
            std::string& reason,
            const std::vector<std::size_t>* roots = nullptr) {
@@ -2298,6 +2314,7 @@ bool prove(const std::vector<MachineItem>& items,
   if (work.empty())
     return fail("no authoritative external entry");
   std::set<std::size_t> reached_macros;
+  std::set<std::size_t> retired_manual_items;
   std::set<std::size_t> recovery_items;
   for (const auto& [begin, code] : plan.exit_recoveries) {
     (void)code;
@@ -2326,6 +2343,8 @@ bool prove(const std::vector<MachineItem>& items,
     }
     if (const auto found = starts.find(item_index); found != starts.end()) {
       const auto& macro = *found->second;
+      if (state.retired && !macro.definition && !macro.input_literal && !macro.input_store)
+        return fail("retired carrier is read before its proved overwrite");
       reached_macros.insert(item_index);
       const auto old = state.stack.stack_equal;
       if (macro.predicate_observation) {
@@ -2404,14 +2423,17 @@ bool prove(const std::vector<MachineItem>& items,
         if (!state.encoded_input)
           return fail("callee store has no proved encoded literal input");
         state.initialized = true;
+        state.retired = false;
       } else if (macro.definition || macro.input_literal) {
         state.coefficient_ready = false;
         if (plan.raw_coefficient)
           state.stack.x1_equal = false;
         state.stack.stack_equal = {macro.identical_value, old[0], old[1], old[2]};
         state.stack.x2_equal = macro.identical_value;
-        if (macro.definition)
+        if (macro.definition) {
           state.initialized = true;
+          state.retired = false;
+        }
         state.encoded_input = macro.input_literal;
       } else {
         if (!state.initialized)
@@ -2438,6 +2460,9 @@ bool prove(const std::vector<MachineItem>& items,
       const int family = opcode & 0xf0;
       const bool selector = family >= 0x70 && family <= 0xe0 &&
                             family != 0xb0 && family != 0xd0;
+      if (state.retired && family >= 0x70 && family <= 0xe0 &&
+          (opcode & 15) == plan.reg)
+        return fail("retired carrier is observed as an indirect selector");
       if (selector && (opcode & 15) == plan.reg && state.initialized &&
           !plan.flow_reads.contains(item_index))
         return fail("indirect consumer has no joint encoding/address certificate");
@@ -2446,18 +2471,34 @@ bool prove(const std::vector<MachineItem>& items,
           family == 0x80 || family == 0xa0;
       if (!transports_input)
         state.encoded_input = false;
-      if (item.manual_interaction &&
-          (!stack_values_fully_equal(state.stack) || state.initialized))
-        return fail("manual input crosses a live encoded lifetime");
-      if (opcode == 0x60 + plan.reg && state.initialized)
+      if (item.manual_interaction) {
+        if (!stack_values_fully_equal(state.stack))
+          return fail("manual input observes unequal stack/X1/X2 state");
+        if (state.initialized) {
+          if (!plan.dead_manual_items.contains(item_index))
+            return fail("manual input crosses a live encoded lifetime");
+          // End the representation relation, not the physical difference.
+          state.initialized = false;
+          state.retired = true;
+          state.coefficient_ready = false;
+          state.encoded_input = false;
+          retired_manual_items.insert(item_index);
+        }
+        if (state.retired && !plan.dead_manual_items.contains(item_index))
+          return fail("retired carrier crosses an unproved input continuation");
+      }
+      if (opcode == 0x60 + plan.reg && (state.initialized || state.retired))
         return fail("unprojected read observes an encoded lifetime");
       if (opcode == 0x40 + plan.reg) {
         if (!state.stack.stack_equal[0])
           return fail("ordinary definition observes an encoded stack value");
         state.initialized = false;
+        state.retired = false;
         state.coefficient_ready = false;
       }
       if (opcode == 0x50) {
+        if (state.retired && !plan.dead_manual_items.contains(item_index))
+          return fail("retired carrier reaches an untyped or terminal stop");
         if (state.initialized && item.stop_disposition != StopDisposition::Terminal)
           return fail("encoded lifetime crosses an independent resume entry");
         if (!stack_values_fully_equal(state.stack))
@@ -2504,13 +2545,15 @@ bool prove(const std::vector<MachineItem>& items,
           state.entry = false;
       }
     }
-    if (flow.execution_successors[index].empty() && !stack_values_fully_equal(state.stack))
-      return fail("unproved exit with changed hidden state");
+    if (flow.execution_successors[index].empty() &&
+        (!stack_values_fully_equal(state.stack) || state.retired))
+      return fail("unproved exit with changed hidden state or an unclosed register lifetime");
     for (const auto successor : flow.execution_successors[index])
       enqueue(successor, state);
   }
   if (reached_macros.size() != starts.size())
     return fail("unreachable definitions or consumers lack a representation proof");
+  plan.retired_manual_items = std::move(retired_manual_items);
   return true;
 }
 
@@ -2802,6 +2845,29 @@ static std::vector<DeferredFiniteModeRepresentation> finite_mode_candidates_impl
         std::cerr << "[finite-mode-discovery] CFG: " << reason << '\n';
     return unchanged();
   }
+  // Use the complete graph before conditional pruning. Intersect all exact
+  // caller contexts: one invocation cannot authorize a different invocation.
+  std::map<std::size_t, RegisterValueSet> overwritten_before_manual;
+  if (std::any_of(items.begin(), items.end(), [](const auto& item) {
+        return item.manual_interaction.has_value();
+      })) {
+    const auto deaths = prove_post_layout_register_deadness(ops, flow, kMaximumProofStates);
+    if (deaths.proved)
+      for (std::size_t state = 0; state < flow.execution_states.size(); ++state) {
+        const auto at = flow.execution_states[state].item_index;
+        if (!items[at].manual_interaction)
+          continue;
+        const auto& values = deaths.before_state[state];
+        const auto [found, fresh] = overwritten_before_manual.emplace(at, values);
+        if (!fresh) {
+          RegisterValueSet common;
+          std::set_intersection(found->second.begin(), found->second.end(),
+                                values.begin(), values.end(),
+                                std::inserter(common, common.end()));
+          found->second = std::move(common);
+        }
+      }
+  }
   // This product is a conditional data-proof view, never the relocation CFG.
   // Physical positions may select callbacks only when all assumed bindings
   // are already closed. Otherwise use the separately proved encoded origins;
@@ -2857,6 +2923,9 @@ static std::vector<DeferredFiniteModeRepresentation> finite_mode_candidates_impl
   });
   std::vector<Plan> proved_plans;
   for (auto plan : plans) {
+    for (const auto& [at, dead] : overwritten_before_manual)
+      if (dead.contains(register_name_for_index(plan.reg)))
+        plan.dead_manual_items.insert(at);
     std::string reason;
     const bool accepted = prove(items, flow, machine, plan, *automatic_entry_lift, reason) ||
         prove_with_finite_exits(ops, items, flow, machine, plan, *automatic_entry_lift,
@@ -3047,6 +3116,14 @@ static std::vector<DeferredFiniteModeRepresentation> finite_mode_candidates_impl
               "Inserted " + std::to_string(plan.exit_recoveries.size()) +
               " independently certified exponent/store exit recoveries; charged every added cell, "
               "preserved Y/Z/T and last-X, and re-proved X2 and all continuations."});
+    if (!plan.retired_manual_items.empty())
+      alternatives.back().transformation.optimizations.push_back({
+          "finite-mode-dead-input-epoch",
+          "Retired " + std::to_string(plan.retired_manual_items.size()) +
+              " private carrier epochs at typed input boundaries without recovery code; "
+              "proved no observation before overwrite on every complete call/return/resume "
+              "path, including cycles; retained physical inequality until the write and "
+              "preserved stack/X1/X2."});
     if (!closed_geometry && selector_graph.proved && selector_graph.pruned_edges != 0)
       alternatives.back().transformation.optimizations.push_back({
           "finite-mode-deferred-selector-proof",

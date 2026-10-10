@@ -45,6 +45,15 @@ Range join(const Range& left, const Range& right) {
                  left->integral && right->integral);
 }
 
+// Used only after each caller bounds the exponent to 0..8. These powers
+// and every interval endpoint below are exactly representable on the MK-61.
+std::int64_t decimal_power(std::int64_t exponent) {
+  std::int64_t value = 1;
+  for (std::int64_t digit = 0; digit < exponent; ++digit)
+    value *= 10;
+  return value;
+}
+
 Range unary(int opcode, const Range& input) {
   if (!input)
     return std::nullopt;
@@ -65,13 +74,14 @@ Range unary(int opcode, const Range& input) {
     const auto a = lo * lo, b = hi * hi;
     return bounded(lo <= 0 && hi >= 0 ? 0 : std::min(a, b), std::max(a, b), integral);
   }
-  if (opcode == 0x15 && integral && lo >= 0 && hi <= 7) {
-    std::int64_t a = 1, b = 1;
-    for (std::int64_t i = 0; i < lo; ++i)
-      a *= 10;
-    for (std::int64_t i = 0; i < hi; ++i)
-      b *= 10;
-    return bounded(a, b, true);
+  if (opcode == 0x15 && lo >= -99 && hi <= 7) {
+    // Monotone ordinary exponentiation, enclosed by exactly representable
+    // integer powers. Do not evaluate transcendental functions on the host.
+    // Negative powers have the outward integer enclosure [0, 1]; this does
+    // not certify zero exclusion or an integral result. Raw/unknown inputs
+    // and exponents outside the admitted normal-result domain stay unknown.
+    return bounded(lo < 0 ? 0 : decimal_power(lo),
+                   hi < 0 ? 1 : decimal_power(hi), integral && lo >= 0);
   }
   return std::nullopt;
 }
@@ -193,6 +203,15 @@ Quantum unary_quantized(int opcode, const Quantum& q) {
   if (opcode == 0x22)
     return quantized(lo <= 0 && hi >= 0 ? 0 : std::min(lo * lo, hi * hi),
                      std::max(lo * lo, hi * hi), den * den);
+  if (opcode == 0x15 && den == 1 && lo >= -8 && hi <= 7) {
+    // An integer exponent has an exact decimal power, including fractions.
+    // A fractional exponent must NOT inherit its input's decimal lattice.
+    // Bound the complete numerator domain before constructing either power.
+    const auto scale = std::max<std::int64_t>(0, -lo);
+    if (hi + scale <= 7)
+      return quantized(decimal_power(lo + scale), decimal_power(hi + scale),
+                       decimal_power(scale));
+  }
   return std::nullopt;
 }
 
@@ -716,6 +735,62 @@ static PostLayoutNumericRangeProof prove_numeric_ranges_on_graph(
     if (const auto range = bound_ordinary_decimal(value))
       literals.emplace(i - 1U, Literal{begin, *range, quantized_literal(value), literal_mantissa(value)});
   }
+  // A direct recall certifies the next fresh literal's lift independently
+  // of its numeric value. Direct BP chains preserve that certificate, but
+  // raw/manual commands, other instructions and any external entry do not.
+  // This is a grounded must proof over exact return contexts: every incoming
+  // path must end in a recall, and a jump-only cycle cannot justify itself.
+  std::vector<bool> recall_entry_lift(count, false), recall_possible(count, true);
+  std::vector<std::size_t> recall_pending(count, 0);
+  std::vector<std::vector<std::size_t>> recall_users(count);
+  std::deque<std::size_t> recall_ready;
+  const auto spend_recall_work = [&] {
+    if (result.work >= maximum_work) {
+      result.exhausted = true;
+      return false;
+    }
+    ++result.work;
+    return true;
+  };
+  for (std::size_t state = 0; state < count; ++state) {
+    if (!spend_recall_work())
+      return result;
+    const auto at = flow.execution_states[state].item_index;
+    if (external.contains(at) || predecessors[state].empty()) {
+      recall_possible[state] = false;
+      continue;
+    }
+    for (const auto previous : predecessors[state]) {
+      if (!spend_recall_work())
+        return result;
+      const auto from = flow.execution_states[previous].item_index;
+      if (ordinary_item(from) && items[from].opcode >= 0x60 && items[from].opcode <= 0x6e)
+        continue;
+      if (ordinary_item(from) && items[from].opcode == 0x51) {
+        ++recall_pending[state];
+        recall_users[previous].push_back(state);
+      } else {
+        recall_possible[state] = false;
+      }
+    }
+    if (recall_possible[state] && recall_pending[state] == 0) {
+      recall_entry_lift[state] = true;
+      recall_ready.push_back(state);
+    }
+  }
+  while (!recall_ready.empty()) {
+    const auto state = recall_ready.front();
+    recall_ready.pop_front();
+    for (const auto user : recall_users[state]) {
+      if (!spend_recall_work())
+        return result;
+      if (--recall_pending[user] == 0 && recall_possible[user]) {
+        recall_entry_lift[user] = true;
+        recall_ready.push_back(user);
+      }
+    }
+  }
+
   using Key = std::pair<std::size_t, int>; // X,Y,Z,T, then R0..Re
   // Bottom (no grounded path yet) is distinct from unknown (a real path with
   // no ordinary-number certificate). Starting at bottom permits inductive
@@ -903,17 +978,9 @@ static PostLayoutNumericRangeProof prove_numeric_ranges_on_graph(
           break;
         }
       }
-      // Direct recall closes numeric entry and enables the next digit's
-      // automatic lift independently of the previous entry mode. Require
-      // that command on every immediate incoming context, never a raw/manual
-      // command or an external numeric-entry boundary.
-      const bool recalled = valid && !predecessors[start].empty() &&
-          std::all_of(predecessors[start].begin(), predecessors[start].end(),
-              [&](std::size_t previous) {
-                const auto item = flow.execution_states[previous].item_index;
-                return ordinary_item(item) &&
-                    items[item].opcode >= 0x60 && items[item].opcode <= 0x6e;
-              });
+      // The recall/lift certificate may cross direct BP chains and joins,
+      // but never an ungrounded cycle, raw command or external input edge.
+      const bool recalled = valid && recall_entry_lift[start];
       if (valid && (automatic_entry_lift[start] || recalled) &&
           !external.contains(literal->second.begin)) {
         if (slot != 0) return before(start, slot - 1);

@@ -73261,7 +73261,7 @@ apply_finalization_cell_erasure_to_selected_result(
     const std::string& source, const CompileResult& selected,
     const CompileOptions& options,
     const core::passes::RunPassesResult& finalized,
-    std::string_view trace_name) {
+    std::string_view trace_name, bool close_generated_selectors = false) {
   if (!selected.implemented || selected.items.empty() ||
       selected.manual_startup_sequence.has_value())
     return std::nullopt;
@@ -73354,9 +73354,10 @@ apply_finalization_cell_erasure_to_selected_result(
     return std::nullopt;
   }
 
-  const bool direct_rebind_proved =
-      selector_rebind.proved &&
-      (!selected.setup_program.has_value() ||
+  // Preserve the older search order. A late erasure transaction can opt into
+  // setup regeneration without greedily changing earlier layout incumbents.
+  const bool direct_rebind_proved = selector_rebind.proved &&
+      (close_generated_selectors || !selected.setup_program ||
        identical_preloads(selector_rebind.preloads, selected.preloads));
   std::optional<CompileResult> absolute_relayout;
   if (!direct_rebind_proved) {
@@ -73450,6 +73451,23 @@ apply_finalization_cell_erasure_to_selected_result(
     });
   }
 
+  if (close_generated_selectors) {
+    // Setup words and runtime selector charges are two encodings of relocated
+    // command identities. Rebinding only the former leaves stale callback
+    // digits even though the symbolic CFG has the right targets.
+    const auto rebound = core::rebind_late_bound_decimal_selectors(
+        candidate.items, {.minimum_target_address = 0, .maximum_target_address = 99});
+    if (!rebound.diagnostics.empty()) return std::nullopt;
+    candidate.items = rebound.items;
+    if (!refresh_proved_layout_annotations(candidate, options))
+      return std::nullopt;
+    if (rebound.applied > 0)
+      candidate.optimizations.push_back({
+          .name = "late-bound-decimal-selector-rebind",
+          .detail = "Rebound compiler-owned runtime selector digits after proved cell erasure.",
+      });
+  }
+
   const ResolvedProgram resolved = resolve_machine_items(candidate.items, options);
   if (!resolved.diagnostics.empty() ||
       resolved.steps.size() >= selected.steps.size())
@@ -73468,7 +73486,9 @@ apply_finalization_cell_erasure_to_selected_result(
     return std::nullopt;
   }
 
-  if (absolute_relayout.has_value() && selected.setup_program.has_value()) {
+  if (selected.setup_program.has_value() &&
+      (absolute_relayout.has_value() ||
+       !identical_preloads(candidate.preloads, selected.preloads))) {
     if (!ast.v2.has_value())
       return std::nullopt;
     std::map<std::string, const V2Board*> boards;
@@ -73484,6 +73504,11 @@ apply_finalization_cell_erasure_to_selected_result(
     candidate.setup_hex = format_hex_steps(candidate.setup_program->steps, model);
     candidate.setup_listing =
         format_listing_steps(candidate.setup_program->steps, model);
+    candidate.optimizations.push_back({
+        .name = "finalization-setup-preload-rebind",
+        .detail = "Regenerated setup code from the proved final preload environment "
+                  "after code erasure; address literals are not copied from the old setup.",
+    });
   }
 
   candidate.steps = resolved.steps;
@@ -73506,6 +73531,46 @@ apply_finalization_dead_store_to_selected_result(
                                                             options);
   return apply_finalization_cell_erasure_to_selected_result(
       source, selected, options, dead_store, "dse");
+}
+
+std::optional<CompileResult>
+apply_finalization_dead_stack_producer_to_selected_result(
+    const std::string& source, const CompileResult& selected,
+    const CompileOptions& options) {
+  if (!selected.implemented || selected.items.empty() || selected.manual_startup_sequence)
+    return std::nullopt;
+  const auto control = core::build_post_layout_control_flow(
+      selected.items, {.address_space_model = address_space_model_for_options(options),
+                       .empty_return_target = 1});
+  if (!control.proved) return std::nullopt;
+  std::optional<CompileResult> best;
+  int address = 0;
+  for (std::size_t index = 0; index < selected.items.size(); ++index) {
+    if (selected.items[index].kind == MachineItemKind::Label) continue;
+    const int erased_address = address++;
+    if (!core::prove_post_layout_stack_producer_erasure(selected.items, control, index))
+      continue;
+    core::passes::RunPassesResult erased;
+    erased.items = selected.items;
+    erased.items.erase(erased.items.begin() + static_cast<std::ptrdiff_t>(index));
+    erased.applied = 1;
+    erased.removed_cell_addresses = {erased_address};
+    erased.optimizations.push_back({
+        .name = "dead-stack-producer",
+        .detail = "Removed one recall or Enter whose value, stack lift and X2 are "
+                  "unobserved in every exact caller/return continuation; relocated "
+                  "the final code, selectors and generated setup together.",
+    });
+    auto candidate = apply_finalization_cell_erasure_to_selected_result(
+        source, selected, options, erased, "dead-stack-producer", true);
+    if (!candidate ||
+        !refresh_callee_hole_late_selector_charge_comments(*candidate, options) ||
+        optimizer_static_gate_rejection_reason(options, *candidate).has_value())
+      continue;
+    if (!best || candidate_beats_best(*candidate, *best, options))
+      best = std::move(*candidate);
+  }
+  return best;
 }
 
 std::optional<CompileResult>
@@ -81395,6 +81460,24 @@ void append_feature_profile_search_report(CompileResult& selected,
 
 CompileResult compile_source(std::string source, const CompileOptions& requested_options) {
   const CompileOptions options = apply_source_feature_profile_hint(source, requested_options);
+  const auto close_dead_stack_producers = [&](CompileResult result,
+                                               const CompileOptions& lowering_options) {
+    if (!result.implemented ||
+        result.steps.size() <= static_cast<std::size_t>(
+            official_program_step_limit(address_space_model_for_options(lowering_options))))
+      return result;
+    // Close a complete, independently selected root. Running this erasure
+    // greedily inside every layout search can destroy an enabling geometry
+    // before other transformations have repaid it.
+    for (int round = 0; round < 8; ++round) {
+      auto candidate = apply_finalization_dead_stack_producer_to_selected_result(
+          source, result, lowering_options);
+      if (!candidate || !candidate_beats_best(*candidate, result, lowering_options))
+        break;
+      result = std::move(*candidate);
+    }
+    return result;
+  };
   const auto search_representation_roots = [&](const CompileOptions& root_options,
                                                CompileOptions* winning_options_out = nullptr) {
     CompileOptions ignored_options;
@@ -81452,7 +81535,9 @@ CompileResult compile_source(std::string source, const CompileOptions& requested
         OptimizationReport{.name = "zero-underflow-optimizer-roots", .detail = std::move(detail)});
     return selected;
   };
-  CompileResult expanded = search_representation_roots(options);
+  CompileOptions expanded_lowering_options;
+  CompileResult expanded = search_representation_roots(options, &expanded_lowering_options);
+  expanded = close_dead_stack_producers(std::move(expanded), expanded_lowering_options);
   if (!feature_profile_has_rf_register(options.feature_profile) ||
       options.optimizer_feature_profile_override.has_value() ||
       options.optimizer_register_profile_override.has_value() ||
@@ -81468,6 +81553,7 @@ CompileResult compile_source(std::string source, const CompileOptions& requested
     standard_options.budget = std::min(*standard_options.budget, standard_limit);
   CompileOptions standard_lowering_options;
   CompileResult standard = search_representation_roots(standard_options, &standard_lowering_options);
+  standard = close_dead_stack_producers(std::move(standard), standard_lowering_options);
   const CompileResult* selected =
       candidate_beats_best(standard, expanded, options) ? &standard : &expanded;
   const CompileResult* previous = selected == &standard ? &expanded : &standard;
@@ -81491,6 +81577,7 @@ CompileResult compile_source(std::string source, const CompileOptions& requested
     restricted_options.budget = options.budget;
     CompileOptions restricted_winning_options;
     restricted = search_representation_roots(restricted_options, &restricted_winning_options);
+    *restricted = close_dead_stack_producers(std::move(*restricted), restricted_winning_options);
     if (candidate_needs_static_proof_gate(restricted_winning_options)) {
       if (const auto rejection =
               optimizer_static_gate_rejection_reason(restricted_winning_options, *restricted)) {

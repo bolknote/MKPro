@@ -15,7 +15,7 @@ with a raw listing: the goal is to make the high-level source fit.
 
 | File | Current | Target | Gap | Status |
 | --- | ---: | ---: | ---: | --- |
-| `tic-tac-toe-4x4.mkpro` | 132 | 105 | +27 | pending optimizer |
+| `tic-tac-toe-4x4.mkpro` | 130 | 105 | +25 | pending optimizer |
 | `nekromant.mkpro` | 138 | 105 | +33 | pending optimizer; +3 after correctness fixes |
 | `podvodnaya-lodka-lazarev.mkpro` | 246 | 105 | +141 | pending optimizer; continuous symbolic display |
 
@@ -63,6 +63,13 @@ coalescing runs after representation and whole-family allocation, before the
 same final selector/region/tail closure. No input phase is erased, and the
 unchanged source still has a 27-cell gap to the stock MK-61 limit.
 See [available definition webs](../../docs/joint-representation-search.md#available-definition-webs-inside-deferred-layout).
+
+The reduction from 132 to 130 removes stack producers whose values, stack lifts
+and hidden X2 differences die across all exact call/return continuations.
+The erasure transaction also regenerates setup code when a proved selector
+preload changes, instead of rejecting a valid rebind or retaining stale setup
+addresses. The high-level source and unrestricted two-phase input are unchanged.
+See [dead stack producers](../../docs/joint-representation-search.md#dead-stack-producers-and-setup-rebinding).
 
 The high-level Lazarev submarine port uses `preview(frame(...))` for its live
 indicator and `random(min, max, seed)` for explicit generator input. Its separate

@@ -336,6 +336,82 @@ bool prove_post_layout_stack_entry_equality(
   return true;
 }
 
+bool prove_post_layout_stack_producer_erasure(
+    const std::vector<MachineItem>& items,
+    const AuthoritativePostLayoutControlFlow& flow, std::size_t producer_item) {
+  if (!flow.proved || producer_item >= items.size() ||
+      flow.execution_edges.size() != flow.execution_states.size())
+    return false;
+  const auto& producer = items[producer_item];
+  const bool recall = producer.opcode >= 0x60 && producer.opcode <= 0x6e;
+  const bool enter = producer.opcode == 0x0e;
+  if (producer.kind != MachineItemKind::Op || (!recall && !enter) ||
+      producer.raw || producer.manual_interaction ||
+      !producer.semantic_call_origins.empty() ||
+      std::find(producer.roles.begin(), producer.roles.end(),
+                kResumableErrorPaddingRole) != producer.roles.end() ||
+      std::find(producer.roles.begin(), producer.roles.end(), "exec") != producer.roles.end())
+    return false;
+  for (const auto& entry : flow.external_entries)
+    if (entry.entry.item_index == producer_item) return false;
+
+  std::size_t retained = producer_item + 1;
+  while (retained < items.size() && items[retained].kind == MachineItemKind::Label) {
+    if (items[retained].raw || items[retained].manual_interaction) return false;
+    ++retained;
+  }
+  if (retained >= items.size()) return false;
+  const auto& closer = items[retained];
+  const bool retained_recall = closer.opcode >= 0x60 && closer.opcode <= 0x6e;
+  const bool retained_store = enter && closer.opcode >= 0x40 && closer.opcode <= 0x4e;
+  if (closer.kind != MachineItemKind::Op || closer.raw || closer.manual_interaction ||
+      (!retained_recall && !retained_store))
+    return false;
+
+  // Removing a producer can change entry mode. Do not pretend that the two
+  // modes were equal: execute the retained recall/store relationally first.
+  // Both commands close entry independently of its previous mode. A store
+  // is admitted only after Enter, which preserves X and hence its memory write.
+  StackValueEqualityState equality;
+  equality.stack_equal = {enter, false, false, false};
+  equality.x1_equal = true;
+  equality.x2_equal = false;
+  if (transfer_stack_value_equality(
+          equality, closer.opcode, retained_recall ? StackValueEqualityStepKind::Recall
+                                                   : StackValueEqualityStepKind::Store) ==
+      StackValueEqualityTransfer::Rejected)
+    return false;
+
+  std::set<int> continuations;
+  for (std::size_t state = 0; state < flow.execution_states.size(); ++state) {
+    const auto& before = flow.execution_states[state];
+    // An opcode/address overlay cannot lose its operand word even when the
+    // same byte, executed as a recall, has no observable data effect.
+    if (before.operand_item_index == producer_item) return false;
+    if (before.item_index != producer_item) continue;
+    const auto& edges = flow.execution_edges[state];
+    if (edges.size() != 1U || edges.front().kind != PostLayoutExecutionEdgeKind::Fallthrough ||
+        edges.front().target_state >= flow.execution_states.size())
+      return false;
+    const auto next = edges.front().target_state;
+    const auto& after = flow.execution_states[next];
+    if (after.item_index != retained || before.return_stack != after.return_stack ||
+        before.formal_return_stack != after.formal_return_stack)
+      return false;
+    const auto& exits = flow.execution_edges[next];
+    if (exits.size() != 1U || exits.front().kind != PostLayoutExecutionEdgeKind::Fallthrough ||
+        exits.front().target_state >= flow.execution_states.size())
+      return false;
+    continuations.insert(flow.execution_states[exits.front().target_state].address);
+  }
+  if (continuations.empty()) return false;
+  for (const int entry : continuations)
+    if (!prove_post_layout_stack_entry_equality(
+            items, flow, entry, equality, {.numeric_entry_closed = true}))
+      return false;
+  return true;
+}
+
 StackValueEqualityState xyz_preserving_selector_charge_state() {
   StackValueEqualityState state;
   state.stack_equal = {true, true, true, false};

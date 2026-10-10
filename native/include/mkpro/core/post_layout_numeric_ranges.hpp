@@ -44,6 +44,11 @@ enum class NumericRangeInputPolicy {
 // a recursive call-depth cutoff. Bottom and unknown are distinct: inductive
 // constants may survive loops, but ungrounded cycles never prove a value.
 // Ordinary arithmetic uses outward integer enclosures, including fractions.
+// Ordinary 10^x uses exact integer-power endpoints for -99 <= x <= 7;
+// integral exponents additionally preserve an eight-digit decimal lattice
+// when representable. Fractional exponents never imply a rational result.
+// Recall-established fresh-literal lift survives proved direct BP chains and
+// joins; ungrounded cycles, unsupported paths and external entries reject.
 // Positive integral FL counters use their labelled branch/exit semantics.
 // Input register transport is opt-in and requires the shared protocol proof.
 // Unknown branches

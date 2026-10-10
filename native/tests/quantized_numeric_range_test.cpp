@@ -298,7 +298,9 @@ int cells(const std::vector<MachineItem>& items) {
   return static_cast<int>(std::count_if(items.begin(), items.end(),
       [](const auto& item) { return item.kind != MachineItemKind::Label; }));
 }
-std::vector<std::string> observe(const std::vector<MachineItem>& items, const char* input) {
+std::vector<std::string> observe(
+    const std::vector<MachineItem>& items, const char* input,
+    const std::vector<PreloadReport>& preloads = {}) {
   emulator::MK61 calc;
   require(calc.load_program(bytecode(items)).diagnostics.empty(), "composed lattice ROM load");
   constexpr std::array<const char*, 15> names{
@@ -306,6 +308,8 @@ std::vector<std::string> observe(const std::vector<MachineItem>& items, const ch
   for (std::size_t i = 0; i < names.size(); ++i)
     calc.set_register(names[i], std::to_string(i + 2U));
   calc.set_register("b", input);
+  for (const auto& preload : preloads)
+    calc.set_register(preload.register_name, preload.value);
   calc.press_sequence({"В/О", "С/П"});
   require(calc.run_until_stable(15000, 8).stopped, "composed lattice must return and stop");
   std::vector<std::string> values{calc.display_text(true)};
@@ -351,6 +355,216 @@ void compiler_composition_and_size_baseline() {
             });
   }), "the production joint search must consume quantized range proofs");
 }
+void recall_flow_entry_lift_contracts() {
+  for (int chain = 1; chain <= 3; ++chain)
+    for (const int reg : {0, 8, 14})
+      for (const char* word : {"-2.5", "0", "7"}) {
+        const std::string name(1, "0123456789abcde"[reg]);
+        const std::vector<PreloadReport> preloads{
+            {.register_name = name, .value = word}};
+        std::vector<MachineItem> baseline;
+        append(baseline, {0x60 + reg, 1, 0x14});
+        stop(baseline);
+        std::vector<MachineItem> items;
+        append(items, {0x60 + reg});
+        for (int jump = 0; jump < chain; ++jump) {
+          const auto label = "next_" + std::to_string(jump);
+          target(items, 0x51, label);
+          items.push_back(MachineItem::label(label));
+        }
+        append(items, {1, 0x14});
+        const auto query = items.size();
+        stop(items);
+        require(ranges(items, {query}, preloads).x_before.at(query) ==
+                    *bound_ordinary_decimal(word),
+                "recall must certify fresh-literal lift through every proved direct BP");
+        require(observe(baseline, "13", preloads) == observe(items, "13", preloads),
+                "ROM direct BP chains must preserve stack, registers, X1 and entry shadow");
+      }
+
+  const std::vector<PreloadReport> preloads{{.register_name = "8", .value = "7"}};
+  std::vector<MachineItem> joined;
+  append(joined, {0x6b});
+  target(joined, 0x57, "clear");
+  append(joined, {0x68});
+  target(joined, 0x51, "digit");
+  joined.push_back(MachineItem::label("clear"));
+  append(joined, {0x0d});
+  joined.push_back(MachineItem::label("digit"));
+  append(joined, {1, 0x14});
+  const auto query = joined.size();
+  stop(joined);
+  require(!ranges(joined, {query}, preloads).x_before.contains(query),
+          "one unproved incoming arm must block the recall/lift certificate");
+
+  std::vector<MachineItem> resumed;
+  append(resumed, {0x68, 0x50});
+  resumed.back().stop_disposition = StopDisposition::Resumable;
+  target(resumed, 0x51, "resumed_digit");
+  resumed.push_back(MachineItem::label("resumed_digit"));
+  append(resumed, {1, 0x14});
+  const auto resumed_query = resumed.size();
+  stop(resumed);
+  require(!ranges(resumed, {resumed_query}, preloads).x_before.contains(resumed_query),
+          "external input must erase an earlier recall/lift certificate");
+}
+
+void power_of_ten_range_contracts() {
+  struct Row {
+    const char* exponent;
+    OrdinaryNumericRange expected;
+  };
+  for (const auto& row : {
+      Row{"0", {1, 1, true}},
+      Row{"1", {10, 10, true}},
+      Row{"0.25", {1, 10, false}},
+      Row{"0.5", {1, 10, false}},
+      Row{"0.99999999", {1, 10, false}},
+      Row{"1.0000001", {10, 100, false}},
+      Row{"-0.25", {0, 1, false}},
+      Row{"-1.5", {0, 1, false}},
+      Row{"6.5", {1000000, 10000000, false}},
+      Row{"6.9999999", {1000000, 10000000, false}},
+      Row{"-98.5", {0, 1, false}},
+      Row{"-99", {0, 1, false}}}) {
+    std::vector<MachineItem> items;
+    append(items, {0x68, 0x15});
+    const auto query = items.size();
+    stop(items);
+    const std::vector<PreloadReport> preloads{
+        {.register_name = "8", .value = row.exponent}};
+    const auto proof = ranges(items, {query}, preloads);
+    require(proof.x_before.at(query) == row.expected,
+            "10^x must enclose a bounded ordinary exponent without host transcendental math: " +
+                std::string(row.exponent));
+    const auto actual = execute(items, preloads);
+    require(actual >= static_cast<double>(row.expected.lower) &&
+                actual <= static_cast<double>(row.expected.upper),
+            "ROM exponentiation must stay inside the outward enclosure");
+  }
+
+  for (int exponent = -8; exponent <= 7; ++exponent) {
+    std::vector<MachineItem> items;
+    append(items, {0x68, 0x15, 0x69, 0x13});
+    const auto query = items.size();
+    stop(items);
+    const std::vector<PreloadReport> preloads{
+        {.register_name = "8", .value = std::to_string(exponent)},
+        {.register_name = "9", .value = "1e" + std::to_string(exponent)}};
+    require(ranges(items, {query}, preloads).x_before.at(query) ==
+                OrdinaryNumericRange{1, 1, true},
+            "integer powers must retain their exact finite decimal lattice");
+    require(execute(items, preloads) == 1,
+            "ROM must confirm exact positive and negative integer powers");
+  }
+
+  // Fractional exponents do not preserve the exponent's input quantum.
+  std::vector<MachineItem> fractional;
+  append(fractional, {0x68, 0x15, 2, 0x12});
+  const auto query = fractional.size();
+  stop(fractional);
+  const std::vector<PreloadReport> half{{.register_name = "8", .value = "0.5"}};
+  const auto bound = ranges(fractional, {query}, half).x_before.at(query);
+  require(!bound.integral && bound.lower == 2 && bound.upper == 20,
+          "sqrt(10) times two must not acquire an invented half-integer lattice");
+  const auto actual = execute(fractional, half);
+  require(actual > 6 && actual < 7,
+          "ROM must retain the nonintegral power result through multiplication");
+
+  for (const char* input : {"7.1", "-99.1", "1e8", "1e200", "A-2", "-0"}) {
+    std::vector<MachineItem> items;
+    append(items, {0x68, 0x15});
+    const auto at = items.size();
+    stop(items);
+    const std::vector<PreloadReport> preloads{{.register_name = "8", .value = input}};
+    require(!ranges(items, {at}, preloads).x_before.contains(at),
+            "unsupported exponent/result domains and raw words must stay unproved");
+  }
+  std::vector<MachineItem> unknown;
+  append(unknown, {0x68, 0x15});
+  const auto at = unknown.size();
+  stop(unknown);
+  require(ranges(unknown, {at}).x_before.empty(),
+          "10^x must not manufacture a domain for an unknown input");
+}
+
+std::vector<MachineItem> exponential_carrier_fixture(int carrier) {
+  std::vector<MachineItem> items;
+  append(items, {0x45, 1, 0x40 + carrier});
+  for (int product = 0; product < 3; ++product)
+    append(items, {0x6b, 0x60 + carrier, 1, 0, 0x13, 0x12, 0x4a});
+  target(items, 0x53, "score");
+  append(items, {0x60 + carrier, 0x36, 0x40 + carrier, 0x60 + carrier, 0x44});
+  append(items, {0x6b, 0x6c, 0x6d, 0x6e, 0x6b, 0x10});
+  stop(items);
+  items.push_back(MachineItem::label("score"));
+  append(items, {0x6b});
+  target(items, 0x57, "right");
+  append(items, {0x6c});
+  target(items, 0x51, "power");
+  items.push_back(MachineItem::label("right"));
+  append(items, {0x6d});
+  items.push_back(MachineItem::label("power"));
+  append(items, {1, 0x10, 0x15, 0x52});
+  return items;
+}
+
+void exponential_carrier_composition() {
+  CompileOptions options;
+  options.defer_return_suffix_until_callee_hole = true;
+  const std::vector<PreloadReport> preloads{
+      {.register_name = "c", .value = "0.25"},
+      {.register_name = "d", .value = "0.5"}};
+  passes::FiniteModeCandidateOptions candidate_options;
+  candidate_options.maximum_candidates = 32;
+  candidate_options.runtime_preloads = &preloads;
+  for (const int carrier : {2, 8}) {
+    const auto before = exponential_carrier_fixture(carrier);
+    const auto candidates = passes::finite_mode_representation_candidates(
+        raise_machine_to_ir(before), {options}, candidate_options);
+    const auto found = std::find_if(candidates.begin(), candidates.end(), mixed);
+    require(found != candidates.end(),
+            "a bounded fractional exponent must unlock mixed-epoch carrier selection");
+    const auto after = lower_ir_to_machine(found->ops);
+    require(cells(before) == 49 && cells(after) == 42,
+            "exponential carrier compiler baseline must shrink 49 to 42 cells");
+    require(found->preloads.empty() && build_post_layout_control_flow(after).proved,
+            "exponential carrier must retain its CFG without inventing setup words");
+    for (const char* input : {"-7", "0", "13"})
+      require(observe(before, input, preloads) == observe(after, input, preloads),
+              "exponential composition must preserve all registers, stack, X1, X2 and returns");
+
+    for (const std::vector<PreloadReport>& unsafe_preloads : {
+        std::vector<PreloadReport>{preloads.front()},
+        std::vector<PreloadReport>{preloads.front(), {.register_name = "d", .value = "A-2"}},
+        std::vector<PreloadReport>{preloads.front(), {.register_name = "d", .value = "-2"}}}) {
+      auto unsafe_options = candidate_options;
+      unsafe_options.runtime_preloads = &unsafe_preloads;
+      const auto unsafe = passes::finite_mode_representation_candidates(
+          raise_machine_to_ir(before), {options}, unsafe_options);
+      require(std::none_of(unsafe.begin(), unsafe.end(), mixed),
+              "unknown, raw or nonabsorbing exponent arms must block carrier replacement");
+    }
+  }
+  const LayoutSearchArtifact root{
+      .items = exponential_carrier_fixture(8), .preloads = preloads};
+  const auto incomplete = expand_joint_representation_transactions(root, {}, false);
+  require(std::none_of(incomplete.begin(), incomplete.end(), [](const auto& edge) {
+    return std::any_of(edge.node.optimizations.begin(), edge.node.optimizations.end(),
+        [](const auto& report) {
+          return report.name == "mixed-epoch-coefficient-state-carrier";
+        });
+  }), "an incomplete preload environment must not authorize numeric facts");
+  const auto edges = expand_joint_representation_transactions(root, {}, true);
+  require(std::any_of(edges.begin(), edges.end(), [](const auto& edge) {
+    return cells(edge.node.items) == 42 &&
+        std::any_of(edge.node.optimizations.begin(), edge.node.optimizations.end(),
+            [](const auto& report) {
+              return report.name == "mixed-epoch-coefficient-state-carrier";
+            });
+  }), "the joint search must consume ordinary fractional-exponent range certificates");
+}
+
 } // namespace
 
 int main() {
@@ -360,6 +574,9 @@ int main() {
     joins_calls_and_aliases();
     rounding_and_unsupported_domains();
     compiler_composition_and_size_baseline();
+    recall_flow_entry_lift_contracts();
+    power_of_ten_range_contracts();
+    exponential_carrier_composition();
     std::cout << "quantized range compiler and ROM contracts passed\n";
     return 0;
   } catch (const std::exception& error) {

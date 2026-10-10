@@ -93,6 +93,29 @@ std::set<GuardedDefinitionUseQuery> prove_unreachable_definition_uses(
     const std::vector<GuardedDefinitionUseQuery>& queries,
     LivenessOptions options = {});
 
+// An old-word non-observation proof over exact PC/return contexts. Every
+// path must overwrite it before a read, escape, or untyped interaction.
+// Read-modify-write operations are reads first; a possible write is not a
+// kill. The greatest safety fixed point admits infinite paths with no read,
+// not an assumption that a cycle eventually terminates.
+//
+// Typed entered() protocols preserve memory through validated resume edges.
+// Their public display contract does not expose private data registers.
+// Stack/X1/X2 and numeric-entry equality remain independent obligations.
+// Exhaustion exports no partial facts.
+struct PostLayoutRegisterDeadnessProof {
+  bool proved = false;
+  std::vector<RegisterValueSet> before_state;
+  std::size_t work = 0;
+  bool exhausted = false;
+  std::vector<std::string> reasons;
+};
+
+PostLayoutRegisterDeadnessProof prove_post_layout_register_deadness(
+    const std::vector<IrOp>& ops,
+    const core::AuthoritativePostLayoutControlFlow& flow,
+    std::size_t maximum_work = 100000U);
+
 struct RegisterInterferenceGraph {
   std::map<std::string, RegisterValueSet> neighbors;
 

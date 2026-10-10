@@ -546,6 +546,46 @@ void tic_tac_toe_4x4_source_manual_ui_contract_is_explicit() {
   const CompileResult compiled = compile_source(text, options);
   require(compiled.implemented && compiled.diagnostics.empty(),
           "full source UI contract should compile through generic lowering");
+  // Exercise the delivered setup program, not direct register injection. A
+  // post-layout selector rebind must update both reports and executable setup.
+  CompileOptions final_options;
+  final_options.analysis = true;
+  final_options.budget = 999;
+  const auto finalized = compile_source(text, final_options);
+  require(finalized.implemented && finalized.setup_program.has_value() &&
+              finalized.setup_program->steps.size() <= 105U,
+          "the final preload environment must retain loadable setup code");
+  const auto final_flow = core::build_post_layout_control_flow(
+      finalized.items, {.empty_return_target = 1});
+  require(final_flow.proved, "the finalized artifact must retain an exact CFG");
+  std::size_t checked_selector_annotations = 0;
+  for (const auto& [item_index, targets] : final_flow.indirect_flow_targets) {
+    const auto& comment = finalized.items.at(item_index).comment;
+    if (!comment || comment->find("preloaded R") == std::string::npos)
+      continue;
+    const std::string marker = "indirect-target=";
+    const auto target_at = comment->find(marker);
+    require(target_at != std::string::npos && targets.size() == 1U,
+            "a proved preload annotation must name its single final target");
+    require(std::stoi(comment->substr(target_at + marker.size())) == targets.front().address,
+            "reported indirect targets must agree with the relocated CFG, not old addresses");
+    ++checked_selector_annotations;
+  }
+  require(checked_selector_annotations > 0U,
+          "the setup relocation fixture must exercise indirect selector annotations");
+  emulator::MK61 setup({.angle_mode = finalized.expected_mode.value_or("deg")});
+  require(setup.load_program(step_opcodes(finalized.setup_program->steps)).diagnostics.empty(),
+          "regenerated setup must load completely");
+  setup.press_sequence({"В/О", "С/П"});
+  run_to_stop(setup, "final selector setup");
+  emulator::MK61 expected_setup;
+  for (const auto& preload : finalized.preloads) {
+    require(!preload.setup_expression, "this fixture uses exact literal setup values");
+    expected_setup.set_register(preload.register_name, preload.value);
+    require(compact(setup.read_register(preload.register_name)) ==
+                compact(expected_setup.read_register(preload.register_name)),
+            "executable setup must install the final value of R" + preload.register_name);
+  }
   // The playable source's size has its own baseline. This contract checks the
   // original input protocol even when correcting game semantics changes size;
   // frozen structural fixtures retain the older optimization-specific bounds.

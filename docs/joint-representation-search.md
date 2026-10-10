@@ -989,3 +989,105 @@ three-cell decoder, without an extra register or a program-name pattern.
 
 
 
+
+### Dead private epochs across typed input
+
+The shared register-lifetime analysis proves **no observation before a definite
+overwrite** over the complete authoritative PC/return-context graph. It reuses
+the ordinary register-effect model, including indirect selectors, exact memory
+aliases and read-before-write loop counters. Joins require every successor.
+A greatest safety fixed point admits a cycle that never observes the old word,
+without assuming termination. Any path to an old-word read or untyped exit
+invalidates the certificate. Possible stores do not kill a value, and exhausted
+proofs export no facts.
+
+A compiler-typed display/entered() protocol may carry a dead private register
+word through PP and SP input phases. The finite-representation proof intersects
+the lifetime certificate across all callers before any conditional path pruning.
+It records the retired word as physically unequal until the actual overwrite:
+neither equality nor a decoder is invented. Untyped/raw stops, malformed input
+protocols, a read on either arm, and terminal exits before overwrite reject.
+All stack slots, physical last-X and the entry shadow must independently agree
+at each input boundary. Public input phases and return frames remain unchanged.
+
+The compiler/ROM baseline shrinks 42 to 35 cells without recovery code, extra
+registers or preloads. Tests include both branch arms, a callee overwrite, an
+overwrite in the single-step input phase, indirect aliases, FL counters,
+dead cycles, cycles with reachable reads, repeated PP/SP prompts and budget
+exhaustion. Explain/JSON reports
+the proof as `finite-mode-dead-input-epoch`.
+
+### Ordinary exponentiation in representation proofs
+
+The shared numeric-range analysis encloses `10^x` for an already proved
+ordinary exponent interval within -99..7. Monotonicity and exactly representable
+integer powers supply outward integer endpoints; the compiler does not call
+host transcendental functions or infer an exponent bound from the source
+program's name. Negative powers retain a conservative zero lower endpoint,
+not a zero-exclusion certificate.
+
+Integral exponents retain an exact decimal lattice when its entire numerator
+and denominator fit the existing eight-digit domain. A fractional exponent
+does not inherit its input lattice: for example, multiplying `10^0.5` by two
+does not prove an integer. Unknown inputs, raw BCD words, unsupported exponent
+ranges and mixed unsafe branch arms remain unproved.
+
+A grounded must analysis also transports recall-established fresh-literal
+stack lift through direct `BP` chains and joins. Every incoming path needs
+its own certificate; a cycle cannot establish one for itself. Raw/manual
+commands, unsupported paths and external entries block transport. The
+analysis uses exact PC/return contexts and charges its work to the existing
+proof budget.
+
+These facts feed the existing mixed-epoch carrier and joint-layout search
+without a new code recognizer. A synthetic compiler/ROM baseline shrinks 49
+to 42 cells, preserving all registers, stack, X1, decimal-entry X2 and returns.
+The fact alone does not bound a bank updated from unrestricted keyboard input;
+that requires a separate certificate rather than an assumed game-input range.
+
+### Coefficient seeds across typed input
+
+A complete setup environment may supply a coefficient seed in a globally unused
+register even when the program contains typed `entered()` phases. Admission
+requires the authoritative input-boundary certificate; merely finding a manual
+annotation is not sufficient. Every explicit operand, input-phase store, loop
+counter, indirect-memory target and existing preload still reserves its register.
+Raw instructions, orphan address words and malformed protocols remain barriers.
+
+The pooled seed participates in the existing finite-representation proof and
+dead-epoch retirement, rather than bypassing their observation checks. A compiler
+and ROM contract combines signed seeds, coefficient pooling and two-phase input
+to reduce 50 cells to 41. It compares both signs at the prompt, after PP and after
+SP, including data registers, stack, physical X1 and decimal-entry behavior.
+Negative cases cover incomplete setup ownership, broken/raw input, a displayed
+carrier, and an otherwise free register written by the input protocol.
+This synthetic result does not claim a reduction of the 132-cell 4x4 program.
+
+### Dead stack producers and setup rebinding
+
+The finalization pipeline can erase a direct recall or Enter even when X does
+not already contain the recalled register. The obligation is nonobservation,
+not redundant-value detection: every exact caller/return continuation must
+discard the changed X/Y/Z/T and X2 before consuming or displaying them, while
+preserving physical X1 and register memory.
+
+A retained direct recall, or a store after Enter, first synchronizes the two
+decimal-entry modes. Only then does the existing relational stack proof run.
+Raw/manual cells, executable operands, error padding, external entry commands,
+unknown flow, observable stack values and an unsafe caller reject the candidate.
+The original authoritative CFG supplies side-space continuations; physical
+adjacency alone is not a control-flow proof.
+
+Each accepted data certificate enters the existing one-cell erasure transaction.
+Selector rebinding or absolute relayout, final CFG/static proofs and strict size
+improvement remain mandatory. If proved preload values change, generated setup
+is rebuilt from that final environment, just as after absolute relayout. A valid
+address change must neither be blocked by the mere presence of setup nor leave
+old selector literals in executable setup code.
+
+Synthetic ROM tests compare both resumptions, every data register, X/Y/Z/T/X1
+and an explicit decimal-entry X2 observation, including open-entry and Enter
+prefixes. Negative tests cover live stack/X2, arithmetic, raw/manual/padding
+barriers and a second unsafe caller. The 4x4 integration also executes generated
+setup and compares its register words with the final preload report.
+

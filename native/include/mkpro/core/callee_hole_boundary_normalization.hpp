@@ -50,6 +50,14 @@ bool prove_post_layout_stack_entry_equality(
 bool prove_ir_stack_entry_equality(const std::vector<IrOp>& ops,
                                    std::size_t entry, StackValueEqualityState state);
 
+// Data-effect certificate only: a direct recall or Enter can disappear when
+// its stack lift/value/X2 are unobserved in every exact return context. The
+// retained successor must synchronize entry modes before the common proof.
+// The caller must separately relocate code, selectors and setup preloads.
+bool prove_post_layout_stack_producer_erasure(
+    const std::vector<MachineItem>& items,
+    const AuthoritativePostLayoutControlFlow& flow, std::size_t producer_item);
+
 // B-up; decimal selector; store; F-reverse restores X/Y/Z. T and physical
 // last-X1 are clobbered, and X2 is conservatively unknown until synchronized.
 StackValueEqualityState xyz_preserving_selector_charge_state();

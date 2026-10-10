@@ -2,7 +2,9 @@
 #include "mkpro/core/emit/machine_emitter.hpp"
 #include "mkpro/core/joint_representation_search.hpp"
 #include "mkpro/core/passes/finite_mode_representation.hpp"
+#include "mkpro/core/passes/liveness_analysis.hpp"
 #include "mkpro/core/post_layout_numeric_ranges.hpp"
+#include "mkpro/core/stable_register_value_flow.hpp"
 #include "mkpro/emulator/mk61.hpp"
 
 #include "test_support.hpp"
@@ -652,10 +654,339 @@ void exponent_recovery_rom_facts() {
     }
 }
 
+
+enum class ManualEpochVariant {
+  Direct, BothArms, Callee, FirstPhaseKill, OneArmRead, AliasRecall,
+  DefiniteIndirectStore, PossibleIndirectStore, Selector, Counter, NoWrite,
+  CycleBeforeWrite, CycleWithRead, RepeatedPrompt, Untyped, Raw, BrokenPhase, DisplayedCarrier
+};
+
+std::vector<MachineItem> manual_epoch_fixture(ManualEpochVariant variant, int reg = 8) {
+  std::vector<MachineItem> items;
+  append(items, {0x45, 1, 0x40 + reg});
+  for (int product = 0; product < 3; ++product)
+    append(items, {0x6b, 0x60 + reg, 1, 0, 0x13, 0x12, 0x4a});
+  items.push_back(MachineItem::label("manual-prompt-setup"));
+  append(items, {0x6b, 0x6c, 0x6d, 0x6e, 0x6b, 0x10});
+  if (variant == ManualEpochVariant::DisplayedCarrier)
+    append(items, {0x60 + reg});
+  append(items, {0x50});
+  items.back().stop_disposition = StopDisposition::Resumable;
+  items.back().manual_interaction =
+      ManualInteractionAnchor{41, -1, ManualInteractionAnchorKind::PromptStop};
+  if (variant != ManualEpochVariant::Untyped)
+    items.back().roles.push_back(kTypedDisplayObservationRole);
+  items.back().raw = variant == ManualEpochVariant::Raw;
+  append(items, {variant == ManualEpochVariant::FirstPhaseKill ? 0x40 + reg : 0x44});
+  items.back().manual_interaction = ManualInteractionAnchor{
+      41, variant == ManualEpochVariant::BrokenPhase ? 7 : 0,
+      ManualInteractionAnchorKind::SingleStepCommand};
+  append(items, {0x45});
+  items.back().manual_interaction =
+      ManualInteractionAnchor{41, 1, ManualInteractionAnchorKind::ContinuousResume};
+
+  if (variant == ManualEpochVariant::BothArms || variant == ManualEpochVariant::OneArmRead) {
+    append(items, {0x65});
+    target(items, 0x59, "manual-negative");
+    append(items, {7, 0x40 + reg});
+    target(items, 0x51, "manual-joined");
+    items.push_back(MachineItem::label("manual-negative"));
+    if (variant == ManualEpochVariant::OneArmRead)
+      append(items, {0x60 + reg, 0x46});
+    append(items, {2, 0x40 + reg});
+    items.push_back(MachineItem::label("manual-joined"));
+  } else if (variant == ManualEpochVariant::Callee) {
+    target(items, 0x53, "manual-overwrite");
+  } else if (variant != ManualEpochVariant::FirstPhaseKill &&
+             variant != ManualEpochVariant::NoWrite) {
+    if (variant == ManualEpochVariant::AliasRecall) {
+      append(items, {0xd7});
+      items.back().indirect_memory_targets = std::vector<int>{reg};
+    }
+    if (variant == ManualEpochVariant::Selector) {
+      append(items, {0x80 + reg});
+      items.back().indirect_flow_targets = std::vector<IrTarget>{std::string("manual-write")};
+      items.push_back(MachineItem::label("manual-write"));
+    }
+    if (variant == ManualEpochVariant::Counter) {
+      constexpr std::array<int, 4> counters{0x5d, 0x5b, 0x58, 0x5a};
+      target(items, counters.at(static_cast<std::size_t>(reg)), "manual-write");
+      items.push_back(MachineItem::label("manual-write"));
+    }
+    if (variant == ManualEpochVariant::CycleBeforeWrite ||
+        variant == ManualEpochVariant::CycleWithRead) {
+      items.push_back(MachineItem::label("manual-spin"));
+      append(items, {0x65});
+      target(items, 0x59, "manual-spin");
+      if (variant == ManualEpochVariant::CycleWithRead)
+        append(items, {0x60 + reg, 0x46});
+    }
+    if (variant == ManualEpochVariant::RepeatedPrompt) {
+      append(items, {0x65});
+      target(items, 0x57, "manual-prompt-setup");
+    }
+    append(items, {9});
+    if (variant == ManualEpochVariant::DefiniteIndirectStore ||
+        variant == ManualEpochVariant::PossibleIndirectStore) {
+      append(items, {0xb7});
+      items.back().indirect_memory_targets =
+          variant == ManualEpochVariant::DefiniteIndirectStore
+              ? std::vector<int>{reg} : std::vector<int>{reg, 9};
+      append(items, {0x60 + reg, 0x46});
+    } else {
+      append(items, {0x40 + reg});
+    }
+  }
+  finish(items);
+  if (variant == ManualEpochVariant::Callee) {
+    items.push_back(MachineItem::label("manual-overwrite"));
+    append(items, {9, 0x40 + reg, 0x52});
+  }
+  return items;
+}
+
+bool retired_input(const passes::PassResult& result) {
+  return std::any_of(result.optimizations.begin(), result.optimizations.end(),
+      [](const auto& report) { return report.name == "finite-mode-dead-input-epoch"; });
+}
+
+bool prompt_overwrite_proves(const std::vector<MachineItem>& items, int reg) {
+  const auto flow = build_post_layout_control_flow(items);
+  const auto proof = passes::prove_post_layout_register_deadness(raise_machine_to_ir(items), flow);
+  if (!proof.proved)
+    return false;
+  bool reached = false;
+  for (std::size_t i = 0; i < flow.execution_states.size(); ++i) {
+    const auto& item = items[flow.execution_states[i].item_index];
+    if (item.manual_interaction &&
+        item.manual_interaction->kind == ManualInteractionAnchorKind::PromptStop) {
+      reached = true;
+      const std::string name = reg < 10 ? std::to_string(reg) :
+          std::string(1, static_cast<char>('a' + reg - 10));
+      if (!proof.before_state[i].contains(name))
+        return false;
+    }
+  }
+  return reached;
+}
+
+struct ManualEpochObservation {
+  std::vector<std::string> values;
+  std::string private_carrier_at_prompt;
+};
+
+ManualEpochObservation observe_manual_epoch(const std::vector<MachineItem>& items, int reg,
+    const std::string& first, const std::string& second, int probe_phase, bool repeat,
+    const std::vector<PreloadReport>* preloads = nullptr) {
+  const auto resolved = resolve_machine_items(items);
+  require(resolved.diagnostics.empty(), "manual epoch fixture must resolve");
+  std::vector<int> code;
+  for (const auto& step : resolved.steps) code.push_back(step.opcode);
+  emulator::MK61 calc;
+  require(calc.load_program(code).diagnostics.empty(), "manual epoch fixture must fit stock ROM");
+  constexpr std::array<const char*, 15> names{
+      "0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "a", "b", "c", "d", "e"};
+  for (std::size_t i = 0; i < names.size(); ++i)
+    calc.set_register(names[i], std::to_string(i + 2U));
+  if (preloads)
+    for (const auto& preload : *preloads)
+      calc.set_register(preload.register_name, preload.value);
+  calc.press_sequence({"\u0412/\u041e", "\u0421/\u041f"});
+  require(calc.run_until_stable(15000, 8).stopped, "manual epoch must reach its prompt");
+  ManualEpochObservation result;
+  result.private_carrier_at_prompt = calc.read_register(names[static_cast<std::size_t>(reg)]);
+  const auto snapshot = [&](bool after_overwrite) {
+    result.values.push_back(calc.display_text(true));
+    for (const char* name : {"X", "Y", "Z", "T", "X1"})
+      result.values.push_back(calc.read_register(name));
+    // Only this proved dead private word is outside the source-typed UI.
+    for (std::size_t i = 0; i < names.size(); ++i)
+      if (after_overwrite || static_cast<int>(i) != reg)
+        result.values.push_back(calc.read_register(names[i]));
+  };
+  snapshot(false);
+  if (probe_phase == 0) {
+    calc.press(".");
+    result.values.push_back(calc.display_text(true));
+    return result;
+  }
+  calc.input_number(first).press("\u041f\u041f");
+  snapshot(false);
+  if (probe_phase == 1) {
+    calc.press(".");
+    result.values.push_back(calc.display_text(true));
+    return result;
+  }
+  if (repeat) {
+    calc.input_number("0").press("\u0421/\u041f");
+    require(calc.run_until_stable(15000, 8).stopped, "zero input must repeat the typed prompt");
+    snapshot(false);
+    if (probe_phase == 3) {
+      calc.press(".");
+      result.values.push_back(calc.display_text(true));
+      return result;
+    }
+    calc.input_number("4.5").press("\u041f\u041f");
+    snapshot(false);
+    if (probe_phase == 4) {
+      calc.press(".");
+      result.values.push_back(calc.display_text(true));
+      return result;
+    }
+  }
+  calc.input_number(second).press("\u0421/\u041f");
+  require(calc.run_until_stable(15000, 8).stopped, "manual epoch must finish after SP input");
+  snapshot(true);
+  calc.press(".");
+  result.values.push_back(calc.display_text(true));
+  return result;
+}
+
+void manual_epoch_lifetime_contracts() {
+  for (const int reg : {2, 8}) {
+    for (const auto variant : {ManualEpochVariant::Direct, ManualEpochVariant::BothArms,
+                              ManualEpochVariant::Callee, ManualEpochVariant::FirstPhaseKill,
+                              ManualEpochVariant::DefiniteIndirectStore,
+                              ManualEpochVariant::CycleBeforeWrite, ManualEpochVariant::RepeatedPrompt})
+      require(prompt_overwrite_proves(manual_epoch_fixture(variant, reg), reg),
+              "all-path definite overwrite must cross a validated manual protocol: R" +
+                  std::to_string(reg) + " variant=" + std::to_string(static_cast<int>(variant)));
+
+    for (const auto variant : {ManualEpochVariant::OneArmRead, ManualEpochVariant::AliasRecall,
+                              ManualEpochVariant::PossibleIndirectStore, ManualEpochVariant::Selector,
+                              ManualEpochVariant::NoWrite, ManualEpochVariant::CycleWithRead,
+                              ManualEpochVariant::Untyped, ManualEpochVariant::Raw,
+                              ManualEpochVariant::BrokenPhase}) {
+      const auto source = manual_epoch_fixture(variant, reg);
+      require(!prompt_overwrite_proves(source, reg),
+              "unsafe/unknown lifetime must reject before a typed prompt: " +
+                  std::to_string(static_cast<int>(variant)));
+      if (variant != ManualEpochVariant::BrokenPhase) {
+        const auto results = candidates(source);
+        require(std::none_of(results.begin(), results.end(), retired_input),
+                "carrier optimization must not bypass a negative lifetime contract");
+      }
+    }
+    const auto displayed = candidates(manual_epoch_fixture(ManualEpochVariant::DisplayedCarrier, reg));
+    require(std::none_of(displayed.begin(), displayed.end(), retired_input),
+            "register death must not erase its still-observed stack value");
+  }
+  require(!prompt_overwrite_proves(manual_epoch_fixture(ManualEpochVariant::Counter, 2), 2),
+          "FL is a read before its destructive counter update");
+  const auto source = manual_epoch_fixture(ManualEpochVariant::Direct);
+  const auto exhausted = passes::prove_post_layout_register_deadness(
+      raise_machine_to_ir(source), build_post_layout_control_flow(source), 1);
+  require(exhausted.exhausted && !exhausted.proved && exhausted.before_state.empty(),
+          "budget exhaustion must export no partial death facts");
+}
+
+void manual_epoch_compiler_rom_and_sizes() {
+  for (const int reg : {2, 8})
+    for (const auto variant : {ManualEpochVariant::Direct, ManualEpochVariant::BothArms,
+                              ManualEpochVariant::Callee, ManualEpochVariant::FirstPhaseKill,
+                              ManualEpochVariant::RepeatedPrompt}) {
+      const auto source = manual_epoch_fixture(variant, reg);
+      const auto results = candidates(source);
+      const auto found = std::find_if(results.begin(), results.end(), retired_input);
+      require(found != results.end(), "dead private epoch must close without recovery code: " +
+          std::to_string(static_cast<int>(variant)));
+      const auto after = lower_ir_to_machine(found->ops);
+      require(cells(after) == cells(source) - 7,
+              "manual epoch must retain the full seven-cell representation saving");
+      if (variant == ManualEpochVariant::Direct)
+        require(cells(source) == 42 && cells(after) == 35, "manual epoch baseline: 42 -> 35");
+      require(found->preloads.empty(), "dead epoch retirement needs no extra register or preload");
+      const auto old_flow = build_post_layout_control_flow(source);
+      const auto new_flow = build_post_layout_control_flow(after);
+      require(new_flow.proved &&
+                  old_flow.maximum_observed_return_depth == new_flow.maximum_observed_return_depth,
+              "manual phases and exact call/return contexts must survive final layout");
+      const bool repeat = variant == ManualEpochVariant::RepeatedPrompt;
+      for (const char* second : {"-2", "1.5"})
+        for (const int probe : {0, 1, 2, 3, 4}) {
+          if (!repeat && probe > 2) continue;
+          const auto old_run = observe_manual_epoch(source, reg, "3.25", second, probe, repeat);
+          const auto new_run = observe_manual_epoch(after, reg, "3.25", second, probe, repeat);
+          require(old_run.private_carrier_at_prompt != new_run.private_carrier_at_prompt,
+                  "fixture must exercise an actually encoded private word at the prompt");
+          require(old_run.values == new_run.values,
+                  "PP/SP must preserve every observed register, stack, X1 and entry shadow");
+        }
+    }
+}
+
+void typed_input_seed_preload_contracts() {
+  const auto fixture_with_signs = [](ManualEpochVariant variant) {
+    auto source = manual_epoch_fixture(variant);
+    std::vector<MachineItem> prefix;
+    append(prefix, {0x45, 0x6b});
+    target(prefix, 0x59, "negative-seed");
+    append(prefix, {1, 0x48});
+    target(prefix, 0x51, "seed-products");
+    prefix.push_back(MachineItem::label("negative-seed"));
+    append(prefix, {1, 0x0b, 0x48});
+    prefix.push_back(MachineItem::label("seed-products"));
+    prefix.insert(prefix.end(), source.begin() + 3, source.end());
+    return prefix;
+  };
+  const std::vector<PreloadReport> complete_preloads;
+  const auto source = fixture_with_signs(ManualEpochVariant::Direct);
+  const auto results = candidates(source, &complete_preloads);
+  const auto found = std::find_if(results.begin(), results.end(), [](const auto& result) {
+    return retired_input(result) && result.preloads.size() == 1U;
+  });
+  require(found != results.end(),
+          "a validated input protocol must permit an otherwise unused coefficient seed");
+  const auto after = lower_ir_to_machine(found->ops);
+  require(cells(source) == 50 && cells(after) == 41,
+          "typed input, coefficient pooling and epoch retirement must compose: 50 -> 41");
+  require(build_post_layout_control_flow(after).proved &&
+              prove_post_layout_input_boundaries(after, build_post_layout_control_flow(after)).proved,
+          "seed pooling must retain the exact final PP/SP protocol");
+  for (const char* sign : {"-7", "13"}) {
+    auto setup = found->preloads;
+    setup.push_back({.register_name = "b", .value = sign});
+    for (const int phase : {0, 1, 2})
+      require(observe_manual_epoch(source, 8, "3.25", "-2", phase, false, &setup).values ==
+                  observe_manual_epoch(after, 8, "3.25", "-2", phase, false, &setup).values,
+              "pooled signed seeds must preserve UI, registers, stack, X1 and entry shadow");
+  }
+  const auto without_environment = candidates(source);
+  require(std::none_of(without_environment.begin(), without_environment.end(), [](const auto& result) {
+    return !result.preloads.empty();
+  }), "an incomplete setup environment must not authorize a new seed register");
+  for (const auto variant : {ManualEpochVariant::Raw, ManualEpochVariant::BrokenPhase,
+                            ManualEpochVariant::DisplayedCarrier}) {
+    const auto rejected = candidates(fixture_with_signs(variant), &complete_preloads);
+    require(std::none_of(rejected.begin(), rejected.end(), [](const auto& result) {
+      return !result.preloads.empty();
+    }), "raw/broken input or an observed carrier cannot acquire a pooled encoding");
+  }
+  // Leave only R0 unreserved, then make the PP command write it. The input
+  // certificate is not permission to borrow a register used by that protocol.
+  auto occupied = source;
+  for (auto& item : occupied)
+    if (item.manual_interaction && item.manual_interaction->kind ==
+            ManualInteractionAnchorKind::SingleStepCommand) {
+      item.opcode = 0x40;
+      item.mnemonic = "X->P 0";
+    }
+  std::vector<PreloadReport> reserved;
+  for (const char reg : std::string("123456789abcde"))
+    reserved.push_back({.register_name = std::string(1, reg), .value = "3"});
+  const auto no_spare = candidates(occupied, &reserved);
+  require(std::none_of(no_spare.begin(), no_spare.end(), [](const auto& result) {
+    return !result.preloads.empty();
+  }), "manual stores and existing setup owners must exclude seed allocation");
+}
+
 } // namespace
 
 int main() {
   try {
+    typed_input_seed_preload_contracts();
+    manual_epoch_lifetime_contracts();
+    manual_epoch_compiler_rom_and_sizes();
     exponent_recovery_rom_facts();
     finite_exit_compiler_rom_and_sizes();
     range_contracts();
