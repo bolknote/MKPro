@@ -299,6 +299,13 @@ struct Macro {
   std::vector<int> finite_transition_rows;
 };
 
+enum class ExitRecoveryKind { ExponentAdjustment, LiteralRematerialization };
+
+struct ExitRecovery {
+  ExitRecoveryKind kind = ExitRecoveryKind::ExponentAdjustment;
+  std::vector<int> code;
+};
+
 struct Plan {
   int reg = 0;
   int saved_cells = 0;
@@ -316,10 +323,11 @@ struct Plan {
   bool inline_coefficient = false;
   std::optional<int> seed_reg;
   std::size_t normalizing_max_count = 0;
+  std::size_t opaque_max_count = 0;
   std::size_t predicate_observation_count = 0;
   std::vector<std::string> finite_values;
   std::vector<std::string> finite_encoding;
-  std::map<std::size_t, std::vector<int>> exit_recoveries;
+  std::map<std::size_t, ExitRecovery> exit_recoveries;
   std::size_t epoch_pruned_edges = 0;
   std::set<std::size_t> dead_manual_items;
   std::set<std::size_t> retired_manual_items;
@@ -1550,8 +1558,12 @@ std::vector<Plan> discover_inline_coefficient_carriers(
                 domain->second.lower > encoded_value->upper;
           }
           if (!absorbs) {
-            valid = false;
-            break;
+            // This is an ordinary observation, NOT an absorbing boundary.
+            // Leave its instructions outside the representation macros. The
+            // relational proof must restore the original carrier first; an
+            // unknown, zero or raw score never acquires an ordering theorem.
+            ++plan.opaque_max_count;
+            continue;
           }
           Macro reduction;
           reduction.end = store + 1U;
@@ -2315,11 +2327,9 @@ bool prove(const std::vector<MachineItem>& items,
     return fail("no authoritative external entry");
   std::set<std::size_t> reached_macros;
   std::set<std::size_t> retired_manual_items;
-  std::set<std::size_t> recovery_items;
-  for (const auto& [begin, code] : plan.exit_recoveries) {
-    (void)code;
-    recovery_items.insert(machine[begin]);
-  }
+  std::map<std::size_t, const ExitRecovery*> recovery_items;
+  for (const auto& [begin, recovery] : plan.exit_recoveries)
+    recovery_items.emplace(machine[begin], &recovery);
   std::size_t processed = 0;
   while (!work.empty()) {
     if (++processed > kMaximumProofStates)
@@ -2328,15 +2338,25 @@ bool prove(const std::vector<MachineItem>& items,
     work.pop_front();
     const auto item_index = flow.execution_states[index].item_index;
     const auto& item = items[item_index];
-    if (recovery_items.contains(item_index)) {
-      // The independent finite-epoch graph proves an immediate, true
-      // predicate fallthrough with the recalled encoded word still in X.
-      // Exponent entry preserves Y/Z/T and physical last-X. The store
-      // restores the carrier and closes entry; X2 is NOT assumed restored.
+    if (const auto recovery = recovery_items.find(item_index);
+        recovery != recovery_items.end()) {
       if (!roots || !state.initialized || state.entry)
-        return fail("exit recovery has no live encoded predicate input");
-      state.stack.stack_equal[0] = true;
-      state.stack.x2_equal = false;
+        return fail("exit recovery requires a proved finite epoch and closed numeric entry");
+      if (recovery->second->kind == ExitRecoveryKind::LiteralRematerialization) {
+        // Every incoming finite-row context independently certifies this
+        // exact original integer and fresh entry. Only the register relation
+        // is restored. Do not identify the newly entered X with the original
+        // stack or claim that the pushed values/entry shadow are unobserved.
+        state.stack.stack_equal = {false, false, false, false};
+        state.stack.x1_equal = false;
+        state.stack.x2_equal = false;
+      } else {
+        // The independent finite-epoch graph proves an immediate true
+        // predicate fallthrough with the encoded word still in X. Exponent
+        // entry preserves Y/Z/T and physical last-X, but not necessarily X2.
+        state.stack.stack_equal[0] = true;
+        state.stack.x2_equal = false;
+      }
       state.initialized = false;
       state.coefficient_ready = false;
       state.encoded_input = false;
@@ -2712,7 +2732,7 @@ std::optional<std::vector<int>> exponent_exit_decoder(
   return std::vector<int>{0x0c, *adjustment, 0x40 + plan.reg};
 }
 
-std::map<std::size_t, std::vector<int>> finite_exit_recoveries(
+std::map<std::size_t, ExitRecovery> finite_exit_recoveries(
     const std::vector<IrOp>& ops, const std::vector<std::size_t>& machine,
     const Plan& plan, const FiniteEpochGraph& graph) {
   std::set<std::size_t> covered, predicate_ends;
@@ -2723,7 +2743,12 @@ std::map<std::size_t, std::vector<int>> finite_exit_recoveries(
       predicate_ends.insert(machine[macro.end - 1U]);
   }
   std::map<std::size_t, std::set<int>> rows;
-  std::set<std::size_t> rejected;
+  std::set<std::size_t> rejected, literal_rejected;
+  for (std::size_t state = 0; state < graph.rows.size(); ++state)
+    if (graph.rows[state] < 0 || !graph.entry_lift[state])
+      literal_rejected.insert(graph.flow.execution_states[state].item_index);
+  for (const auto root : graph.roots)
+    literal_rejected.insert(graph.flow.execution_states[root].item_index);
   for (const auto root : graph.roots)
     rejected.insert(graph.flow.execution_states[root].item_index);
   for (std::size_t state = 0; state < graph.rows.size(); ++state) {
@@ -2741,14 +2766,33 @@ std::map<std::size_t, std::vector<int>> finite_exit_recoveries(
         rejected.insert(next);
     }
   }
-  std::map<std::size_t, std::vector<int>> result;
+  std::map<std::size_t, ExitRecovery> result;
   for (std::size_t i = 0; i < ops.size(); ++i) {
     if (ops[i].kind == IrKind::Label || !ordinary(ops[i]) ||
-        covered.contains(machine[i]) || rejected.contains(machine[i]) ||
-        !rows.contains(machine[i]))
+        covered.contains(machine[i]) || !rows.contains(machine[i]))
       continue;
-    if (auto code = exponent_exit_decoder(plan, rows.at(machine[i])))
-      result.emplace(i, std::move(*code));
+    if (!rejected.contains(machine[i]))
+      if (auto code = exponent_exit_decoder(plan, rows.at(machine[i])))
+        result.emplace(i, ExitRecovery{ExitRecoveryKind::ExponentAdjustment, std::move(*code)});
+
+    // An opaque arithmetic boundary may be preceded by a singleton finite
+    // epoch even when no numeric score bound exists. Restore that original
+    // integer at a common fresh-entry point, before the dynamic web starts.
+    // Unknown/positive epochs, different incoming rows and external entries
+    // cannot supply a literal. This is an enabling candidate, not a DSE hint:
+    // its full cost and changed stack still have to pass the product proof.
+    const auto& at_rows = rows.at(machine[i]);
+    if (plan.opaque_max_count == 0 || result.contains(i) ||
+        literal_rejected.contains(machine[i]) || at_rows.size() != 1U)
+      continue;
+    const auto& word = plan.finite_values.at(static_cast<std::size_t>(*at_rows.begin()));
+    const auto value = exact_decimal(word);
+    if (value && value->denominator == 1 && value->numerator != 0)
+      if (auto code = encode_decimal(word)) {
+        code->push_back(0x40 + plan.reg);
+        result.emplace(i, ExitRecovery{ExitRecoveryKind::LiteralRematerialization,
+                                      std::move(*code)});
+      }
   }
   return result;
 }
@@ -2759,7 +2803,8 @@ bool prove_with_finite_exits(
     const std::vector<std::size_t>& machine, Plan& plan,
     const std::vector<bool>& entry_lift, int maximum_growth,
     std::string& reason) {
-  if (!plan.inline_coefficient || plan.predicate_observation_count == 0)
+  if (!plan.inline_coefficient ||
+      (plan.predicate_observation_count == 0 && plan.opaque_max_count == 0))
     return false;
   const auto graph = finite_epoch_graph(items, flow, machine, plan, entry_lift);
   if (!graph)
@@ -2770,12 +2815,12 @@ bool prove_with_finite_exits(
   }
   const auto exits = finite_exit_recoveries(ops, machine, plan, *graph);
   using Choice = std::pair<int, std::vector<std::size_t>>;
-  const std::vector<std::pair<std::size_t, std::vector<int>>> sites(exits.begin(), exits.end());
+  const std::vector<std::pair<std::size_t, ExitRecovery>> sites(exits.begin(), exits.end());
   // Cost-ordered subsets allow several exits to be repaired together;
   // the bound is independent of source names or a particular program.
   std::set<Choice> frontier;
   for (std::size_t i = 0; i < sites.size(); ++i)
-    frontier.emplace(static_cast<int>(sites[i].second.size()), std::vector<std::size_t>{i});
+    frontier.emplace(static_cast<int>(sites[i].second.code.size()), std::vector<std::size_t>{i});
   for (int attempt = 0; !frontier.empty() && attempt < 32; ++attempt) {
     const auto [cost, selected] = *frontier.begin();
     frontier.erase(frontier.begin());
@@ -2794,7 +2839,7 @@ bool prove_with_finite_exits(
     for (auto next = selected.back() + 1U; next < sites.size(); ++next) {
       auto extended = selected;
       extended.push_back(next);
-      frontier.emplace(cost + static_cast<int>(sites[next].second.size()), std::move(extended));
+      frontier.emplace(cost + static_cast<int>(sites[next].second.code.size()), std::move(extended));
     }
   }
   return false;
@@ -2947,9 +2992,11 @@ static std::vector<DeferredFiniteModeRepresentation> finite_mode_candidates_impl
     for (std::size_t i = 0; i < ops.size();) {
       if (const auto recovery = plan.exit_recoveries.find(i);
           recovery != plan.exit_recoveries.end()) {
-        for (const int opcode : recovery->second) {
+        for (const int opcode : recovery->second.code) {
           IrOp restored;
           restored.kind = opcode == 0x40 + plan.reg ? IrKind::Store : IrKind::Plain;
+          if (restored.kind == IrKind::Store)
+            restored.register_name = register_name_for_index(plan.reg);
           restored.opcode = opcode;
           restored.meta.mnemonic = opcode_by_code(opcode).name;
           restored.meta.comment = "finite epoch exit recovery";
@@ -3114,8 +3161,21 @@ static std::vector<DeferredFiniteModeRepresentation> finite_mode_candidates_impl
               std::to_string(plan.epoch_pruned_edges) +
               " impossible predicate edges in the data proof only, without changing the CFG. " +
               "Inserted " + std::to_string(plan.exit_recoveries.size()) +
-              " independently certified exponent/store exit recoveries; charged every added cell, "
-              "preserved Y/Z/T and last-X, and re-proved X2 and all continuations."});
+              " independently certified exit recoveries; charged every added cell and "
+              "re-proved register, stack/X1/X2 and all continuation observations."});
+    const auto literal_recoveries = std::count_if(
+        plan.exit_recoveries.begin(), plan.exit_recoveries.end(), [](const auto& recovery) {
+          return recovery.second.kind == ExitRecoveryKind::LiteralRematerialization;
+        });
+    if (literal_recoveries != 0)
+      alternatives.back().transformation.optimizations.push_back({
+          "finite-mode-boundary-rematerialization",
+          "Restored " + std::to_string(literal_recoveries) +
+              " singleton finite epochs with exact integer/store code before opaque dynamic "
+              "observations. Proved every incoming row and fresh numeric entry, without "
+              "assuming positive scores or ordinary Kmax ordering at zero. Kept all changed "
+              "stack/X1/X2 slots unequal until independently overwritten; restored stores "
+              "separate definition webs for subsequent allocation and layout search."});
     if (!plan.retired_manual_items.empty())
       alternatives.back().transformation.optimizations.push_back({
           "finite-mode-dead-input-epoch",

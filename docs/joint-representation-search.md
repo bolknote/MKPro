@@ -1144,3 +1144,32 @@ shared callees and their new physical placement; negative fixtures retain
 live X2, Enter suppression, raw input, selector mutation and side entries.
 This mechanism alone has not reduced the 130-cell 4x4 baseline.
 
+### Finite representation with a rematerialized dynamic boundary
+
+`finite-mode-boundary-rematerialization` separates a finite coefficient epoch
+from a later opaque `max` epoch without pretending that the dynamic operand is
+strictly positive. An unproved reduction stays ordinary machine code. The pass
+may restore the original carrier with an integer literal and a direct store at
+a common boundary, then prove the complete continuation with equal registers.
+
+Every incoming exact call/return context must have the same finite source row
+and a proved fresh numeric entry. Unknown rows, dynamic joins, independent
+entries and overlapping representation macros cannot authorize restoration.
+The first family admits nonzero ordinary integers only. All newly changed
+stack slots, physical X1 and X2 remain conservatively unequal until their
+nonobservation is proved; restoring the register alone is insufficient.
+
+The existing deterministic, cost-ordered exit-subset search charges every
+literal/store cell. A nonprofitable standalone result is rejected; bounded
+growth is available only inside the joint transaction and must be repaid by
+the complete final artifact. The restored definition also separates register
+webs before later coalescing. No free register, game-specific constant, input
+restriction or assumption about the hardware's zero ordering is introduced.
+
+Compiler/ROM contracts cover unknown, zero, negative, small and oversized score
+bounds, several physical carrier registers, nested returns, all data registers,
+the stack, X1 and a decimal-entry X2 observation. The opaque-boundary synthetic
+baseline is 60 -> 55 cells. Live-stack, dynamic-consumer and unpaid-recovery
+cases reject. This removes a representation proof blocker in 4x4, but its
+complete winner is still 129 cells: boundary restoration is not a free saving.
+

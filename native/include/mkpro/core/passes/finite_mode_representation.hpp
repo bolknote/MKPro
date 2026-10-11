@@ -13,6 +13,9 @@ namespace mkpro::core::passes {
 // arithmetic consumer decoders and stable indirect-address constraints.
 // Predicate-only reads may join finite and ordinary dynamic epochs when every
 // finite row keeps its truth value and both numeric continuations prove safe.
+// Opaque max boundaries require restoration instead of an ordering assumption:
+// a singleton finite integer may be rematerialized at a proved fresh-entry
+// boundary, with its code cost and all changed stack/X1/X2 slots accounted for.
 // Other unsupported or unprojected observations fail closed. Calls retain their exact
 // return contexts; aliases, external entries and hidden stack state are proof
 // obligations, not assumptions based on source names.

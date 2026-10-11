@@ -980,10 +980,78 @@ void typed_input_seed_preload_contracts() {
   }), "manual stores and existing setup owners must exclude seed allocation");
 }
 
+bool literal_recovered(const passes::PassResult& result) {
+  return std::any_of(result.optimizations.begin(), result.optimizations.end(),
+      [](const auto& report) { return report.name == "finite-mode-boundary-rematerialization"; });
+}
+
+void literal_boundary_recovery_contracts() {
+  for (const auto variant : {Variant::Unknown, Variant::UnknownJoin, Variant::Zero,
+                             Variant::Negative, Variant::TooSmall, Variant::Overflow}) {
+    for (const int reg : {2, 8}) {
+      const auto source = fixture(variant, reg);
+      const auto proposals = candidates(source);
+      const auto found = std::find_if(proposals.begin(), proposals.end(), literal_recovered);
+      require(found != proposals.end(),
+              "opaque arithmetic boundary needs an explicitly restored finite epoch: " +
+              std::to_string(static_cast<int>(variant)));
+      const auto after = lower_ir_to_machine(found->ops);
+      require(cells(after) == cells(source) - 5,
+              "literal restoration must include its two cells in the five-cell net saving");
+      if (variant == Variant::Unknown)
+        require(cells(source) == 60 && cells(after) == 55,
+                "opaque-boundary size baseline: 60 -> 55");
+      require(found->preloads.empty(), "boundary restoration needs no spare register");
+      const auto old_flow = build_post_layout_control_flow(source);
+      const auto new_flow = build_post_layout_control_flow(after);
+      require(new_flow.proved && old_flow.maximum_observed_return_depth ==
+                  new_flow.maximum_observed_return_depth,
+              "literal recovery must preserve final branch and return contexts");
+      for (const char* input : {"-7", "0", "0.125", "13", "9999"})
+        require(observe(source, input) == observe(after, input),
+                "literal restoration changed a register, stack, X1 or decimal entry: " +
+                std::to_string(static_cast<int>(variant)) + " input=" + input);
+    }
+  }
+
+  // A live deep-stack value or a later dynamic coefficient cannot be repaired
+  // merely by restoring the register. Retain the full continuation proof.
+  for (const auto variant : {Variant::LiveZ, Variant::MixedProduct}) {
+    const auto rejected = candidates(fixture(variant));
+    require(rejected.empty(), "literal recovery must not bypass live stack or dynamic consumers");
+  }
+  auto unprofitable = fixture(Variant::Unknown);
+  const auto products = std::find_if(unprofitable.begin(), unprofitable.end(), [](const auto& item) {
+    return item.kind == MachineItemKind::Label && item.name == "products";
+  });
+  require(products != unprofitable.end(), "fixture product block must exist");
+  // Retain one of the three seven-cell products. Three removed coefficient
+  // cells cannot pay for the longer seed and the two-cell restoration.
+  unprofitable.erase(products + 8, products + 22);
+  require(candidates(unprofitable).empty(), "every rematerialization cell must be charged");
+
+  const auto source = fixture(Variant::Unknown);
+  const auto first = candidates(source);
+  const auto second = candidates(source);
+  require(first.size() == second.size(), "literal recovery search must be deterministic");
+  for (std::size_t i = 0; i < first.size(); ++i)
+    require(same_layout_search_artifact(
+                {.items = lower_ir_to_machine(first[i].ops), .preloads = first[i].preloads},
+                {.items = lower_ir_to_machine(second[i].ops), .preloads = second[i].preloads}),
+            "literal recovery alternatives must repeat byte for byte");
+  const auto edges = expand_joint_representation_transactions({.items = source}, {}, false);
+  require(std::any_of(edges.begin(), edges.end(), [&](const auto& edge) {
+    return cells(edge.node.items) == cells(source) - 5 &&
+        std::any_of(edge.node.optimizations.begin(), edge.node.optimizations.end(),
+            [](const auto& report) { return report.name == "finite-mode-boundary-rematerialization"; });
+  }), "restoration, representation and final layout must compose in production search");
+}
+
 } // namespace
 
 int main() {
   try {
+    literal_boundary_recovery_contracts();
     typed_input_seed_preload_contracts();
     manual_epoch_lifetime_contracts();
     manual_epoch_compiler_rom_and_sizes();
