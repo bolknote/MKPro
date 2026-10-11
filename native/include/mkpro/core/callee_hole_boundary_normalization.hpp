@@ -56,7 +56,8 @@ bool prove_ir_stack_entry_equality(const std::vector<IrOp>& ops,
 // The caller must separately relocate code, selectors and setup preloads.
 bool prove_post_layout_stack_producer_erasure(
     const std::vector<MachineItem>& items,
-    const AuthoritativePostLayoutControlFlow& flow, std::size_t producer_item);
+    const AuthoritativePostLayoutControlFlow& flow, std::size_t producer_item,
+    const PostLayoutStackEntryProofOptions& options = {});
 
 // B-up; decimal selector; store; F-reverse restores X/Y/Z. T and physical
 // last-X1 are clobbered, and X2 is conservatively unknown until synchronized.

@@ -1576,6 +1576,42 @@ PostLayoutExecutionRelocationProof prove_post_layout_execution_relocation(
   if (!old_entries.has_value() || !new_entries.has_value())
     return reject("external entries do not identify exact execution contexts");
 
+  if (options.erased_stack_producer_item) {
+    const auto source = *options.erased_stack_producer_item;
+    if (source >= before.size() || !mapped_item(source))
+      return reject("erased producer has no retained continuation identity");
+    const auto& producer = before[source];
+    if (producer.kind != MachineItemKind::Op || producer.raw ||
+        producer.manual_interaction || producer.procedure_boundary ||
+        !producer.roles.empty() || !producer.semantic_call_origins.empty() ||
+        !((producer.opcode >= 0x60 && producer.opcode <= 0x6e) ||
+          producer.opcode == 0x0e))
+      return reject("erasure transport requires a plain direct recall or Enter");
+    for (const auto& entry : before_control.external_entries)
+      if (entry.entry.item_index == source)
+        return reject("an external entry cannot be an erased producer");
+    bool reached = false;
+    for (std::size_t state = 0; state < before_control.execution_states.size(); ++state) {
+      const auto& here = before_control.execution_states[state];
+      if (here.operand_item_index == source)
+        return reject("an erased producer also serves as an address operand");
+      if (here.item_index != source) continue;
+      reached = true;
+      const auto& edges = before_control.execution_edges[state];
+      if (edges.size() != 1U ||
+          edges.front().kind != PostLayoutExecutionEdgeKind::Fallthrough ||
+          edges.front().target_state >= before_control.execution_states.size())
+        return reject("an erased producer must have one exact fallthrough");
+      const auto& next = before_control.execution_states[edges.front().target_state];
+      if (next.item_index == source || !mapped_item(next.item_index) ||
+          mapped_item(next.item_index) != mapped_item(source) ||
+          next.return_stack != here.return_stack ||
+          next.formal_return_stack != here.formal_return_stack)
+        return reject("producer erasure changes its retained command or return frames");
+    }
+    if (!reached) return reject("erased producer has no rooted execution context");
+  }
+
   for (const auto& [source, remap] : options.indirect_entry_remap) {
     const auto target = mapped_item(source);
     if (source >= before.size() || !target.has_value() ||
@@ -1735,6 +1771,18 @@ PostLayoutExecutionRelocationProof prove_post_layout_execution_relocation(
     const auto& new_state = after_control.execution_states.at(new_state_index);
     const auto target = mapped_item(old_state.item_index);
     const auto frames = frame_addresses(old_state.return_stack, true);
+    if (options.erased_stack_producer_item == old_state.item_index) {
+      if (!target || *target != new_state.item_index || !frames ||
+          *frames != new_state.return_stack ||
+          !old_entries->labels.at(old_state_index).empty() ||
+          !new_entries->labels.at(new_state_index).empty())
+        return reject("producer erasure changes an entry or return continuation");
+      old_seen.insert(old_state_index);
+      const auto next = before_control.execution_edges[old_state_index].front().target_state;
+      if (!enqueue(next, new_state_index))
+        return reject("producer erasure exceeds its execution-pair budget");
+      continue;
+    }
     if ((!target.has_value() || *target != new_state.item_index) &&
         options.allow_bypassed_direct_jumps && frames.has_value() &&
         *frames == new_state.return_stack &&

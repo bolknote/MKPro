@@ -31,6 +31,24 @@ struct SymbolicRegionProjection {
   std::map<std::string, std::pair<int, int>> target_bounds;
 };
 
+struct DeferredStackProducerLimits {
+  std::size_t maximum_candidates = 6;
+  std::size_t maximum_erased_cells = 2;
+  std::size_t maximum_proof_attempts = 32;
+};
+
+// Keep alternative deletion subsets, not only a greedy shortest prefix:
+// removing another cell can destroy a useful data/address equality. Each
+// deletion has independent relational data and rooted control/return proofs.
+// Selector origins describe encoded words, not provisional positions. These
+// are conditional layout candidates; the caller must rebind and prove the
+// final artifact before publishing one, and retain the unchanged alternative.
+std::vector<PassResult> deferred_stack_producer_erasure_candidates(
+    const std::vector<IrOp>& ops, const PassContext& context,
+    const PostLayoutControlFlowOptions& control_options,
+    const std::map<std::string, int>& encoded_target_origins,
+    const DeferredStackProducerLimits& limits = {});
+
 // The caller owns the data proof for any changed runtime selectors. This
 // routine proves only identity-preserving permutation and exact CFG/return
 // transport. Every unchanged selector must also appear among required targets.

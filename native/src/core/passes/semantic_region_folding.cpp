@@ -285,6 +285,95 @@ std::optional<SymbolicRegionLayout> layout_symbolic_regions(
 
 
 
+std::vector<PassResult> deferred_stack_producer_erasure_candidates(
+    const std::vector<IrOp>& ops, const PassContext& context,
+    const PostLayoutControlFlowOptions& control_options,
+    const std::map<std::string, int>& encoded_target_origins,
+    const DeferredStackProducerLimits& limits) {
+  std::vector<PassResult> result;
+  if (!symbolic(ops, true) || limits.maximum_candidates == 0 ||
+      limits.maximum_erased_cells == 0 || limits.maximum_proof_attempts == 0)
+    return result;
+  struct Node {
+    std::vector<MachineItem> items;
+    std::size_t erased = 0;
+  };
+  std::vector<Node> nodes{{lower_ir_to_machine(ops), 0}};
+  std::size_t attempts = 0;
+  for (std::size_t parent = 0; parent < nodes.size(); ++parent) {
+    // Appending children can reallocate nodes; keep this proof's input stable.
+    const auto input = nodes[parent].items;
+    const auto erased = nodes[parent].erased;
+    if (erased >= limits.maximum_erased_cells) continue;
+    const auto flow = build_post_layout_control_flow(input, control_options);
+    if (!flow.proved) continue;
+    auto data_flow = flow;
+    const auto product = build_deferred_selector_consistent_execution_graph(
+        input, flow, encoded_target_origins, control_options.maximum_execution_states);
+    if (product.execution.proved) {
+      data_flow.execution_states.clear();
+      for (const auto state : product.execution.original_states)
+        data_flow.execution_states.push_back(flow.execution_states[state]);
+      data_flow.execution_successors = product.execution.successors;
+      data_flow.execution_edges = product.execution.execution_edges;
+    }
+    // A failed refinement leaves the full conservative graph, never a partial
+    // product. The data proof must not re-prune using stale physical digits.
+    for (std::size_t at = 0; at < input.size(); ++at) {
+      const auto& producer = input[at];
+      const bool enter = producer.opcode == 0x0e;
+      if (producer.kind != MachineItemKind::Op || producer.raw ||
+          producer.manual_interaction || producer.procedure_boundary ||
+          !producer.roles.empty() || !producer.semantic_call_origins.empty() ||
+          (!enter && (producer.opcode < 0x60 || producer.opcode > 0x6e)))
+        continue;
+      std::size_t retained = at + 1U;
+      while (retained < input.size() && input[retained].kind == MachineItemKind::Label)
+        ++retained;
+      if (retained >= input.size()) continue;
+      const auto& closer = input[retained];
+      if (closer.kind != MachineItemKind::Op ||
+          !((closer.opcode >= 0x60 && closer.opcode <= 0x6e) ||
+            (enter && closer.opcode >= 0x40 && closer.opcode <= 0x4e)))
+        continue;
+      if (attempts++ >= limits.maximum_proof_attempts) return result;
+      if (!prove_post_layout_stack_producer_erasure(
+              input, data_flow, at, {.refine_runtime_selectors = false}))
+        continue;
+      auto next = input;
+      next.erase(next.begin() + static_cast<std::ptrdiff_t>(at));
+      const auto next_flow = build_post_layout_control_flow(next, control_options);
+      std::vector<std::optional<std::size_t>> relocation(input.size());
+      for (std::size_t i = 0; i < input.size(); ++i)
+        relocation[i] = i < at ? i : i - 1U;
+      // A return to the erased cell now resumes at its retained successor.
+      // The labelled CFG walk proves that alias in every caller context.
+      relocation[at] = retained - 1U;
+      if (!prove_post_layout_execution_relocation(
+              input, next, flow, next_flow, relocation,
+              {.erased_stack_producer_item = at}).proved)
+        continue;
+      if (std::any_of(nodes.begin(), nodes.end(), [&](const Node& node) {
+            return node.items.size() == next.size() &&
+                std::equal(node.items.begin(), node.items.end(), next.begin(), machine_items_equal);
+          }))
+        continue;
+      PassResult candidate;
+      candidate.ops = raise_machine_to_ir(
+          next, effective_optimizer_feature_profile(context.options));
+      candidate.applied = static_cast<int>(erased + 1U);
+      candidate.optimizations.push_back({"joint-dead-stack-layout",
+          "Retained " + std::to_string(erased + 1U) +
+          " separately data/CFG-certified stack producer erasures before selector, "
+          "region and shared-tail placement; final encoded targets remain obligations."});
+      result.push_back(std::move(candidate));
+      nodes.push_back({std::move(next), erased + 1U});
+      if (result.size() >= limits.maximum_candidates) return result;
+    }
+  }
+  return result;
+}
+
 std::vector<PassResult> conditional_region_exchange_candidates(
     const std::vector<IrOp>& ops, const PassContext& context,
     const PostLayoutControlFlowOptions& control_options,

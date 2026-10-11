@@ -338,7 +338,8 @@ bool prove_post_layout_stack_entry_equality(
 
 bool prove_post_layout_stack_producer_erasure(
     const std::vector<MachineItem>& items,
-    const AuthoritativePostLayoutControlFlow& flow, std::size_t producer_item) {
+    const AuthoritativePostLayoutControlFlow& flow, std::size_t producer_item,
+    const PostLayoutStackEntryProofOptions& options) {
   if (!flow.proved || producer_item >= items.size() ||
       flow.execution_edges.size() != flow.execution_states.size())
     return false;
@@ -407,7 +408,9 @@ bool prove_post_layout_stack_producer_erasure(
   if (continuations.empty()) return false;
   for (const int entry : continuations)
     if (!prove_post_layout_stack_entry_equality(
-            items, flow, entry, equality, {.numeric_entry_closed = true}))
+            items, flow, entry, equality,
+            {.refine_runtime_selectors = options.refine_runtime_selectors,
+             .numeric_entry_closed = true}))
       return false;
   return true;
 }

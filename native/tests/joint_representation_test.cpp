@@ -487,6 +487,138 @@ void literal_selector_tests() {
   std::cout << "joint literal/address: 26/27/28 -> at most 25 cells; ROM and rejection contracts passed\n";
 }
 
+LayoutSearchArtifact deferred_erasure_fixture() {
+  LayoutSearchArtifact fixture;
+  auto& items = fixture.items;
+  append(items, {0x40, 0xac});
+  items.back().indirect_flow_targets = std::vector<IrTarget>{std::string{"worker"}};
+  items.push_back(MachineItem::label("resume"));
+  // The first recall is dead, but it is a live return destination. Its
+  // deletion must retarget that frame to the retained recall, not drop it.
+  append(items, {0x61, 0x62, 0x63, 0x64, 0x65, 0x66, 0x67, 0x10, 0x50});
+  items.back().stop_disposition = StopDisposition::Terminal;
+  const int worker = cells(items);
+  items.push_back(MachineItem::label("worker"));
+  append(items, {0x6a, 0x52});
+  items.push_back(MachineItem::label("spare"));
+  append(items, {0x52});
+  for (int i = 0; i < 15; ++i)
+    fixture.preloads.push_back({.register_name = std::string(1, "0123456789abcde"[i]),
+        .value = std::to_string(i == 12 ? worker : i * 3 + 1)});
+  return fixture;
+}
+
+bool contains_producer(const std::vector<MachineItem>& items) {
+  return std::any_of(items.begin(), items.end(), [](const auto& item) {
+    return item.kind == MachineItemKind::Op && item.opcode == 0x61;
+  });
+}
+
+void deferred_stack_erasure_tests() {
+  const CompileOptions options;
+  const passes::PassContext context{options};
+  const auto fixture = deferred_erasure_fixture();
+  const auto& before = fixture.items;
+  const std::size_t producer = 3;
+  require(before[producer].opcode == 0x61, "fixture must identify its return destination");
+  const std::map<std::string, int> origins{
+      {"worker", std::stoi(fixture.preloads[12].value)}};
+  const auto proposals = passes::deferred_stack_producer_erasure_candidates(
+      raise_machine_to_ir(before), context, {}, origins);
+  require(!proposals.empty(), "dead producers must supply conditional layout alternatives");
+  std::optional<LayoutSearchArtifact> deleted;
+  bool partial = false;
+  bool combined = false;
+  for (const auto& proposal : proposals) {
+    auto after = fixture;
+    after.items = lower_ir_to_machine(proposal.ops);
+    const int saving = cells(before) - cells(after.items);
+    partial = partial || saving == 1;
+    combined = combined || saving == 2;
+    if (saving == 1 && !contains_producer(after.items)) deleted = std::move(after);
+  }
+  require(partial && combined && deleted,
+          "retain both partial erasures and their composition, not only the shortest form");
+  // Keep the immutable selector's original number. The separate one-cell
+  // component fills the hole before its target; deleting alone is not a
+  // finished executable program and must not silently use a stale preload.
+  const auto placed = passes::layout_symbolic_regions(
+      raise_machine_to_ir(deleted->items), origins, context);
+  require(placed && placed->changed, "erasure and immutable-selector placement must compose");
+  deleted->items = lower_ir_to_machine(placed->ops);
+  require(cells(deleted->items) == cells(before) - 1,
+          "joint placement must not repay the saving with an extra instruction");
+  require(observe_literal_selector(fixture, "") == observe_literal_selector(*deleted, ""),
+          "erasure/layout must preserve ROM stack, X1/X2, every register and returns");
+
+  auto neutral = before;
+  neutral.erase(neutral.begin() + static_cast<std::ptrdiff_t>(producer));
+  std::vector<std::optional<std::size_t>> relocation(before.size());
+  for (std::size_t i = 0; i < before.size(); ++i)
+    relocation[i] = i <= producer ? i : i - 1U;
+  const auto flow = build_post_layout_control_flow(before);
+  const auto next_flow = build_post_layout_control_flow(neutral);
+  require(prove_post_layout_execution_relocation(
+              before, neutral, flow, next_flow, relocation,
+              {.erased_stack_producer_item = producer}).proved,
+          "a pending return must follow the certified retained-command alias");
+  require(!prove_post_layout_execution_relocation(
+              before, neutral, flow, next_flow, relocation).proved,
+          "ordinary relocation must not implicitly authorize command erasure");
+  relocation[producer] = 0;
+  require(!prove_post_layout_execution_relocation(
+              before, neutral, flow, next_flow, relocation,
+              {.erased_stack_producer_item = producer}).proved,
+          "an incorrect erased-command alias must fail independent control transport");
+
+  const auto reject = [&](const std::vector<MachineItem>& items,
+                          const PostLayoutControlFlowOptions& control,
+                          const char* message) {
+    for (const auto& candidate : passes::deferred_stack_producer_erasure_candidates(
+             raise_machine_to_ir(items), context, control, origins))
+      require(contains_producer(lower_ir_to_machine(candidate.ops)), message);
+  };
+  auto raw = before;
+  raw[producer].raw = true;
+  reject(raw, {}, "raw producers must not disappear");
+  auto owned = before;
+  owned[producer].roles.push_back("exec");
+  reject(owned, {}, "an executable address operand must not disappear");
+  auto boundary = before;
+  boundary[producer].manual_interaction.emplace();
+  reject(boundary, {}, "manual-entry producers must not disappear");
+  reject(before, {.main_entry = std::string{"resume"}},
+         "an independent external entry must not become a continuation alias");
+  auto shadow = before;
+  shadow.insert(shadow.begin() + static_cast<std::ptrdiff_t>(producer + 2U),
+      {MachineItem::op(0x0a, "observe entry shadow"),
+       MachineItem::op(0x46, "publish observed shadow")});
+  reject(shadow, {}, "an observable X2 difference must block producer erasure");
+  auto live = before;
+  live[producer + 2U] = MachineItem::op(0x50, "observe retained stack");
+  live[producer + 2U].stop_disposition = StopDisposition::Terminal;
+  reject(live, {}, "a live Y/Z/T at an untyped stop must block producer erasure");
+  require(passes::deferred_stack_producer_erasure_candidates(
+              raise_machine_to_ir(before), context, {}, origins,
+              {.maximum_proof_attempts = 0}).empty(),
+          "exhaustion must not export an unchecked erasure");
+  require(passes::deferred_stack_producer_erasure_candidates(
+              raise_machine_to_ir(before), context, {}, origins,
+              {.maximum_candidates = 0}).empty(),
+          "zero candidate budget must keep the original program");
+  const auto repeated = passes::deferred_stack_producer_erasure_candidates(
+      raise_machine_to_ir(before), context, {}, origins);
+  require(repeated.size() == proposals.size(), "erasure frontier size must be deterministic");
+  for (std::size_t i = 0; i < proposals.size(); ++i) {
+    const auto first = lower_ir_to_machine(proposals[i].ops);
+    const auto second = lower_ir_to_machine(repeated[i].ops);
+    require(first.size() == second.size() &&
+                std::equal(first.begin(), first.end(), second.begin(), machine_items_equal),
+            "erasure subset ordering must be deterministic");
+  }
+  std::cout << "deferred stack erasure: data/CFG/return, layout, ROM and rejection contracts passed\n";
+}
+
 void layout_tests() {
   CompileOptions options;
   const passes::PassContext context{options};
@@ -513,6 +645,7 @@ int main() {
     region_tests();
     interactive_region_tests();
     layout_tests();
+    deferred_stack_erasure_tests();
     literal_selector_tests();
     representation_and_composition_tests();
     std::cout << "joint representation: compiler, constraints and ROM passed\n";

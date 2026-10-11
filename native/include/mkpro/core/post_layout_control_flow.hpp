@@ -162,6 +162,13 @@ struct PostLayoutExecutionRelocationOptions {
   // Admit only a single-target BP with no external/manual observation; calls,
   // returns, conditions and state-changing instructions are never transparent.
   bool allow_bypassed_direct_jumps = false;
+  // Control transport for one separately data-certified recall/Enter erasure.
+  // Map the removed producer to its retained fallthrough successor, including
+  // return frames that used to resume at the producer. This is NOT a data
+  // certificate: the caller must prove stack/X1/X2 nonobservation separately.
+  // External/manual entries, fetched operands and non-fallthrough contexts
+  // remain ineligible. Composing deletions requires one proof per deletion.
+  std::optional<std::size_t> erased_stack_producer_item;
 };
 
 struct PostLayoutExecutionRelocationProof {

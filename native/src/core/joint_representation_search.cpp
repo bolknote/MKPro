@@ -971,6 +971,28 @@ TransactionSearchResult<LayoutSearchArtifact> search_joint_representation_constr
       if (refresh_constraint_targets(alternative))
         variants.push_back(std::move(alternative));
     }
+    // Erasure changes the geometry that allocation, numeric literals and
+    // projected tails solve together. Preserve every historical alternative
+    // first, then bounded deletion subsets instead of freezing a greedy DCE
+    // winner or waiting until the complete layout has already been selected.
+    if (limits.maximum_expansions > 0 && limits.maximum_candidates > 0 &&
+        limits.maximum_depth > 0) {
+      const auto bases = variants;
+      for (const auto& base : bases)
+        for (auto& proposal : passes::deferred_stack_producer_erasure_candidates(
+                 raise_machine_to_ir(base.artifact.items,
+                     effective_optimizer_feature_profile(options)),
+                 context, control_options, origins,
+                 {.maximum_candidates = std::min<std::size_t>(6, limits.maximum_candidates),
+                  .maximum_erased_cells = std::min<std::size_t>(2, limits.maximum_depth)})) {
+          auto artifact = apply(base.artifact, std::move(proposal));
+          if (!artifact) continue;
+          ConstrainedRepresentation alternative{
+              std::move(*artifact), base.targets, base.encoded_selectors};
+          if (refresh_constraint_targets(alternative))
+            variants.push_back(std::move(alternative));
+        }
+    }
     return variants;
   };
 
@@ -1171,8 +1193,8 @@ TransactionSearchResult<LayoutSearchArtifact> search_joint_representation_constr
         const auto uncoalesced = variants;
         for (const auto& source_variant : uncoalesced) {
           auto alternatives = coalesced_variants(source_variant);
-          if (alternatives.size() > 1U)
-            variants.push_back(std::move(alternatives.back()));
+          for (std::size_t i = 1; i < alternatives.size(); ++i)
+            variants.push_back(std::move(alternatives[i]));
         }
         for (const auto& variant : variants)
           for (bool projected : {false, true}) {

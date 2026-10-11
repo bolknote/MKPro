@@ -1063,6 +1063,31 @@ Negative cases cover incomplete setup ownership, broken/raw input, a displayed
 carrier, and an otherwise free register written by the input protocol.
 This synthetic result does not claim a reduction of the 132-cell 4x4 program.
 
+### Stack erasure inside the joint layout transaction
+
+`joint-dead-stack-layout` retains bounded alternatives for erasing dead direct
+recalls and Enter commands before allocation/layout closure. It composes with
+web coalescing, whole-family selector allocation, projected shared tails and
+data/address literal equalities. Historical candidates remain first; neither
+a greedy deletion nor the shortest intermediate form replaces them.
+
+Each deletion has two independent certificates. The existing relational stack
+proof establishes nonobservation of X/Y/Z/T, X1 and X2 through every exact return
+context. Deferred selector refinement uses encoded origins, never provisional
+addresses. A separate rooted, labelled CFG transport maps the removed command
+to its retained fallthrough successor, including pending return frames. It
+rejects external/manual entries, address operands, non-fallthrough control and
+incorrect continuation aliases. The control certificate is not a data proof.
+
+The candidate frontier retains deletion subsets, including partial deletions
+whose geometry may beat the fully cleaned version. It is deterministic and
+bounded by candidate count, deletion depth and proof attempts. Partial or failed
+data proofs are never exported. Final selector/preload rebinding, shared-tail
+proofs, generated setup and the ordinary final static gate remain mandatory.
+
+The unchanged 4x4 source compiles to 129 cells instead of 130. This is a measured
+composition gain, not a claim that the 105-cell target has been reached.
+
 ### Dead stack producers and setup rebinding
 
 The finalization pipeline can erase a direct recall or Enter even when X does
