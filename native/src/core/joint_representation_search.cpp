@@ -784,10 +784,15 @@ std::optional<LayoutSearchArtifact> close_representation_constraints(
 
 } // namespace
 
-TransactionSearchResult<LayoutSearchArtifact> search_joint_representation_constraints(
+namespace {
+
+enum class ProloguePartitionLane { Disabled, Enabled };
+
+TransactionSearchResult<LayoutSearchArtifact> search_joint_representation_constraints_impl(
     const LayoutSearchArtifact& root, const CompileOptions& options,
     const JointRepresentationFinalizer& finalize,
-    const TransactionSearchLimits& limits, bool preload_environment_complete) {
+    const TransactionSearchLimits& limits, bool preload_environment_complete,
+    ProloguePartitionLane partition_lane) {
   TransactionSearchResult<LayoutSearchArtifact> output;
   CompileOptions configured = options;
   configured.defer_return_suffix_until_callee_hole = true;
@@ -1265,7 +1270,57 @@ TransactionSearchResult<LayoutSearchArtifact> search_joint_representation_constr
   if (data_control_incumbent &&
       (!output.incumbent || cells(*data_control_incumbent) < cells(*output.incumbent)))
     output.incumbent = std::move(*data_control_incumbent);
+  // Finish every established lane before admitting partitioned prologues.
+  // Their roots must not reduce an older root's product slots, beam capacity,
+  // expansion budget or equal-size incumbent. Recursion is disabled in this
+  // one additional bounded layer, not controlled by a source-specific marker.
+  if (partition_lane == ProloguePartitionLane::Enabled && preload_environment_complete &&
+      limits.maximum_expansions && limits.maximum_candidates && limits.maximum_depth) {
+    for (auto& proposal : passes::common_processor_partitioned_entry_candidates(
+             *root_ops, context,
+             {.runtime_preloads = &root.preloads,
+              .maximum_candidates = std::min<std::size_t>(2, limits.maximum_candidates)})) {
+      auto child = apply(initial.artifact, std::move(proposal));
+      if (!child || !transaction_growth_fits(cells(root), cells(*child), limits.maximum_growth_cells))
+        continue;
+      ConstrainedRepresentation partitioned_root{*child, initial.targets};
+      if (!refresh_constraint_targets(partitioned_root)) continue;
+      // The proved root can already enable placement/tail sharing. Do not
+      // demand an unrelated second rewrite just to try its complete closure.
+      if (auto closed = close_node(partitioned_root, {"partitioned-common-processor"});
+          closed && cells(closed->artifact) < cells(root) &&
+          (!output.incumbent || cells(closed->artifact) < cells(*output.incumbent)))
+        output.incumbent = closed->artifact;
+      auto partition_limits = limits;
+      --partition_limits.maximum_depth; // Pay for this root's enabling edge.
+      if (cells(*child) > cells(root))
+        partition_limits.maximum_growth_cells -=
+            static_cast<std::size_t>(cells(*child) - cells(root));
+      const auto partitioned = search_joint_representation_constraints_impl(
+          *child, options, finalize, partition_limits, preload_environment_complete,
+          ProloguePartitionLane::Disabled);
+      if (partitioned.incumbent && cells(*partitioned.incumbent) < cells(root) &&
+          (!output.incumbent || cells(*partitioned.incumbent) < cells(*output.incumbent)))
+        output.incumbent = partitioned.incumbent;
+      output.expanded += partitioned.expanded;
+      output.admitted += partitioned.admitted;
+      output.duplicate += partitioned.duplicate;
+      output.rejected += partitioned.rejected;
+      output.budget_exhausted = output.budget_exhausted || partitioned.budget_exhausted;
+    }
+  }
   return output;
+}
+
+} // namespace
+
+TransactionSearchResult<LayoutSearchArtifact> search_joint_representation_constraints(
+    const LayoutSearchArtifact& root, const CompileOptions& options,
+    const JointRepresentationFinalizer& finalize,
+    const TransactionSearchLimits& limits, bool preload_environment_complete) {
+  return search_joint_representation_constraints_impl(
+      root, options, finalize, limits, preload_environment_complete,
+      ProloguePartitionLane::Enabled);
 }
 
 namespace passes {

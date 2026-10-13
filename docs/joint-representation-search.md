@@ -1173,3 +1173,43 @@ baseline is 60 -> 55 cells. Live-stack, dynamic-consumer and unpaid-recovery
 cases reject. This removes a representation proof blocker in 4x4, but its
 complete winner is still 129 cells: boundary restoration is not a free saving.
 
+
+### Register arguments and partitioned prologue entries
+
+The common-processor certificate supports a consumer taking both arguments in
+registers as well as its existing second argument in X. Discovery matches
+register effects, not source names. Both orders of the two recall/store pairs
+are admitted only after their complete finite domains and the unrestricted
+caller independently pass the exact register, stack, X1/X2 and arithmetic
+observation proofs. The returning normalizer instructions keep their order.
+
+A range queried after an early store is not evidence about the overwritten
+incoming register. Replay rejects transport prefixes that destroy a later
+argument before reading it; a self-copy is not that destructive case. Physical
+register indices, not spelling, define aliasing. A compiler/ROM regression
+retains the formerly accepted destructive-transport counterexample.
+
+An independent partitioned-entry alternative moves one complete prologue into
+the common consumer while retaining every other caller at the unchanged body
+entry. It neither replays their projection nor assumes they are fixed points.
+The unrestricted moved caller has the same exact-term observation proof; all
+other argument-preparation instructions stay in their original order. Closed
+CFGs and hardware return-depth bounds remain mandatory. Symbolic work is
+budgeted across the candidates, and programs without a matching prologue do
+not build an otherwise unused execution graph.
+
+Entry partitioning gets one separate bounded closure layer after all historical
+search lanes finish. Its roots cannot steal old beam slots, expansion budgets,
+product capacity or an equal-size incumbent. A proved neutral root is tried
+for complete closure immediately: requiring an unrelated extra rewrite would
+hide a valid placement/tail composition. Further search cannot reopen this
+partition lane, pays one depth level and deducts any unrepaid growth from its
+cell allowance. Only a completely finalized, strictly smaller artifact wins.
+
+Compiler/ROM tests exercise unrelated remainder and absolute-value projections,
+both argument orders, large and packed words, separate body entries, live stack
+rejection, unknown domains and exhausted budgets. Register replay composes with
+shared-tail layout at 54 to 51 cells. A non-fixed-point caller requires no replay
+when using the partitioned entry; that neutral transformation composes with
+projected placement at 54 to 52 cells. All register/stack observations, physical
+X1, exposed decimal-entry X2 and matched nested returns are retained.

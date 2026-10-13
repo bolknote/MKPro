@@ -107,6 +107,193 @@ std::vector<std::string> observe(const std::vector<MachineItem>& items,
   return result;
 }
 
+
+Fixture register_fixture(int a, int b, bool absolute, bool reversed, bool weak = false) {
+  auto f = fixture(a, b, absolute, weak);
+  for (std::size_t i = 1; i < f.items.size(); ++i) {
+    if (f.items[i].kind != MachineItemKind::Address) continue;
+    if (f.items[i].target == IrTarget{std::string("consumer")} &&
+        f.items[i - 1].mnemonic == "ordinary") {
+      f.items.insert(f.items.begin() + static_cast<std::ptrdiff_t>(i - 1),
+                     MachineItem::op(0x41, "register second argument"));
+      ++i;
+    } else if (f.items[i].target == IrTarget{std::string("consumer")} &&
+               f.items[i - 1].mnemonic == "already projected") {
+      const std::size_t start = i - 4;
+      if (reversed) {
+        f.items[start] = MachineItem::op(0x65, "second argument");
+        f.items[start + 1] = MachineItem::op(0x41, "store second argument");
+        f.items[start + 2] = MachineItem::op(0x64, "first argument");
+        f.items.insert(f.items.begin() + static_cast<std::ptrdiff_t>(i - 1),
+                       MachineItem::op(0x42, "store first argument"));
+      } else {
+        f.items.insert(f.items.begin() + static_cast<std::ptrdiff_t>(i - 1),
+                       MachineItem::op(0x41, "store second argument"));
+      }
+      ++i;
+    }
+  }
+  bool body = false;
+  for (std::size_t i = 0; i < f.items.size(); ++i) {
+    if (f.items[i].kind == MachineItemKind::Label && f.items[i].name == "consumer")
+      body = true;
+    if (body && !weak && f.items[i].kind == MachineItemKind::Op && f.items[i].opcode == 0x14)
+      f.items[i] = MachineItem::op(0x61, "recall second register argument");
+    if (body && !weak && f.items[i].kind == MachineItemKind::Op && f.items[i].opcode == 0x41) {
+      f.items.erase(f.items.begin() + static_cast<std::ptrdiff_t>(i));
+      break;
+    }
+  }
+  return f;
+}
+
+void register_argument_contracts() {
+  for (bool absolute : {false, true})
+    for (bool reversed : {false, true})
+      for (int a : {0, 1})
+        for (int b : {0, 1}) {
+          const auto f = register_fixture(a, b, absolute, reversed);
+          const auto candidates = alternatives(f);
+          require(candidates.size() == 1, "register arguments need a proved generic candidate");
+          const auto items = lower_ir_to_machine(candidates.front().ops);
+          require(count(items) == count(f.items) - 1, "one fewer materialized argument cell");
+          for (const char* input : {"-3.5", "0", "1", "9.25", "1E99", "-1E99", "8.ABCD123"})
+            require(observe(items, f, input) == observe(f.items, f, input),
+                    "register ABI all words, stack, X1/X2 and nested returns");
+          require(ir_ops_to_json(alternatives(f).front().ops) ==
+                      ir_ops_to_json(candidates.front().ops),
+                  "both register-argument orders have deterministic proofs");
+        }
+  const auto f = register_fixture(1, 0, false, false);
+  const auto candidates = alternatives(f);
+  const auto neutral = lower_ir_to_machine(candidates.front().ops);
+  PostLayoutControlFlowOptions control;
+  control.empty_return_target = 1;
+  const auto flow = build_post_layout_control_flow(neutral, control);
+  const auto prep = prepare_shared_helper_dual_mode_layout(neutral, flow);
+  require(flow.proved && prep.applied == 1 && prep.continuation.proved &&
+              prep.continuation.helper_body_cells == 9,
+          "register ABI retains matched returns and a distinct body entry");
+  const auto closed = finalize_shared_helper_dual_mode_layout(prep, prep.items, f.preloads, flow);
+  require(closed.proof.proved && closed.proof.final_control_flow.proved &&
+              count(f.items) == 54 && count(closed.items) == 51,
+          "register ABI plus dual-use placement: 54 -> 51");
+  for (const char* input : {"-3.5", "0", "9.25", "8.ABCD123"})
+    require(observe(closed.items, f, input) == observe(f.items, f, input),
+            "joint register-argument and dual-use tail rewrite ROM observation");
+
+  for (bool reversed : {false, true}) {
+    require(alternatives(register_fixture(2, 1, false, reversed)).empty(),
+            "register ABI must prove both arguments' fixed points");
+    require(alternatives(register_fixture(1, 0, false, reversed, true)).empty(),
+            "register arguments do not make live stack/X1/X2 disposable");
+    require(alternatives(register_fixture(1, 0, false, reversed), 1).empty(),
+            "register ABI exhausts the same proof budget and fails closed");
+    auto unknown = register_fixture(1, 0, false, reversed);
+    unknown.preloads.erase(unknown.preloads.begin());
+    require(alternatives(unknown).empty(), "register ABI does not guess an unknown input domain");
+  }
+}
+
+void destructive_argument_transport_contracts() {
+  auto alias = fixture(1, 1, false);
+  for (std::size_t i = 1; i < alias.items.size(); ++i)
+    if (alias.items[i].kind == MachineItemKind::Address &&
+        alias.items[i - 1].mnemonic == "already projected")
+      alias.items[i - 2] = MachineItem::op(0x62, "read destroyed argument");
+  require(alternatives(alias).empty(),
+          "a post-store singleton cannot prove the overwritten incoming word");
+  auto unsafe = alias.items;
+  for (std::size_t i = 0; i < unsafe.size(); ++i)
+    if (unsafe[i].kind == MachineItemKind::Op && unsafe[i].mnemonic == "already projected") {
+      const std::size_t start = i - 3;
+      unsafe.erase(unsafe.begin() + static_cast<std::ptrdiff_t>(start),
+                   unsafe.begin() + static_cast<std::ptrdiff_t>(i));
+      const std::vector<MachineItem> wrong{
+          MachineItem::op(0x62, "old second argument"),
+          MachineItem::op(0x41, "raw second argument"),
+          MachineItem::op(0x64, "first argument"),
+          MachineItem::op(0x42, "first argument store"),
+          MachineItem::op(0x61, "second argument")};
+      unsafe.insert(unsafe.begin() + static_cast<std::ptrdiff_t>(start), wrong.begin(), wrong.end());
+      break;
+    }
+  require(observe(unsafe, alias, "0") != observe(alias.items, alias, "0"),
+          "ROM retains the destructive-transport counterexample");
+
+  for (bool reversed : {false, true}) {
+    auto f = register_fixture(1, 1, false, reversed);
+    for (std::size_t i = 0; i < f.items.size(); ++i)
+      if (f.items[i].kind == MachineItemKind::Op && f.items[i].mnemonic == "already projected")
+        f.items[i - 2] = MachineItem::op(reversed ? 0x61 : 0x62, "read destroyed argument");
+    require(alternatives(f).empty(),
+            "neither register-argument order may read through a destructive store");
+  }
+}
+
+
+void partitioned_entry_contracts() {
+  CompileOptions options;
+  options.defer_return_suffix_until_callee_hole = true;
+  for (bool registers : {false, true})
+    for (bool absolute : {false, true}) {
+      const auto f = registers ? register_fixture(1, 0, absolute, false) : fixture(1, 0, absolute);
+      const auto proposals = passes::common_processor_partitioned_entry_candidates(
+          raise_machine_to_ir(f.items), {options}, {.runtime_preloads = &f.preloads});
+      require(proposals.size() == 1, "separate prologue/body entry is a generic independent alternative");
+      const auto items = lower_ir_to_machine(proposals.front().ops);
+      require(count(items) == count(f.items), "entry partitioning is neutral before coupled placement");
+      for (const char* input : {"-3.5", "0", "9.25", "1E99", "8.ABCD123"})
+        require(observe(items, f, input) == observe(f.items, f, input),
+                "partitioned entries keep all other callers and their full observations unchanged");
+      PostLayoutControlFlowOptions control;
+      control.empty_return_target = 1;
+      const auto flow = build_post_layout_control_flow(items, control);
+      const auto prep = prepare_shared_helper_dual_mode_layout(items, flow);
+      require(flow.proved && prep.applied == 1 && prep.continuation.proved,
+              "both entry paths have a closed joint tail certificate");
+      const auto final = finalize_shared_helper_dual_mode_layout(prep, prep.items, f.preloads, flow);
+      if (registers) {
+        require(!final.proof.proved,
+                "partitioning does not guess a missing one-cell geometry adjustment");
+      } else {
+        require(final.proof.proved && final.proof.final_control_flow.proved && count(final.items) == 51,
+                "different normalization paths compose at 53 -> 51 cells");
+        for (const char* input : {"-3.5", "0", "9.25"})
+          require(observe(final.items, f, input) == observe(f.items, f, input),
+                  "coupled tail closure and distinct normalization paths match ROM");
+      }
+      require(passes::common_processor_partitioned_entry_candidates(
+          raise_machine_to_ir(f.items), {options},
+          {.runtime_preloads = &f.preloads, .maximum_proof_work = 1}).empty(),
+          "partitioned proof budget fails closed");
+    }
+  auto nonfixed = fixture(2, 1);
+  const auto body_entry = std::find_if(nonfixed.items.begin(), nonfixed.items.end(),
+      [](const auto& item) { return item.kind == MachineItemKind::Label && item.name == "consumer"; });
+  nonfixed.items.insert(body_entry, MachineItem::op(0x52, "independent geometry cell"));
+  require(passes::common_processor_partitioned_entry_candidates(
+      raise_machine_to_ir(nonfixed.items), {options},
+      {.runtime_preloads = &nonfixed.preloads}).size() == 1,
+      "unchanged callers need no invented fixed-point domain");
+  const auto result = search_joint_representation_constraints(
+      {.items = nonfixed.items, .preloads = nonfixed.preloads}, {},
+      [](const LayoutSearchArtifact& candidate) -> std::optional<LayoutSearchArtifact> {
+        bool partitioned = false, tail = false;
+        for (const auto& report : candidate.optimizations) {
+          partitioned = partitioned || report.name == "partitioned-common-processor";
+          tail = tail || report.name == "joint-projected-tail-layout";
+        }
+        return partitioned && tail ? std::optional{candidate} : std::nullopt;
+      }, {.maximum_expansions = 8, .maximum_candidates = 24,
+          .maximum_depth = 3, .maximum_growth_cells = 2});
+  require(result.incumbent && count(result.incumbent->items) == 52,
+          "independent closure composes entry partition, allocation and tail geometry");
+  for (const char* input : {"-3.5", "0", "9.25"})
+    require(observe(result.incumbent->items, nonfixed, input) == observe(nonfixed.items, nonfixed, input),
+            "complete partitioned-entry closure preserves register/stack/return observations");
+}
+
 void composition() {
   for (bool absolute : {false, true})
     for (int a : {0, 1})
@@ -521,13 +708,16 @@ void stable_split_bridge_contracts() {
 
 int main() {
   try {
+    register_argument_contracts();
+    destructive_argument_transport_contracts();
+    partitioned_entry_contracts();
     composition();
     negative_proofs();
     complete_artifact_contracts();
     projected_geometry_contracts();
     selector_provenance_contracts();
     stable_split_bridge_contracts();
-    std::cout << "common processor compiler/ROM and size baseline passed (53 -> 51)\n";
+    std::cout << "common processor compiler/ROM and size baseline passed (53/54 -> 51)\n";
     return 0;
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';

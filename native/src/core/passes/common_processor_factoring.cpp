@@ -258,7 +258,70 @@ struct Pattern {
   std::size_t ordinary = 0, admitted = 0, helper = 0;
   std::vector<std::size_t> other_calls;
   std::vector<IrOp> normalizer, body;
+  std::size_t ordinary_begin = 0, admitted_begin = 0;
+  std::size_t recall_second = 0;
+  std::size_t admitted_first = 0, admitted_second = 0;
+  bool register_arguments = false;
+  bool partitioned = false;
 };
+
+
+std::optional<Pattern> projection_prologue(const std::vector<IrOp>& ops,
+                                          const Index& index, std::size_t call,
+                                          bool register_arguments) {
+  const std::size_t width = register_arguments ? 5 : 4;
+  if (call < width) return std::nullopt;
+  const std::size_t start = call - width;
+  const auto helper = call_target(ops[call], index);
+  const auto normalizer = call_target(ops[start], index, true);
+  const auto same_register = [&](std::size_t a, std::size_t b) {
+    return register_index(ops[a].register_name) == register_index(ops[b].register_name);
+  };
+  if (!helper || !normalizer || *helper == *normalizer ||
+      call_target(ops[start + 3], index) != normalizer ||
+      ops[start + 1].kind != IrKind::Store || ops[start + 2].kind != IrKind::Recall ||
+      !plain_metadata(ops[start + 1]) || !plain_metadata(ops[start + 2]) ||
+      !ordinary_register(ops[start + 1]) || !ordinary_register(ops[start + 2]) ||
+      same_register(start + 1, start + 2))
+    return std::nullopt;
+  if (register_arguments &&
+      (ops[start + 4].kind != IrKind::Store || !plain_metadata(ops[start + 4]) ||
+       !ordinary_register(ops[start + 4]) || same_register(start + 4, start + 1)))
+    return std::nullopt;
+  if (ops[start].meta.manual_interaction &&
+      ops[start].meta.manual_interaction->kind != ManualInteractionAnchorKind::ContinuousResume)
+    return std::nullopt;
+  const auto pure = leaf(ops, *normalizer, true);
+  const auto body = leaf(ops, *helper, false);
+  if (!pure || !body) return std::nullopt;
+  return Pattern{.ordinary = call, .admitted = ops.size(), .helper = *helper,
+                 .other_calls = {}, .normalizer = *pure, .body = *body,
+                 .ordinary_begin = start, .admitted_begin = ops.size(),
+                 .recall_second = start + 2,
+                 .admitted_first = ops.size(), .admitted_second = ops.size(),
+                 .register_arguments = register_arguments, .partitioned = false};
+}
+
+void execute_prologue(Evaluation& evaluation, const std::vector<IrOp>& ops,
+                      const Pattern& p) {
+  for (std::size_t i = p.ordinary_begin; i < p.ordinary; ++i) {
+    if (i == p.ordinary_begin || i == p.ordinary_begin + 3)
+      evaluation.call(p.normalizer);
+    else
+      evaluation.execute(ops[i]);
+  }
+}
+
+bool prove_unrestricted_prologue(const std::vector<IrOp>& ops, const Pattern& p) {
+  Evaluation before, after;
+  execute_prologue(before, ops, p);
+  before.call(p.body);
+  after.synchronize_call();
+  execute_prologue(after, ops, p);
+  for (const auto& op : p.body) after.execute(op);
+  after.synchronize_call();
+  return same(before, after);
+}
 
 bool all_entries_are_calls(const std::vector<IrOp>& ops, const Index& index,
                            Pattern& p) {
@@ -271,8 +334,8 @@ bool all_entries_are_calls(const std::vector<IrOp>& ops, const Index& index,
     const auto inspect = [&](const IrTarget& t) {
       const auto entry = target(t, index);
       if (!entry) return false;
-      if ((*entry > p.ordinary - 4 && *entry <= p.ordinary) ||
-          (*entry > p.admitted - 3 && *entry <= p.admitted) ||
+      if ((*entry > p.ordinary_begin && *entry <= p.ordinary) ||
+          (*entry > p.admitted_begin && *entry <= p.admitted) ||
           (*entry > p.helper && *entry <= end)) return false;
       if (*entry != p.helper) return true;
       if (call_target(op, index) != p.helper) return false;
@@ -300,10 +363,10 @@ bool prove_pair(const std::vector<IrOp>& ops, const Pattern& p,
   const auto pairs = static_cast<std::size_t>((first.upper - first.lower + 1) *
                                                (second.upper - second.lower + 1));
   if (pairs > maximum_pairs) return false;
-  const auto& store = ops[p.ordinary - 3];
-  const auto& recall = ops[p.ordinary - 2];
-  const auto a = static_cast<std::size_t>(register_index(ops[p.admitted - 3].register_name));
-  const auto b = static_cast<std::size_t>(register_index(ops[p.admitted - 1].register_name));
+  const auto& recall = ops[p.recall_second];
+  const auto a = static_cast<std::size_t>(register_index(ops[p.admitted_first].register_name));
+  const auto b = static_cast<std::size_t>(register_index(ops[p.admitted_second].register_name));
+
   for (std::int64_t u = first.lower; u <= first.upper; ++u) {
     if (!fixed_point(p.normalizer, u)) return false;
     for (std::int64_t v = second.lower; v <= second.upper; ++v) {
@@ -313,61 +376,45 @@ bool prove_pair(const std::vector<IrOp>& ops, const Pattern& p,
       before.state.registers[a] = *number(std::to_string(u));
       before.state.registers[b] = *number(std::to_string(v));
       after = before;
-      for (std::size_t i = p.admitted - 3; i < p.admitted; ++i) before.execute(ops[i]);
+      for (std::size_t i = p.admitted_begin; i < p.admitted; ++i) before.execute(ops[i]);
       before.call(p.body);
-      after.execute(ops[p.admitted - 1]);
+      after.execute(ops[p.admitted_second]);
       after.execute(make_store(recall.register_name));
-      after.execute(ops[p.admitted - 3]);
+      after.execute(ops[p.admitted_first]);
       after.synchronize_call();
-      after.call(p.normalizer);
-      after.execute(store);
-      after.execute(recall);
-      after.call(p.normalizer);
+      execute_prologue(after, ops, p);
       for (const auto& op : p.body) after.execute(op);
       after.synchronize_call();
       if (!same(before, after)) return false;
     }
   }
-  // The unbounded caller is not justified by the finite-domain enumeration.
-  // Prove it separately with independent symbolic words in every register.
-  Evaluation before, after;
-  before.call(p.normalizer);
-  before.execute(store);
-  before.execute(recall);
-  before.call(p.normalizer);
-  before.call(p.body);
-  after.synchronize_call();
-  after.call(p.normalizer);
-  after.execute(store);
-  after.execute(recall);
-  after.call(p.normalizer);
-  for (const auto& op : p.body) after.execute(op);
-  after.synchronize_call();
-  return same(before, after);
+  // Its unbounded caller has an independent exact-term proof; the finite
+  // enumeration above never constrains the ordinary input.
+  return prove_unrestricted_prologue(ops, p);
 }
 
 PassResult rewrite(const std::vector<IrOp>& ops, const Index& index,
                    const Pattern& p) {
   std::string body_label = "__common_processor_body";
   while (index.labels.contains(body_label)) body_label += '_';
-  std::vector<IrOp> prefix(ops.begin() + static_cast<std::ptrdiff_t>(p.ordinary - 4),
+  std::vector<IrOp> prefix(ops.begin() + static_cast<std::ptrdiff_t>(p.ordinary_begin),
                            ops.begin() + static_cast<std::ptrdiff_t>(p.ordinary));
   for (auto& op : prefix) op.meta.manual_interaction.reset();
   const std::set<std::size_t> others(p.other_calls.begin(), p.other_calls.end());
   PassResult result{.applied = 1};
   for (std::size_t i = 0; i < ops.size(); ++i) {
-    if (i == p.ordinary - 4) {
+    if (i == p.ordinary_begin) {
       auto call = ops[p.ordinary];
       call.meta.manual_interaction = ops[i].meta.manual_interaction;
       result.ops.push_back(std::move(call));
     }
-    if (i >= p.ordinary - 4 && i <= p.ordinary) continue;
-    if (i == p.admitted - 3) {
-      result.ops.push_back(ops[p.admitted - 1]);
-      result.ops.push_back(make_store(ops[p.ordinary - 2].register_name));
-      result.ops.push_back(ops[p.admitted - 3]);
+    if (i >= p.ordinary_begin && i <= p.ordinary) continue;
+    if (!p.partitioned && i == p.admitted_begin) {
+      result.ops.push_back(ops[p.admitted_second]);
+      result.ops.push_back(make_store(ops[p.recall_second].register_name));
+      result.ops.push_back(ops[p.admitted_first]);
     }
-    if (i >= p.admitted - 3 && i < p.admitted) continue;
+    if (!p.partitioned && i >= p.admitted_begin && i < p.admitted) continue;
     if (i == p.helper) {
       result.ops.insert(result.ops.end(), prefix.begin(), prefix.end());
       IrOp label;
@@ -388,11 +435,15 @@ PassResult rewrite(const std::vector<IrOp>& ops, const Index& index,
     }
     result.ops.push_back(std::move(op));
   }
-  result.optimizations.push_back({"finite-domain-common-processor",
-      "Factored a two-argument normalization prologue into a shared consumer. "
-      "Exhaustively proved the admitted integral domains with exact decimal arithmetic; "
+  result.optimizations.push_back({p.partitioned ? "partitioned-common-processor" : "finite-domain-common-processor",
+      std::string(p.partitioned ? "Sank one normalization prologue and retained the other callers unchanged at a separate body entry. " : "Factored a two-argument normalization prologue into a shared consumer. ") +
+      std::string(p.partitioned ? "Proved the unrestricted moved prologue with exact symbolic terms; " : "Exhaustively proved the admitted integral domains with exact decimal arithmetic; ") +
       "compared every register, X/Y/Z/T, X1, X2 and possible arithmetic observation. "
-      "Retained the divergent body entry and deferred selector/layout obligations."});
+      "Retained the divergent body entry and deferred selector/layout obligations. " +
+      std::string(p.partitioned ?
+          "Kept every other caller at its unchanged body entry." : p.register_arguments ?
+          "Composed a two-register argument ABI with either proved preparation order." :
+          "Composed the existing X-argument ABI.")});
   return result;
 }
 
@@ -407,34 +458,53 @@ std::vector<PassResult> common_processor_factoring_candidates(
   const auto index = index_ops(ops);
   if (!index.valid) return results;
   std::vector<Pattern> patterns;
-  for (std::size_t c = 4; c < ops.size(); ++c) {
-    const auto helper = call_target(ops[c], index);
-    const auto normalizer = call_target(ops[c - 4], index, true);
-    if (!helper || !normalizer || *helper == *normalizer ||
-        call_target(ops[c - 1], index) != normalizer ||
-        ops[c - 3].kind != IrKind::Store || ops[c - 2].kind != IrKind::Recall ||
-        !plain_metadata(ops[c - 3]) || !plain_metadata(ops[c - 2]) ||
-        !ordinary_register(ops[c - 3]) || !ordinary_register(ops[c - 2]) ||
-        ops[c - 3].register_name == ops[c - 2].register_name)
-      continue;
-    if (ops[c - 4].meta.manual_interaction &&
-        ops[c - 4].meta.manual_interaction->kind != ManualInteractionAnchorKind::ContinuousResume)
-      continue;
-    const auto pure = leaf(ops, *normalizer, true);
-    const auto body = leaf(ops, *helper, false);
-    if (!pure || !body) continue;
-    for (std::size_t other = 3; other < ops.size(); ++other) {
-      if (other == c || call_target(ops[other], index) != helper ||
-          ops[other - 3].kind != IrKind::Recall ||
-          ops[other - 2].kind != IrKind::Store ||
-          ops[other - 1].kind != IrKind::Recall ||
-          ops[other - 2].register_name != ops[c - 3].register_name ||
-          !plain_metadata(ops[other - 3]) || !plain_metadata(ops[other - 2]) ||
-          !plain_metadata(ops[other - 1]) ||
-          !ordinary_register(ops[other - 3]) || !ordinary_register(ops[other - 1]))
-        continue;
-      Pattern p{c, other, *helper, {}, *pure, *body};
-      if (all_entries_are_calls(ops, index, p)) patterns.push_back(std::move(p));
+  // Keep historical X-argument alternatives ahead of the new register ABI.
+  // Neither discovery nor the proof depends on a consumer's source identity.
+  for (bool register_arguments : {false, true}) {
+    const std::size_t width = register_arguments ? 5 : 4;
+    const std::size_t admitted_width = register_arguments ? 4 : 3;
+    for (std::size_t c = width; c < ops.size(); ++c) {
+      const auto base = projection_prologue(ops, index, c, register_arguments);
+      if (!base) continue;
+      const auto start = base->ordinary_begin;
+      const auto helper = base->helper;
+      for (std::size_t other = admitted_width; other < ops.size(); ++other) {
+        const std::size_t admitted = other - admitted_width;
+        if (other == c || call_target(ops[other], index) != std::optional{helper} ||
+            !(other < start || c < admitted))
+          continue;
+        const auto is_transport = [&](std::size_t pos, IrKind kind) {
+          return ops[pos].kind == kind && plain_metadata(ops[pos]) &&
+                 ordinary_register(ops[pos]);
+        };
+        if (!is_transport(admitted, IrKind::Recall) ||
+            !is_transport(admitted + 1, IrKind::Store) ||
+            !is_transport(admitted + 2, IrKind::Recall))
+          continue;
+        bool reversed = false;
+        if (register_arguments) {
+          if (!is_transport(admitted + 3, IrKind::Store)) continue;
+          const bool forward = register_index(ops[admitted + 1].register_name) == register_index(ops[start + 1].register_name) &&
+              register_index(ops[admitted + 3].register_name) == register_index(ops[start + 4].register_name);
+          reversed = register_index(ops[admitted + 1].register_name) == register_index(ops[start + 4].register_name) &&
+              register_index(ops[admitted + 3].register_name) == register_index(ops[start + 1].register_name);
+          if (!forward && !reversed) continue;
+        } else if (register_index(ops[admitted + 1].register_name) != register_index(ops[start + 1].register_name)) {
+          continue;
+        }
+        // Querying X after a recall must bound its original source word, not a
+        // value supplied by a preceding destructive store in this prefix.
+        // Otherwise a singleton range could hide an arbitrary old register.
+        if (register_index(ops[admitted + 1].register_name) == register_index(ops[admitted + 2].register_name) &&
+            register_index(ops[admitted].register_name) != register_index(ops[admitted + 1].register_name))
+          continue;
+        Pattern p = *base;
+        p.admitted = other;
+        p.admitted_begin = admitted;
+        p.admitted_first = admitted + (reversed ? 2 : 0);
+        p.admitted_second = admitted + (reversed ? 0 : 2);
+        if (all_entries_are_calls(ops, index, p)) patterns.push_back(std::move(p));
+      }
     }
   }
   if (patterns.empty()) return results;
@@ -457,16 +527,16 @@ std::vector<PassResult> common_processor_factoring_candidates(
   if (!lift) return results;
   std::vector<std::size_t> queries;
   for (const auto& p : patterns) {
-    queries.push_back(index.item[p.admitted - 2]);
-    queries.push_back(index.item[p.admitted]);
+    queries.push_back(index.item[p.admitted_first + 1]);
+    queries.push_back(index.item[p.admitted_second + 1]);
   }
   const auto ranges = prove_post_layout_numeric_ranges(
       items, flow, *lift, queries, options.runtime_preloads, options.maximum_proof_work,
       NumericRangeInputPolicy::ValidatedRegisterTransport);
   if (ranges.exhausted) return results;
   for (const auto& p : patterns) {
-    const auto a = ranges.x_before.find(index.item[p.admitted - 2]);
-    const auto b = ranges.x_before.find(index.item[p.admitted]);
+    const auto a = ranges.x_before.find(index.item[p.admitted_first + 1]);
+    const auto b = ranges.x_before.find(index.item[p.admitted_second + 1]);
     if (a == ranges.x_before.end() || b == ranges.x_before.end() ||
         !prove_pair(ops, p, a->second, b->second, options.maximum_domain_pairs))
       continue;
@@ -476,6 +546,55 @@ std::vector<PassResult> common_processor_factoring_candidates(
     // startup empty return. The older symbolic walk rejects that valid entry
     // unconditionally and is not an additional safety proof here.
     if (!after.proved || after.maximum_observed_return_depth > control.maximum_return_depth)
+      continue;
+    results.push_back(std::move(candidate));
+    if (results.size() >= options.maximum_candidates) break;
+  }
+  return results;
+}
+
+
+std::vector<PassResult> common_processor_partitioned_entry_candidates(
+    const std::vector<IrOp>& ops, const PassContext& context,
+    const CommonProcessorFactoringOptions& options) {
+  std::vector<PassResult> results;
+  if (!options.runtime_preloads || !options.maximum_candidates || !options.maximum_proof_work)
+    return results;
+  const auto index = index_ops(ops);
+  if (!index.valid) return results;
+  std::vector<Pattern> patterns;
+  std::size_t remaining_work = options.maximum_proof_work;
+  bool exhausted = false;
+  for (bool register_arguments : {false, true}) {
+    if (exhausted) break;
+    const std::size_t width = register_arguments ? 5 : 4;
+    for (std::size_t c = width; c < ops.size(); ++c) {
+      auto p = projection_prologue(ops, index, c, register_arguments);
+      if (!p) continue;
+      p->partitioned = true;
+      if (!all_entries_are_calls(ops, index, *p) || p->other_calls.empty()) continue;
+      // Account for both symbolic executions, including all nested leaf
+      // instructions and entry/return synchronizations. No partial proof escapes.
+      const auto work = 2 * (2 * p->normalizer.size() + p->body.size() + width + 4);
+      if (work > remaining_work) { exhausted = true; break; }
+      remaining_work -= work;
+      if (prove_unrestricted_prologue(ops, *p))
+        patterns.push_back(std::move(*p));
+    }
+  }
+  // Most programs have no such prologue; do not build an execution graph just
+  // to find that out, or change the bounded compiler's timing on unrelated code.
+  if (patterns.empty()) return results;
+  PostLayoutControlFlowOptions control;
+  control.empty_return_target = 1;
+  control.address_space_model = address_space_model_for_feature_profile(
+      effective_optimizer_feature_profile(context.options));
+  const auto flow = build_post_layout_control_flow(lower_ir_to_machine(ops), control);
+  if (!flow.proved) return results;
+  for (const auto& p : patterns) {
+    auto candidate = rewrite(ops, index, p);
+    const auto final = build_post_layout_control_flow(lower_ir_to_machine(candidate.ops), control);
+    if (!final.proved || final.maximum_observed_return_depth > control.maximum_return_depth)
       continue;
     results.push_back(std::move(candidate));
     if (results.size() >= options.maximum_candidates) break;
