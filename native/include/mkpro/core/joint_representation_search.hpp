@@ -27,15 +27,25 @@ expand_joint_representation_transactions(const LayoutSearchArtifact& artifact,
 // Encoding, register-web equalities and region sharing can compose before a
 // single placement/preload solution is required. The finalizer sees only
 // closed, independently checked artifacts, never a conditional candidate.
+inline constexpr TransactionSearchLimits kJointRepresentationConstraintLimits{
+    .maximum_expansions = 12, .maximum_candidates = 64,
+    .maximum_depth = 6, .maximum_growth_cells = 4};
+
 using JointRepresentationFinalizer =
     std::function<std::optional<LayoutSearchArtifact>(const LayoutSearchArtifact&)>;
 TransactionSearchResult<LayoutSearchArtifact> search_joint_representation_constraints(
     const LayoutSearchArtifact& root, const CompileOptions& options,
     const JointRepresentationFinalizer& finalize = {},
-    const TransactionSearchLimits& limits = {
-        .maximum_expansions = 12, .maximum_candidates = 64,
-        .maximum_depth = 6, .maximum_growth_cells = 4},
+    const TransactionSearchLimits& limits = kJointRepresentationConstraintLimits,
     bool preload_environment_complete = true);
+
+// Validate nonwinning complete artifacts in a separate bounded composition
+// frontier. Exploration never replaces the mandatory publication finalizer.
+TransactionSearchResult<LayoutSearchArtifact> search_joint_representation_constraints(
+    const LayoutSearchArtifact& root, const CompileOptions& options,
+    const JointRepresentationFinalizer& finalize, const TransactionSearchLimits& limits,
+    bool preload_environment_complete,
+    const JointRepresentationFinalizer& finalize_intermediate);
 
 namespace passes {
 PassResult joint_representation_search(const std::vector<IrOp>& ops,

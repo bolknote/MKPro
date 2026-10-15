@@ -94,7 +94,8 @@ std::vector<std::size_t> machine_indexes(const std::vector<IrOp>& ops) {
 
 bool relocated(const std::vector<IrOp>& before, const std::vector<IrOp>& after,
                const std::vector<std::size_t>& mapping, const PassContext& context,
-               const PostLayoutControlFlowOptions* control_options = nullptr) {
+               const PostLayoutControlFlowOptions* control_options = nullptr,
+               bool defer_indirect_entries = false) {
   const auto input = lower_ir_to_machine(before);
   const auto output = lower_ir_to_machine(after);
   const auto old_machine = machine_indexes(before);
@@ -111,8 +112,36 @@ bool relocated(const std::vector<IrOp>& before, const std::vector<IrOp>& after,
   const auto options = control_options ? *control_options : flow_options(context);
   const auto old_flow = build_post_layout_control_flow(input, options);
   const auto new_flow = build_post_layout_control_flow(output, options);
-  return old_flow.proved && new_flow.proved &&
-         prove_post_layout_execution_relocation(input, output, old_flow, new_flow, items).proved;
+  if (!old_flow.proved || !new_flow.proved) return false;
+
+  PostLayoutExecutionRelocationOptions transport;
+  if (defer_indirect_entries) {
+    using Endpoint=std::pair<std::size_t,std::size_t>;
+    std::map<Endpoint,std::set<std::optional<int>>> entries;
+    for (std::size_t state=0;state<new_flow.execution_states.size();++state)
+      for (const auto& edge:new_flow.execution_edges[state])
+        if (edge.kind==PostLayoutExecutionEdgeKind::IndirectTarget)
+          entries[{new_flow.execution_states[state].item_index,
+                   new_flow.execution_states[edge.target_state].item_index}]
+              .insert(edge.indirect_formal_opcode);
+    for (std::size_t state=0;state<old_flow.execution_states.size();++state) {
+      const auto source=old_flow.execution_states[state].item_index;
+      for (const auto& edge:old_flow.execution_edges[state]) {
+        if (edge.kind!=PostLayoutExecutionEdgeKind::IndirectTarget ||
+            !edge.indirect_formal_opcode) continue;
+        const auto target=old_flow.execution_states[edge.target_state].item_index;
+        if (!items[source] || !items[target]) return false;
+        const auto found=entries.find({*items[source],*items[target]});
+        if (found==entries.end() || found->second.size()!=1U ||
+            !*found->second.begin()) return false;
+        const int counter=**found->second.begin();
+        auto& remap=transport.indirect_entry_remap[source];
+        const auto [at,inserted]=remap.emplace(*edge.indirect_formal_opcode,counter);
+        if (!inserted && at->second!=counter) return false;
+      }
+    }
+  }
+  return prove_post_layout_execution_relocation(input, output, old_flow, new_flow, items,transport).proved;
 }
 
 auto effect_fields(const IrOp& op) {
@@ -699,22 +728,32 @@ static PassResult semantic_region_folding_impl(
       if (ops[i].kind != IrKind::Label)
         commands[part].push_back(i);
   std::vector<std::size_t> representative(parts.size());
-  std::iota(representative.begin(), representative.end(), 0U);
-  int saved = 0;
-  for (std::size_t part = 1; part < parts.size(); ++part) {
-    if (commands[part].empty() ||
-        std::any_of(commands[part].begin(), commands[part].end(),
-                    [&](std::size_t i) { return observation(ops[i]); }))
-      continue;
-    for (std::size_t keep = 1; keep < part; ++keep) {
-      if (representative[keep] != keep || commands[keep].size() != commands[part].size())
-        continue;
-      bool same = true;
-      for (std::size_t k = 0; k < commands[part].size(); ++k)
-        same = same && classes[commands[part][k]] == classes[commands[keep][k]];
+  std::vector<std::size_t> representative_offset(parts.size(),0);
+  std::iota(representative.begin(),representative.end(),0U);
+  std::vector<std::size_t> order(parts.size());
+  std::iota(order.begin(),order.end(),0U);
+  if (defer_layout)
+    std::stable_sort(order.begin(),order.end(),[&](std::size_t a,std::size_t b){
+      return commands[a].size()>commands[b].size();
+    });
+  int saved=0;
+  for (const auto part: order) {
+    if (part==0 || commands[part].empty() ||
+        std::any_of(commands[part].begin(),commands[part].end(),
+                    [&](std::size_t i){return observation(ops[i]);})) continue;
+    for (const auto keep: order) {
+      if (keep==part || (!defer_layout && keep==0) || representative[keep]!=keep ||
+          (!defer_layout && commands[keep].size()!=commands[part].size()) ||
+          commands[keep].size()<commands[part].size() ||
+          (commands[keep].size()==commands[part].size() && keep>part)) continue;
+      const auto offset=commands[keep].size()-commands[part].size();
+      bool same=true;
+      for (std::size_t k=0;k<commands[part].size();++k)
+        same=same && classes[commands[part][k]]==classes[commands[keep][offset+k]];
       if (same) {
-        representative[part] = keep;
-        saved += parts[part].cells;
+        representative[part]=keep;
+        representative_offset[part]=offset;
+        saved+=parts[part].cells;
         break;
       }
     }
@@ -729,7 +768,7 @@ static PassResult semantic_region_folding_impl(
     const auto keep = representative[part];
     if (keep == part)
       continue;
-    std::size_t command = 0;
+    std::size_t command = representative_offset[part];
     for (std::size_t i = parts[part].begin; i < parts[part].end; ++i) {
       if (command >= commands[keep].size())
         return unchanged();
@@ -757,6 +796,18 @@ static PassResult semantic_region_folding_impl(
       }
       mapping[i] = rewritten.size();
       auto op = ops[i];
+      if (op.meta.indirect_flow_targets) {
+        std::set<std::size_t> target_commands;
+        std::vector<IrTarget> targets;
+        for (const auto& target : *op.meta.indirect_flow_targets) {
+          const auto& label=std::get<std::string>(target);
+          const auto command=labels.find(label);
+          if (command==labels.end() || command->second==none) return unchanged();
+          if (target_commands.insert(canonical[command->second]).second) targets.push_back(target);
+        }
+        op.meta.indirect_flow_targets=std::move(targets);
+      }
+
       auto& merged = op.meta.semantic_call_origins;
       merged.insert(merged.end(), origins[i].begin(), origins[i].end());
       std::sort(merged.begin(), merged.end());
@@ -768,11 +819,11 @@ static PassResult semantic_region_folding_impl(
     if (mapping[i] == none)
       mapping[i] = mapping[canonical[i]];
   if ((!defer_layout && !fixed_indirect_targets(ops, rewritten)) ||
-      !relocated(ops, rewritten, mapping, context, control_options))
+      !relocated(ops, rewritten, mapping, context, control_options,defer_layout))
     return unchanged();
   return PassResult{.ops = std::move(rewritten), .applied = 1,
       .optimizations = {{.name = "semantic-multi-entry-region-folding",
-          .detail = "Merged effect-bisimilar CFG regions, retaining every labelled entry, "
+          .detail = "Merged effect-bisimilar CFG regions and eligible interior tails, retaining every labelled entry, "
                     "matched return context and call provenance; identical executed opcodes "
                     "preserve stack/X1/X2. Removed " + std::to_string(saved) + " cells."}}};
 }
@@ -825,6 +876,52 @@ std::vector<RegisterWebRecoloringRequest> semantic_region_register_requests(
         result.push_back(std::move(request));
         if (result.size() == 6U)
           return result;
+      }
+    }
+  }
+  return result;
+}
+
+
+std::vector<RegisterWebRecoloringRequest> semantic_region_tail_register_requests(
+    const std::vector<IrOp>& ops, bool preserve_compiler_selector_charges) {
+  std::vector<RegisterWebRecoloringRequest> result;
+  if (!symbolic(ops,preserve_compiler_selector_charges)) return result;
+  const auto parts=components(ops);
+  if (parts.size()>24U) return result;
+  std::vector<std::vector<std::size_t>> commands(parts.size());
+  for (std::size_t part=0;part<parts.size();++part)
+    for (std::size_t i=parts[part].begin;i<parts[part].end;++i)
+      if (ops[i].kind!=IrKind::Label) commands[part].push_back(i);
+  std::vector<std::size_t> order(parts.size());
+  std::iota(order.begin(),order.end(),0U);
+  std::stable_sort(order.begin(),order.end(),[&](std::size_t a,std::size_t b){
+    return commands[a].size()>commands[b].size();
+  });
+  std::size_t work=0;
+  for (const auto part:order) {
+    if (part==0 || commands[part].size()<2U) continue;
+    for (const auto keep:order) {
+      if (commands[keep].size()<=commands[part].size()) continue;
+      const auto offset=commands[keep].size()-commands[part].size();
+      RegisterWebRecoloringRequest request;
+      bool compatible=true;
+      for (std::size_t k=0;k<commands[part].size();++k) {
+        if (++work>10000U) return result;
+        const auto a_index=commands[part][k], b_index=commands[keep][offset+k];
+        auto a=ops[a_index],b=ops[b_index];
+        if (a.kind==b.kind && (a.kind==IrKind::Store || a.kind==IrKind::Recall)) {
+          if (a.register_name!=b.register_name) request.emplace_back(a_index,b_index);
+          a.register_name.clear(); b.register_name.clear();
+          a.opcode &=0xf0; b.opcode &=0xf0;
+        }
+        if (observation(a) || observation(b) || effect_fields(a)!=effect_fields(b)) {
+          compatible=false; break;
+        }
+      }
+      if (compatible && !request.empty()) {
+        result.push_back(std::move(request));
+        if (result.size()==6U) return result;
       }
     }
   }

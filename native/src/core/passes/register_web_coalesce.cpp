@@ -721,7 +721,17 @@ static PassResult process_register_webs(
         continue;
       webs.colors = std::move(*colors);
       int relocated_counters = 0;
-      (*consume)(emit_recolored(relocated_counters));
+      auto candidate = emit_recolored(relocated_counters);
+      if (deferred_control) {
+        const auto changed_machine = lower_ir_to_machine(candidate);
+        const auto changed_flow = build_post_layout_control_flow(changed_machine, *deferred_control);
+        if (!changed_flow.proved ||
+            !prove_post_layout_input_boundaries(changed_machine, changed_flow).proved ||
+            !build_deferred_selector_consistent_execution_graph(
+                changed_machine, changed_flow, *encoded_origins).execution.proved)
+          continue;
+      }
+      (*consume)(std::move(candidate));
     }
     return unchanged("region recolorings delivered without copy deletion");
   }
@@ -837,6 +847,15 @@ PassResult deferred_register_web_copy_coalesce(
     const PostLayoutControlFlowOptions& control,
     const std::map<std::string, int>& encoded_origins) {
   return process_register_webs(ops, context, nullptr, nullptr, &control, &encoded_origins);
+}
+
+void for_each_deferred_register_web_recoloring(const std::vector<IrOp>& ops, const PassContext& context,
+    const std::vector<RegisterWebRecoloringRequest>& requests,
+    const PostLayoutControlFlowOptions& control,
+    const std::map<std::string, int>& encoded_origins,
+    const RegisterWebRecoloringConsumer& consume) {
+  if (!requests.empty() && consume)
+    (void)process_register_webs(ops, context, &requests, &consume, &control, &encoded_origins);
 }
 
 IrPass register_web_copy_coalesce_pass() {

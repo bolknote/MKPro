@@ -83,6 +83,10 @@ std::vector<PassResult> stable_target_split_bridge_candidates(
 std::vector<RegisterWebRecoloringRequest> semantic_region_register_requests(
     const std::vector<IrOp>& ops, bool preserve_compiler_selector_charges = false);
 
+// Additional bounded operand equalities for a complete smaller chain and an
+// interior suffix of a larger chain. Requests are not equivalence certificates.
+std::vector<RegisterWebRecoloringRequest> semantic_region_tail_register_requests(const std::vector<IrOp>& ops, bool preserve_compiler_selector_charges);
+
 // Conditional region equivalence for a joint layout transaction. Every label
 // remains an alias of the same command, but physical indirect destinations
 // are obligations of the caller, not already discharged by this result.

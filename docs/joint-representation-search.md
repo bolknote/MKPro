@@ -1213,3 +1213,151 @@ shared-tail layout at 54 to 51 cells. A non-fixed-point caller requires no repla
 when using the partitioned entry; that neutral transformation composes with
 projected placement at 54 to 52 cells. All register/stack observations, physical
 X1, exposed decimal-entry X2 and matched nested returns are retained.
+
+### Shared preparation of immutable layout proof inputs
+
+Ordinary and projected-tail closures of one semantic candidate now prepare
+their common proof source once. The owner copies the complete machine items,
+typed observations, preload environment and all entry/model/work-limit options;
+it builds one authoritative matched-call/return graph before either layout.
+Changed representation/allocation candidates and pending literal images get
+different owners. Neither a program name nor a formula/constant signature is
+used to decide reuse.
+
+A small bounded local table reuses completed selector data-projection and exact
+writeback certificates. Its key includes the complete selected preload report
+(including setup/delivery obligations) and both old/new targets. The source
+items, environment, CFG and memory policy are already frozen in the owner.
+The selected word can differ from the owner's environment entry during final
+retuning; it must not be reduced to the register name alone. Deterministic
+rejections remain rejections, and certificates beyond the retention bound are
+recomputed. No global program-sized key or cross-context proof cache is used.
+
+Geometry, final encoded words, CFG/return contexts and the downstream artifact
+finalizer still run independently for every placement. Reusing an input proof
+is not permission to accept a placement, narrow observers, alter search limits
+or remove an alternative. Source preparation also covers the separate literal
+and complete-family allocation lanes, preserving their historical order.
+
+Compiler/ROM tests compare owned snapshots, different entry/return policies,
+selected words and setup origins, changed destinations, bounded/zero retention
+and complete-artifact vetoes. A controlled single-process 4x4 measurement kept
+129 cells while moving from approximately 306 to 276 seconds; this is a search
+work reduction, not a program-size claim. Tracing can report prepared-input and
+selector-certificate counts through MKPRO_NATIVE_TRACE_JOINT_PROOF_INPUT.
+
+### Composing allocation with validated neutral finalization
+
+Complete-family allocation is also a conditional edge of an independent
+composition frontier. It can follow a finite representation, and its closed
+geometry can precede another representation, web coalescing or dead-stack
+erasure. Previously these families mostly reached separate closure lanes.
+The extension retains the historical incumbent, discovery order and budgets.
+It has six expansions, 24 identities and depth four, intersected with the
+caller's limits. Exhaustion remains an incomplete search, never a proof.
+
+The optional intermediate finalizer validates and normalizes a complete
+artifact without requiring an immediate size improvement. It must still
+discharge the ordinary final CFG/static obligations. The compiler does not
+publish or update its winner through this callback. Every smaller composed
+result independently passes the publication finalizer, including a final
+CFG check. A publication veto cannot be bypassed by a successful intermediate
+callback. The original five-argument API remains available.
+
+Allocation pays growth against the immutable root. Earlier savings become
+available space; earlier growth reduces it. The remaining allowance is computed
+without signed overflow and saturates only beyond representable cell counts.
+No parent or locally chosen incumbent silently restarts the debt accounting.
+
+Encoded selector origins stay attached to their literal words, not provisional
+command positions. A later proved representation that changes a word must
+decode it under the actual memory model and require the corresponding new
+target equation. Conflicting carriers, missing identities, ambiguous preload
+owners, generated delivery and stock Rf fail closed. This transport is
+bookkeeping for an existing semantic certificate, not a new data proof.
+
+A runtime charge is not automatically a private numeric value. The first
+observer guard conservatively pins its original decimal targets when its
+carrier is directly read as data, participates in indirect memory addressing,
+or can be read through an unknown/overlapping memory alias. This also protects
+physical last-X when arithmetic's ordinary result later dies. A more precise
+epoch-specific certificate may relax this barrier in future; no such fact is
+assumed here.
+
+Compiler/ROM fixtures use different physical carriers and unbounded ordinary
+or raw inputs, repeat the calls, and compare data registers, all stack slots,
+physical X1 and decimal-entry X2. Only enumerated internal address carriers are
+excluded from numeric register equality. A synthetic composition improves the
+previous 46-cell winner to 41 cells (57 cells before optimization).
+Negative tests expose an address through arithmetic/last-X, expose an ordinary
+selector word, veto publication after successful private exploration, and
+exhaust depth. Explain/JSON records the composed rule chain. These synthetic
+savings are not a claim that the 4x4 program fits 105 cells.
+
+## Selector-consistent epoch allocation and interior tail absorption
+
+The conditional register-web allocator uses the same exact selector/return-context
+graph as late copy coalescing. Operand equalities join demanded definition epochs,
+not every value ever held in a physical register. Entry values, indirect aliases,
+shared static operands, input phases and terminal physical-bank observations
+remain interference/anchor obligations. Delivery rechecks the CFG and input/flow
+certificates.
+
+A separate bounded request family aligns a complete short chain with an interior
+suffix of a larger chain (24 components, 10,000 comparisons, six requests). The
+ordinary whole-region request generation is unchanged. The deferred folder can
+absorb that short chain without adding a jump, call or return. It preserves every
+label, semantic call origin and exact return/branch context. Indirect facts
+deduplicate equal command identities after aliasing. Encoded selector correspondence
+is explicit, not inferred from a permutation. Final data-word rebinding remains
+mandatory. Nondeferred folding retains its original whole-component traversal.
+
+A runtime address literal is not private merely because its register has no data
+recalls. A ROM regression exposed the retuned address in Z. Closure therefore also
+requires the existing stack-entry equality relation, initialized after the private
+address store with X/X2 unequal. Unsupported or observable words retain their
+original binding.
+
+This proof composes two existing ideas rather than weakening observers:
+
+- Reconstruct encoded target origins from compiler-owned charge digits and literal
+  preload words. The deferred selector-consistent graph is a conditional data view
+  only; unresolved or ambiguous origins fall back to the complete conservative graph.
+- Follow transparent jumps/calls/returns from each charge to its actual private store.
+  Start equality only at that charge's exact successor states (PC plus return context
+  and selected execution epoch), not every invocation sharing the store's PC.
+- The new generic prove_post_layout_stack_state_equality API rejects empty,
+  duplicate, out-of-range and selector-pruned-away roots. Its continuation proof
+  stays universal. The original PC-wide API keeps its previous behavior.
+- A ROM-certified store establishes closed numeric entry. All later uses and
+  observations still need X/Y/Z/T, physical X1 and decimal X2 equality under the
+  existing typed interaction contract. Separate final CFG/binder checks remain
+  mandatory.
+
+The privacy result is cached only within the immutable PreparedJointProofInput,
+including its complete source, preloads and control policy. There is no global
+cross-program proof memo.
+
+The 38-cell independent regression needs epoch allocation, an interior alias
+and selector closure together and becomes 33 cells. Negative cases cover overlapping
+lifetimes, final-bank observations, inconsistent origins and live address residues.
+A second case shares one physical address store between two callback epochs: the
+first word is dead and retunable, while the second is deliberately observed and pinned.
+The conservative PC-wide proof cannot justify that distinction; exact context roots can.
+No game name, game constant or source recognizer participates in these decisions.
+
+The arbitrary-word privacy guard is not the only admissible theorem. An existing
+DeferredSelectorDataLiteralLayout can deliberately use one charge as an exact
+data value. For its complete verified family, closure replaces arbitrary-word privacy with
+the per-mode entry certificates; the unique data-producing target receives the
+proved literal equation, never a free data value. Every marked producer must belong
+to the same selector family; unrelated runtime owners retain their constraints.
+The complete exact-value, alias, entry and stack/return certificate is checked
+both after placement and again after the caller's finalizer. Tests corrupt its
+delivered decimal digit, family identity and register ownership independently;
+none may publish.
+
+A second ROM fact absorbs a one-cell repeated stable jump into the unchanged root
+entry (7 -> 6 cells), retaining the loop exit, complete register bank and X1/X2.
+This accounts for the Labyrinth777 hoistSharedHelpers variants, alone and with
+shareRandomCell, changing from 115 to 114 cells; the default listing is unchanged.

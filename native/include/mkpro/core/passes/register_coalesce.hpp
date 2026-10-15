@@ -86,6 +86,14 @@ void for_each_register_web_recoloring(
     const std::vector<IrOp>& ops, const PassContext& context,
     const std::vector<RegisterWebRecoloringRequest>& requests,
     const RegisterWebRecoloringConsumer& consume);
+// Conditional equal-size allocation over exact selector-consistent epochs.
+// Preserve every terminal physical-bank observation and re-prove input/flow
+// obligations before delivery; the caller still owns final selector/layout closure.
+void for_each_deferred_register_web_recoloring(const std::vector<IrOp>& ops, const PassContext& context,
+    const std::vector<RegisterWebRecoloringRequest>& requests,
+    const PostLayoutControlFlowOptions& control,
+    const std::map<std::string, int>& encoded_origins,
+    const RegisterWebRecoloringConsumer& consume);
 IrPass register_web_copy_coalesce_pass();
 IrPass register_coalesce_pass();
 

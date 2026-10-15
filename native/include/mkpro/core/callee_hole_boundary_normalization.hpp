@@ -47,6 +47,17 @@ bool prove_post_layout_stack_entry_equality(
     const std::vector<MachineItem>& items,
     const AuthoritativePostLayoutControlFlow& flow, int entry_address,
     StackValueEqualityState state, const PostLayoutStackEntryProofOptions& options = {});
+
+// Start only at the named exact execution states of this immutable flow view,
+// not every caller epoch sharing their physical PC. Empty, duplicate, invalid
+// or selector-pruned-away roots fail closed. Continuations remain universal.
+bool prove_post_layout_stack_state_equality(
+    const std::vector<MachineItem>& items,
+    const AuthoritativePostLayoutControlFlow& flow,
+    const std::vector<std::size_t>& entry_states,
+    StackValueEqualityState initial,
+    const PostLayoutStackEntryProofOptions& options = {});
+
 bool prove_ir_stack_entry_equality(const std::vector<IrOp>& ops,
                                    std::size_t entry, StackValueEqualityState state);
 

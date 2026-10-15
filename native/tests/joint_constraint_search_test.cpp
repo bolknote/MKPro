@@ -1,11 +1,15 @@
 
 #include "mkpro/core/joint_representation_search.hpp"
+#include "mkpro/core/joint_proof_input.hpp"
+#include "mkpro/core/joint_constraint_origins.hpp"
 #include "mkpro/core/indirect_addressing.hpp"
 #include "mkpro/core/natural_target_component_layout.hpp"
 #include "mkpro/core/emit/machine_emitter.hpp"
 #include "mkpro/core/passes/finite_mode_representation.hpp"
 #include "mkpro/core/passes/indirect_selector_seed_reuse.hpp"
 #include "mkpro/core/passes/semantic_region_folding.hpp"
+#include "mkpro/core/passes/register_coalesce.hpp"
+
 #include "mkpro/core/passes/tail_branch_inversion.hpp"
 #include "mkpro/core/post_layout_control_flow.hpp"
 #include "mkpro/emulator/mk61.hpp"
@@ -44,7 +48,8 @@ LayoutSearchArtifact fixture(bool expose_selector = false, bool different_effect
   emit(items, {0xa7});
   items.back().indirect_flow_targets = std::vector<IrTarget>{std::string{"sink"}};
   if (expose_selector) emit(items, {0x67, 0x43});
-  emit(items, {0x6b, 0x6c, 0x6d, 0x6e, 0x6b, 0x10, 0x50});
+  // End both private scratch epochs before observing the final hardware bank.
+  emit(items, {0x6b, 0x6c, 0x6d, 0x6e, 0x6b, 0x10, 0x44, 0x45, 0x50});
   items.back().stop_disposition = StopDisposition::Terminal;
   for (const std::string name : {"red", "blue"}) {
     const int reg = name == "red" ? 4 : 5;
@@ -136,6 +141,83 @@ std::vector<std::string> allocation_observe(const LayoutSearchArtifact& f, int s
   calc.press(".");
   result.push_back(calc.display_text(true));
   return result;
+}
+
+
+void prepared_joint_proof_input_contracts() {
+  std::vector<MachineItem> items{
+      MachineItem::op(0x52,"empty return"),MachineItem::op(0xa7,"stable call"),
+      MachineItem::op(0x50,"terminal"),MachineItem::label("worker"),
+      MachineItem::op(0x62,"value"),MachineItem::op(0x52,"return")};
+  items[1].indirect_flow_targets = std::vector<IrTarget>{std::string{"worker"}};
+  items[2].stop_disposition = StopDisposition::Terminal;
+  std::vector<PreloadReport> environment{
+      {.register_name="7",.value="3"},{.register_name="2",.value="11"}};
+  const auto original_items = items;
+  const auto original_environment = environment;
+  PostLayoutControlFlowOptions options;
+  options.empty_return_target = 1;
+  detail::JointProofPreparationCounts counts;
+  detail::PreparedJointProofInput prepared(items,environment,options,&counts);
+  require(prepared.flow().proved && counts.inputs == 1 &&
+              &prepared.flow() == &prepared.flow(),
+          "alternative placements share one authoritative source/return graph");
+  options.maximum_return_depth = 0;
+  items.front().raw = true;
+  environment.back().value="-9";
+  require(prepared.options().maximum_return_depth == 5 &&
+              prepared.items().front().raw == false && prepared.preloads().back().value == "11",
+          "entry, model, source metadata and environment are immutable owned snapshots");
+  const auto expected = rebind_stable_preloaded_indirect_flow_selector(
+      original_items,original_environment.front(),prepared.flow(),3,4,
+      prepared.options().address_space_model,&original_environment);
+  require(expected && prepared.rebind_selector(original_environment.front(),3,4) == expected &&
+              prepared.rebind_selector(original_environment.front(),3,4) == expected &&
+              counts.selector_proofs == 1 && counts.selector_reuses == 1,
+          "both placements reuse a completed exact word/writeback certificate");
+  auto selected = original_environment.front(); selected.value="4";
+  require(!prepared.rebind_selector(selected,3,4) && prepared.selector_proofs() == 2,
+          "selected word remains independent from the frozen environment and invalidates reuse");
+  const auto rejected_proofs = prepared.selector_proofs();
+  require(!prepared.rebind_selector(selected,3,4) &&
+              prepared.selector_proofs() == rejected_proofs,
+          "a complete deterministic rejection is reused but never becomes acceptance");
+  auto setup = original_environment.front(); setup.setup_expression_text="generated setup";
+  const auto setup_expected = rebind_stable_preloaded_indirect_flow_selector(
+      original_items,setup,prepared.flow(),3,4,prepared.options().address_space_model,
+      &original_environment);
+  require(prepared.rebind_selector(setup,3,4) == setup_expected &&
+              prepared.selector_proofs() == 3,
+          "every setup and delivery obligation belongs to the selected-word key");
+  prepared.rebind_selector(original_environment.front(),3,5);
+  require(prepared.selector_proofs() == 4, "different physical target needs its own certificate");
+  require(!prepared.rebind_selector(original_environment.front(),2,4) &&
+              prepared.selector_proofs() == 5,
+          "contradictory encoded origin never borrows a previous proof");
+
+  PostLayoutControlFlowOptions normal;
+  normal.empty_return_target = 1;
+  detail::PreparedJointProofInput uncached(original_items,original_environment,normal,nullptr,0);
+  require(uncached.rebind_selector(original_environment.front(),3,4) == expected &&
+              uncached.rebind_selector(original_environment.front(),3,4) == expected &&
+              uncached.retained() == 0 && uncached.selector_proofs() == 2,
+          "zero retention preserves the independent proof contract");
+  detail::PreparedJointProofInput bounded(original_items,original_environment,normal,nullptr,1);
+  bounded.rebind_selector(original_environment.front(),3,4);
+  bounded.rebind_selector(original_environment.front(),3,5);
+  bounded.rebind_selector(original_environment.front(),3,5);
+  require(bounded.retained() == 1 && bounded.selector_proofs() == 3,
+          "local proof retention is bounded; an omitted certificate is recomputed");
+  detail::PreparedJointProofInput strict(original_items,original_environment,{});
+  require(!strict.flow().proved,
+          "a different empty-return policy cannot inherit the hardware entry opt-in");
+  detail::PreparedJointProofInput shallow(original_items,original_environment,options);
+  require(!shallow.flow().proved,
+          "a different return-depth/work policy owns an independent proof source");
+  auto observed = original_items; observed[4].roles.push_back("observer:independent");
+  detail::PreparedJointProofInput observable(observed,original_environment,normal);
+  require(observable.items()[4].roles != prepared.items()[4].roles,
+          "typed observer metadata is retained, not reduced to an opcode fingerprint");
 }
 
 void transaction_growth_budget_contracts() {
@@ -590,6 +672,413 @@ std::vector<std::string> deferred_mode_observe(
               std::string(1, "0123456789abcde"[selector])))) == seed_origins(f).at("echo"),
           "final runtime selector must name the actual callback, not its old position");
   return observations;
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+LayoutSearchArtifact epoch_recolor_fixture(bool expose_lifetime = false,
+                                         bool expose_final_bank = false, bool flush_stack = true, bool shared_store = false) {
+  LayoutSearchArtifact result;
+  auto& items = result.items;
+  const auto charge = [&](const std::string& target) {
+    for (const auto part : {LateBoundDecimalSelectorPart::High,
+                            LateBoundDecimalSelectorPart::Low}) {
+      emit(items, {0});
+      items.back().mnemonic="0";
+      items.back().roles.push_back(make_late_bound_decimal_selector_role(part,target));
+      items.back().roles.push_back("late-decimal-selector-register:b");
+    }
+    if (shared_store) emit(items,{0x53});
+    else emit(items,{0x4b,0x53});
+    items.push_back(MachineItem::address("dispatch"));
+  };
+  emit(items,{2,0x48});
+  charge("scale");
+  emit(items,{0x49,3,0x42});
+  charge("echo");
+  emit(items,{0x4a});
+  if (expose_lifetime) emit(items,{0x68,0x4e});
+  if (flush_stack) emit(items,{0x66,0x66,0x66,0x66});
+  emit(items,{0,0x42});
+  if (!expose_final_bank) emit(items,{0x48});
+  emit(items,{0x50});
+  items.back().stop_disposition=StopDisposition::Terminal;
+  items.push_back(MachineItem::label("dispatch"));
+  if (shared_store) emit(items,{0x4b});
+  emit(items,{0xab});
+  items.back().roles.push_back("late-decimal-selector-consumer");
+  items.back().indirect_flow_targets=std::vector<IrTarget>{std::string{"scale"},std::string{"echo"}};
+  emit(items,{0x52});
+  for (const auto& [label,reg] : std::vector<std::pair<std::string,int>>{{"scale",8},{"echo",2}}) {
+    items.push_back(MachineItem::label(label));
+    if (label=="scale") emit(items,{0x66,0x4d});
+    emit(items,{0x60+reg,1,0,0x12,0x52});
+  }
+  const auto bound=rebind_layout_search_artifact(std::move(result));
+  require(bound.has_value(),"epoch recoloring fixture binds compiler-owned callback words");
+  return *bound;
+}
+
+std::vector<passes::RegisterWebRecoloringRequest> epoch_recolor_request(
+    const std::vector<IrOp>& ops) {
+  std::optional<std::size_t> first,second;
+  for (std::size_t i=0;i<ops.size();++i) {
+    if (!first && ops[i].kind==IrKind::Store && ops[i].register_name=="8") first=i;
+    if (!second && ops[i].kind==IrKind::Store && ops[i].register_name=="2") second=i;
+  }
+  require(first && second,"epoch fixture has two independent producer operands");
+  return {{{*first,*second}}};
+}
+
+void deferred_web_recoloring_contracts() {
+  CompileOptions options;
+  options.coalesce_copies=true;
+  options.defer_return_suffix_until_callee_hole=true;
+  PostLayoutControlFlowOptions control;
+  control.empty_return_target=1;
+  const auto leaky=epoch_recolor_fixture(false,false,false);
+  const auto leaky_result=search_joint_representation_constraints(leaky,options);
+  if (leaky_result.incumbent)
+    require(deferred_mode_observe(leaky,11,"0")==
+                deferred_mode_observe(*leaky_result.incumbent,11,"0"),
+            "publication cannot expose a retuned runtime address through Z");
+  const auto leaky_ops=raise_machine_to_ir(leaky.items);
+  std::vector<std::vector<IrOp>> leaky_allocations;
+  passes::for_each_deferred_register_web_recoloring(leaky_ops,{options},
+      passes::semantic_region_tail_register_requests(leaky_ops,true),control,seed_origins(leaky),
+      [&](std::vector<IrOp> candidate){leaky_allocations.push_back(std::move(candidate));});
+  require(leaky_allocations.size()==1,"the negative differs only in stack observability");
+  const auto leaky_fold=passes::semantic_region_folding_with_deferred_layout(
+      leaky_allocations.front(),{options},control);
+  require(leaky_fold.applied>0,"conditional fold carries an undischarged literal privacy obligation");
+  const auto guarded=detail::protected_joint_runtime_charge_targets(lower_ir_to_machine(leaky_fold.ops));
+  require(guarded && guarded->contains("echo"),
+          "the new folded-entry obligation pins a runtime address residue in Z");
+
+  auto selective=epoch_recolor_fixture(false,false,true,true);
+  auto echo=std::find_if(selective.items.begin(),selective.items.end(),[](const auto& item){
+    return item.kind==MachineItemKind::Label && item.name=="echo";
+  });
+  require(echo!=selective.items.end(),"selective stack fixture has the second callback");
+  selective.items.erase(echo+1,selective.items.end());
+  emit(selective.items,{0x22,0x52});
+  const auto selective_bound=rebind_layout_search_artifact(std::move(selective));
+  require(selective_bound.has_value(),"selective stack fixture binds both source words");
+  const auto selective_flow=build_post_layout_control_flow(selective_bound->items,control);
+
+  const StackValueEqualityState equal{{true,true,true,true},true,true};
+  require(prove_post_layout_stack_state_equality(selective_bound->items,selective_flow,{0},equal),
+          "an explicitly admitted equal root keeps the legacy proof valid");
+  require(!prove_post_layout_stack_state_equality(selective_bound->items,selective_flow,{},equal) &&
+              !prove_post_layout_stack_state_equality(selective_bound->items,selective_flow,{0,0},equal) &&
+              !prove_post_layout_stack_state_equality(selective_bound->items,selective_flow,
+                  {selective_flow.execution_states.size()},equal),
+          "empty, duplicate and out-of-range context roots fail closed");
+
+  const auto charges=rebind_late_bound_decimal_selectors(
+      selective_bound->items,{.minimum_target_address=0,.maximum_target_address=99});
+  const auto first_charge=std::find_if(charges.proofs.begin(),charges.proofs.end(),
+      [](const auto& charge){return charge.target_label=="scale";});
+  require(first_charge!=charges.proofs.end(),"source proof identifies the first literal");
+  const std::map<int,std::set<std::string>> families{{11,{"scale","echo"}}};
+  require(!detail::joint_runtime_charge_stack_is_private(
+              selective_bound->items,selective_flow,*first_charge,families),
+          "the conservative graph includes a wrong callback that consumes address X");
+  const auto selective_guards=detail::protected_joint_runtime_charge_targets(
+      selective_bound->items,&selective_flow);
+  require(selective_guards && !selective_guards->contains("scale") &&
+              selective_guards->contains("echo"),
+          "exact callback contexts permit the dead first word and pin the observed second word");
+
+  const auto input=epoch_recolor_fixture();
+  const auto private_words=detail::protected_joint_runtime_charge_targets(input.items);
+  require(private_words && private_words->empty(),"dead address stack residues permit retuning");
+  const auto untouched=input;
+  const auto ops=raise_machine_to_ir(input.items);
+  const auto requests=passes::semantic_region_tail_register_requests(ops,true);
+  require(!requests.empty(),"discover operand constraints at an interior suffix, not only whole equal-length regions");
+  std::vector<std::vector<IrOp>> ordinary,candidates;
+  passes::for_each_register_web_recoloring(ops,{options},requests,
+      [&](std::vector<IrOp> candidate){ordinary.push_back(std::move(candidate));});
+  passes::for_each_deferred_register_web_recoloring(ops,{options},requests,control,
+      seed_origins(input),[&](std::vector<IrOp> candidate){candidates.push_back(std::move(candidate));});
+  require(ordinary.empty() && candidates.size()==1,
+          "only exact callback epochs establish the noninterfering operand equality");
+  auto selected=input;
+  selected.items=lower_ir_to_machine(candidates.front());
+  require(cells(selected)==cells(input),"epoch equality is a neutral enabling edge, not copy deletion");
+  for (const auto* seed : {"0","-17.5","8.ABCDAB1"})
+    require(deferred_mode_observe(input,11,seed)==deferred_mode_observe(selected,11,seed),
+            "neutral epoch allocation preserves the whole bank, stack, X1/X2 and matched returns");
+  const auto folded=passes::semantic_region_folding_with_deferred_layout(candidates.front(),{options},control);
+  require(folded.applied>0,"neutral epoch allocation must enable generic shared-region folding");
+  auto folded_artifact=selected;
+  folded_artifact.items=lower_ir_to_machine(folded.ops);
+  const auto alias_privacy=detail::protected_joint_runtime_charge_targets(folded_artifact.items);
+  const auto closed=rebind_layout_search_artifact(std::move(folded_artifact));
+  require(alias_privacy && alias_privacy->empty(),
+          "dead stack residues discharge the new aliased-entry obligations");
+  require(closed && cells(*closed)<cells(input),"shared epochs close to a genuinely smaller artifact");
+  for (const auto* seed : {"0","-17.5","8.ABCDAB1"})
+    require(deferred_mode_observe(input,11,seed)==deferred_mode_observe(*closed,11,seed),
+            "composed epoch allocation and folding preserve every external observation");
+  for (const auto& bad : {epoch_recolor_fixture(true,false),epoch_recolor_fixture(false,true)}) {
+    const auto bad_ops=raise_machine_to_ir(bad.items);
+    std::size_t delivered=0;
+    passes::for_each_deferred_register_web_recoloring(bad_ops,{options},epoch_recolor_request(bad_ops),
+        control,seed_origins(bad),[&](std::vector<IrOp>){++delivered;});
+    require(delivered==0,"overlapping epochs and final hardware-bank observations prohibit reuse");
+  }
+  auto wrong=seed_origins(input);
+  ++wrong.at("scale");
+  std::size_t delivered=0;
+  passes::for_each_deferred_register_web_recoloring(ops,{options},requests,control,wrong,
+      [&](std::vector<IrOp>){++delivered;});
+  require(delivered==0,"inconsistent literal origins cannot prove a shorter lifetime");
+  const auto composed=search_joint_representation_constraints(input,options);
+  require(composed.incumbent && cells(*composed.incumbent)<cells(input),
+          "the compiler transaction must compose epoch allocation, interior-tail sharing and selector closure");
+  for (const auto* seed : {"0","-17.5","8.ABCDAB1"})
+    require(deferred_mode_observe(input,11,seed)==deferred_mode_observe(*composed.incumbent,11,seed),
+            "published combined candidate preserves every external ROM observation");
+  require(same_layout_search_artifact(input,untouched),"epoch recoloring never mutates its input artifact");
+
+  LayoutSearchArtifact root_alias;
+  emit(root_alias.items,{0x8a});
+  root_alias.items.back().indirect_flow_targets=std::vector<IrTarget>{std::string{"body"}};
+  root_alias.items.push_back(MachineItem::label("body"));
+  emit(root_alias.items,{0x5b});
+  root_alias.items.push_back(MachineItem::address("visit"));
+  emit(root_alias.items,{0x50});
+  root_alias.items.back().stop_disposition=StopDisposition::Terminal;
+  root_alias.items.push_back(MachineItem::label("visit"));
+  emit(root_alias.items,{0x51});
+  root_alias.items.push_back(MachineItem::address("back"));
+  root_alias.items.push_back(MachineItem::label("back"));
+  emit(root_alias.items,{0x8a});
+  root_alias.items.back().indirect_flow_targets=std::vector<IrTarget>{std::string{"body"}};
+  root_alias.preloads={{.register_name="a",.value="1"},{.register_name="1",.value="3"}};
+  const auto root_ir=raise_machine_to_ir(root_alias.items);
+  require(passes::semantic_region_folding(root_ir,{options}).applied==0,
+          "ordinary folding retains its historical root-entry policy");
+  const auto root_fold=passes::semantic_region_folding_with_deferred_layout(root_ir,{options},control);
+  require(root_fold.applied>0,"a closed repeated jump can alias an unchanged root instruction");
+  auto root_aliased=root_alias;
+  root_aliased.items=lower_ir_to_machine(root_fold.ops);
+  require(cells(root_alias)==7 && cells(root_aliased)==6,
+          "root-entry alias removes one repeated jump without adding a transfer");
+  for (const int seed:{0,7,-31})
+    require(allocation_observe(root_alias,seed)==allocation_observe(root_aliased,seed),
+            "root-entry alias preserves ROM loop exit, every register, stack and X1/X2");
+
+  std::cout << "deferred epoch recoloring: " << cells(input) << " -> " << cells(*closed) << " cells\n";
+}
+
+void joint_origin_transport_contracts() {
+  require(transaction_remaining_growth_budget(50,45,4) == std::optional{9} &&
+              transaction_remaining_growth_budget(50,53,4) == std::optional{1} &&
+              transaction_remaining_growth_budget(50,54,4) == std::optional{0} &&
+              !transaction_remaining_growth_budget(50,55,4) &&
+              !transaction_remaining_growth_budget(-1,0,4),
+          "allocation keeps earned space and pays every borrowed root cell");
+  const int largest = std::numeric_limits<int>::max();
+  require(transaction_remaining_growth_budget(largest,0,largest) ==
+              std::optional{largest},
+          "remaining growth saturation cannot overflow or admit an invalid count");
+  std::vector<MachineItem> items{MachineItem::op(0xa7,"recorded family")};
+  items.front().indirect_flow_targets = std::vector<IrTarget>{std::string{"omega"}};
+  const detail::JointOriginMap geometry{{"omega",44}}, encoded{{"7",3}};
+  const auto origins = detail::joint_target_origins(items,geometry,encoded);
+  require(origins && origins->at("omega") == 3,
+          "source word origin is independent of speculative command geometry");
+  std::vector<PreloadReport> before{{.register_name="7",.value="3"}};
+  auto after = before;
+  after.front().value="44";
+  require(detail::transport_joint_selector_word_origins(
+              items,geometry,before,after,encoded,AddressSpaceModel::Standard) ==
+              std::optional{detail::JointOriginMap{{"7",44}}},
+          "a separately proved literal change gets its own exact encoded origin");
+  require(!detail::transport_joint_selector_word_origins(
+              items,{{"omega",45}},before,after,encoded,AddressSpaceModel::Standard) &&
+              !detail::transport_joint_selector_word_origins(
+              items,geometry,before,after,{{"7",4}},AddressSpaceModel::Standard),
+          "new equations and old recorded words must each agree with machine decoding");
+  after.front().value="A0";
+  require(detail::transport_joint_selector_word_origins(
+              items,{{"omega",100}},before,after,encoded,AddressSpaceModel::Standard) ==
+              std::optional{detail::JointOriginMap{{"7",100}}},
+          "official BCD A0 retains its machine-word type");
+  after.front().value="100";
+  require(!detail::transport_joint_selector_word_origins(
+              items,{{"omega",100}},before,after,encoded,AddressSpaceModel::Standard),
+          "decimal ordinal 100 is not a BCD A0 address");
+  after=before;
+  after.front().setup_expression_text="generated address";
+  require(!detail::transport_joint_selector_word_origins(
+              items,geometry,before,after,encoded,AddressSpaceModel::Standard),
+          "literal-origin bookkeeping cannot certify generated delivery");
+  after=before;
+  after.push_back(after.front());
+  require(!detail::transport_joint_selector_word_origins(
+              items,geometry,before,after,encoded,AddressSpaceModel::Standard),
+          "ambiguous preload owners cannot supply a word origin");
+  auto collision=items;
+  collision.push_back(MachineItem::op(0xa8,"conflicting family"));
+  collision.back().indirect_flow_targets=items.front().indirect_flow_targets;
+  require(!detail::joint_target_origins(collision,geometry,{{"7",3},{"8",4}}),
+          "conflicting family origins cannot prune away a real callback");
+  require(!detail::joint_target_origins(items,{},encoded) &&
+              !detail::joint_target_origins(items,geometry,{{"f",3}}),
+          "missing command identities and Rf are not stock selector permissions");
+  auto released=items;
+  released.front().indirect_flow_targets.reset();
+  require(detail::transport_joint_selector_word_origins(
+              released,geometry,before,before,encoded,AddressSpaceModel::Standard) ==
+              std::optional{detail::JointOriginMap{}},
+          "a fully released family has no stale runtime-origin equation");
+}
+
+LayoutSearchArtifact composed_family_fixture(int carrier, int repetitions,
+                                             bool expose_word = false, bool expose_charge = false) {
+  auto result=deferred_mode_fixture(carrier,11);
+  auto& items=result.items;
+  if (!expose_charge)
+    for (auto& item : items)
+      if (item.kind == MachineItemKind::Op && item.opcode == 0x6b) item.opcode=0x6e;
+  for (auto& item : items)
+    if (item.kind == MachineItemKind::Op && item.opcode == 0x6c)
+      item.opcode=0x6b;
+  auto first=MachineItem::op(0xa7,"stable callback");
+  first.indirect_flow_targets=std::vector<IrTarget>{std::string{"echo"}};
+  auto second=MachineItem::op(0xac,"independent stable callback");
+  second.indirect_flow_targets=std::vector<IrTarget>{std::string{"other"}};
+  items.insert(items.begin(),{second,first});
+  const auto terminal=std::find_if(items.begin(),items.end(),
+      [](const auto& item) { return item.stop_disposition == StopDisposition::Terminal; });
+  std::vector<MachineItem> calls;
+  for (int count=0;count<repetitions;++count) {
+    emit(calls,{0x53});
+    calls.push_back(MachineItem::address(std::string{"spare"}));
+  }
+  if (expose_word) emit(calls,{0x67});
+  items.insert(terminal,calls.begin(),calls.end());
+  items.push_back(MachineItem::label("spare"));
+  emit(items,{0x61,0x52});
+  items.push_back(MachineItem::label("other"));
+  emit(items,{0x62,0x52});
+  int address=0;
+  for (const auto& item : items) {
+    if (item.kind != MachineItemKind::Label) { ++address; continue; }
+    if (item.name == "echo" || item.name == "other")
+      result.preloads.push_back({.register_name=item.name == "echo" ? "7" : "c",
+                                .value=std::to_string(address)});
+  }
+  const auto bound=rebind_layout_search_artifact(std::move(result));
+  require(bound.has_value(),"composed fixture binds both runtime charges and stable words");
+  return *bound;
+}
+
+std::vector<std::string> composed_family_observe(
+    const LayoutSearchArtifact& artifact, const std::string& input) {
+  const auto resolved=resolve_machine_items(artifact.items);
+  require(resolved.diagnostics.empty(),"composed family artifact resolves");
+  std::vector<int> code;
+  for (const auto& step : resolved.steps) code.push_back(step.opcode);
+  emulator::MK61 calc;
+  require(calc.load_program(code).diagnostics.empty(),"composed family artifact fits stock");
+  for (int reg=0;reg<15;++reg)
+    calc.set_register(std::string(1,"0123456789abcde"[reg]),std::to_string(reg+11));
+  calc.set_register("6",input);
+  for (const char* name : {"X","Y","Z","T","X1"}) calc.set_register(name,"-12.75");
+  for (const auto& preload : artifact.preloads)
+    calc.set_register(preload.register_name,preload.value);
+  std::vector<std::string> observations;
+  for (int run=0;run<2;++run) {
+    calc.press_sequence({"\u0412/\u041e","\u0421/\u041f"});
+    require(calc.run_until_stable(6000,8).stopped,"all composed nested calls return");
+    for (const char* name : {"X","Y","Z","T","X1"})
+      observations.push_back(calc.read_register(name));
+    for (int reg=0;reg<15;++reg) {
+      if (reg == 7 || reg == 11 || reg == 12) continue; // Proved internal address representations.
+      observations.push_back(calc.read_register(std::string(1,"0123456789abcde"[reg])));
+    }
+    calc.press(".");
+    observations.push_back(calc.display_text(true));
+  }
+  return observations;
+}
+
+void composed_family_contracts() {
+  CompileOptions options;
+  options.defer_return_suffix_until_callee_hole=true;
+  for (const int carrier : {2,8}) {
+    const auto original=composed_family_fixture(carrier,6);
+    const auto preserved=original;
+    const auto result=search_joint_representation_constraints(original,options);
+    require(result.incumbent && cells(original) == 57 && cells(*result.incumbent) <= 41 &&
+                report(*result.incumbent,"finite-mode-representation") &&
+                report(*result.incumbent,"joint-composed-selector-allocation") &&
+                report(*result.incumbent,"joint-composed-representation-frontier") &&
+                build_post_layout_control_flow(result.incumbent->items).proved,
+            "representation/family/finalization product beats the historical 46-cell winner");
+    for (const char* input : {"0","-2","7","12345678","8.ABCDAB1"})
+      require(composed_family_observe(original,input) ==
+                  composed_family_observe(*result.incumbent,input),
+              "composition preserves repeated ROM calls, every data register, stack and X1/X2");
+    require(same_layout_search_artifact(original,preserved),"composition never mutates its root");
+    const auto repeated=search_joint_representation_constraints(original,options);
+    require(repeated.incumbent &&
+                same_layout_search_artifact(*repeated.incumbent,*result.incumbent),
+            "joint composition and encoded words are deterministic");
+
+    const auto exposed=composed_family_fixture(carrier,6,true);
+    const auto protected_result=search_joint_representation_constraints(exposed,options);
+    if (protected_result.incumbent) {
+      const auto word=std::find_if(protected_result.incumbent->preloads.begin(),
+          protected_result.incumbent->preloads.end(),
+          [](const auto& preload) { return preload.register_name == "7"; });
+      const auto old_word=std::find_if(exposed.preloads.begin(),exposed.preloads.end(),
+          [](const auto& preload) { return preload.register_name == "7"; });
+      require(word != protected_result.incumbent->preloads.end() && word->value == old_word->value,
+              "an observed raw selector word cannot be retuned as internal data");
+      require(composed_family_observe(exposed,"-2") ==
+                  composed_family_observe(*protected_result.incumbent,"-2"),
+              "a live word remains visible through finalization and allocation");
+    }
+    const auto live_charge=composed_family_fixture(carrier,6,false,true);
+    const auto live_result=search_joint_representation_constraints(live_charge,options);
+    if (live_result.incumbent)
+      require(composed_family_observe(live_charge,"0") ==
+                  composed_family_observe(*live_result.incumbent,"0"),
+              "a runtime charge exposed through last-X cannot change its numeric value");
+    std::size_t intermediate_calls=0, publication_vetoes=0;
+    const auto vetoed=search_joint_representation_constraints(original,options,
+        [&](const LayoutSearchArtifact&) -> std::optional<LayoutSearchArtifact> {
+          ++publication_vetoes; return std::nullopt;
+        },{},true,
+        [&](const LayoutSearchArtifact& artifact) -> std::optional<LayoutSearchArtifact> {
+          ++intermediate_calls; return artifact;
+        });
+    require(!vetoed.incumbent && intermediate_calls > 0 && publication_vetoes > 0,
+            "validated private intermediates never bypass the final publication veto");
+    TransactionSearchLimits stopped;
+    stopped.maximum_depth=1;
+    const auto shallow=search_joint_representation_constraints(original,options,{},stopped);
+    require(!shallow.incumbent ||
+                !report(*shallow.incumbent,"joint-composed-representation-frontier"),
+            "the composition lane pays depth rather than reopening an exhausted search");
+  }
+  std::cout << "joint family/representation composition: 57 -> 41 cells (previously 46)\n";
 }
 
 void deferred_mode_contracts() {
@@ -1288,6 +1777,13 @@ void run() {
   const auto repeated = search_joint_representation_constraints(input, options);
   require(repeated.incumbent && same_layout_search_artifact(best, *repeated.incumbent),
           "search and final selector words must be deterministic");
+  std::size_t finalizer_vetoes = 0;
+  const auto vetoed = search_joint_representation_constraints(input,options,
+      [&](const LayoutSearchArtifact&) -> std::optional<LayoutSearchArtifact> {
+        ++finalizer_vetoes; return std::nullopt;
+      });
+  require(!vetoed.incumbent && finalizer_vetoes > 0,
+          "prepared local proofs never bypass the downstream complete-artifact contract");
   const auto fixed = fixture(true);
   const auto rejected = search_joint_representation_constraints(fixed, options);
   require(!rejected.incumbent,
@@ -1314,6 +1810,10 @@ void run() {
 
 int main() {
   try {
+    deferred_web_recoloring_contracts();
+    prepared_joint_proof_input_contracts();
+    joint_origin_transport_contracts();
+    composed_family_contracts();
     official_selector_domains();
     checkpoint_model_transport_contracts();
     conditional_numeric_entry_rom_fact();

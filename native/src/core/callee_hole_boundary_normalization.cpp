@@ -124,10 +124,11 @@ bool prove_stack_entry_equality(const StackEntryProofReader& reader,
   return equality_prefix(reader, entry, state, 0);
 }
 
-bool prove_post_layout_stack_entry_equality(
+static bool prove_post_layout_stack_equality_impl(
     const std::vector<MachineItem>& items,
     const AuthoritativePostLayoutControlFlow& flow, int entry_address,
-    StackValueEqualityState initial, const PostLayoutStackEntryProofOptions& options) {
+    StackValueEqualityState initial, const PostLayoutStackEntryProofOptions& options,
+    const std::vector<std::size_t>* entry_states) {
   const bool trace = std::getenv("MKPRO_NATIVE_TRACE_STACK_ENTRY_EQUALITY") != nullptr;
   const auto reject = [&](const char* reason) {
     if (trace)
@@ -139,6 +140,13 @@ bool prove_post_layout_stack_entry_equality(
       flow.execution_states.size() != flow.execution_successors.size())
     return reject("exact execution graph is unavailable");
 
+  std::set<std::size_t> requested;
+  if (entry_states) {
+    if (entry_states->empty()) return reject("no exact execution-state roots");
+    for (const auto state:*entry_states)
+      if (state>=flow.execution_states.size() || !requested.insert(state).second)
+        return reject("invalid or duplicate execution-state root");
+  }
   auto graph = options.refine_runtime_selectors
       ? build_selector_consistent_execution_graph(items, flow)
       : SelectorConsistentExecutionGraph{};
@@ -189,13 +197,17 @@ bool prove_post_layout_stack_entry_equality(
   std::vector<DecimalEntry> entry_modes(graph.original_states.size(), DecimalEntry::Unknown);
   std::vector<std::optional<StackValueEqualityState>> incoming(graph.original_states.size());
   std::deque<std::size_t> pending;
+  auto unseeded=requested;
   for (std::size_t index = 0; index < graph.original_states.size(); ++index) {
-    if (flow.execution_states[graph.original_states[index]].address == entry_address) {
+    if (entry_states ? requested.contains(graph.original_states[index]) :
+        flow.execution_states[graph.original_states[index]].address == entry_address) {
+      unseeded.erase(graph.original_states[index]);
       incoming[index] = initial;
       if (options.numeric_entry_closed) entry_modes[index] = DecimalEntry::Closed;
       pending.push_back(index);
     }
   }
+  if (!unseeded.empty()) return reject("requested root has no admitted selector context");
   if (pending.empty())
     return reject("entry has no admitted caller context");
 
@@ -334,6 +346,22 @@ bool prove_post_layout_stack_entry_equality(
     std::cerr << "[stack-entry-equality] entry=" << entry_address
               << " proved across " << explored << " execution state(s)\n";
   return true;
+}
+
+
+bool prove_post_layout_stack_entry_equality(
+    const std::vector<MachineItem>& items,
+    const AuthoritativePostLayoutControlFlow& flow, int entry_address,
+    StackValueEqualityState initial, const PostLayoutStackEntryProofOptions& options) {
+  return prove_post_layout_stack_equality_impl(items,flow,entry_address,initial,options,nullptr);
+}
+
+bool prove_post_layout_stack_state_equality(
+    const std::vector<MachineItem>& items,
+    const AuthoritativePostLayoutControlFlow& flow,
+    const std::vector<std::size_t>& entry_states,
+    StackValueEqualityState initial, const PostLayoutStackEntryProofOptions& options) {
+  return prove_post_layout_stack_equality_impl(items,flow,-1,initial,options,&entry_states);
 }
 
 bool prove_post_layout_stack_producer_erasure(

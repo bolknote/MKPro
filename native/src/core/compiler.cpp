@@ -75644,23 +75644,27 @@ apply_absolute_dark_layout_to_selected_result(const std::string& source,
   const CompileResult constraint_root = best && best->steps.size() < selected.steps.size()
       ? *best : selected;
   checkpoint_roots.push_back(constraint_root);
-  const auto constrained = core::search_joint_representation_constraints(
-      artifact(constraint_root), options,
-      [&](const LayoutArtifact& closed) -> std::optional<LayoutArtifact> {
+  const auto finalize_constraints = [&](const LayoutArtifact& closed, bool intermediate) -> std::optional<LayoutArtifact> {
         CompileResult alternative = constraint_root;
         alternative.items = closed.items;
         alternative.preloads = closed.preloads;
         alternative.optimizations = closed.optimizations;
         const auto candidate = apply_absolute_dark_layout_once(
             source, alternative, options, /*allow_proved_prefix_repayment=*/true);
-        if (!candidate || candidate->steps.size() >= constraint_root.steps.size() ||
+        if (!candidate || (!intermediate && candidate->steps.size() >= constraint_root.steps.size()) ||
             (candidate_needs_static_proof_gate(options) &&
              optimizer_static_gate_rejection_reason(options, *candidate).has_value()))
           return std::nullopt;
-        if (!best || candidate_beats_best(*candidate, *best, options))
+        if (!intermediate && candidate->steps.size() < constraint_root.steps.size() &&
+            (!best || candidate_beats_best(*candidate, *best, options)))
           best = *candidate;
         return artifact(*candidate);
-      });
+      };
+  const auto constrained = core::search_joint_representation_constraints(
+      artifact(constraint_root), options,
+      [&](const LayoutArtifact& closed){return finalize_constraints(closed,false);},
+      core::kJointRepresentationConstraintLimits, true,
+      [&](const LayoutArtifact& closed){return finalize_constraints(closed,true);});
   if (std::getenv("MKPRO_NATIVE_TRACE_JOINT_LAYOUT_SEARCH"))
     std::cerr << "[joint-constraint-search] expanded=" << constrained.expanded
               << " admitted=" << constrained.admitted

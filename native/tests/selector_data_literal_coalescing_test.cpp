@@ -1,3 +1,4 @@
+#include <optional>
 #include "mkpro/core/passes/selector_charge_literal_sinking.hpp"
 #include "mkpro/core/emit/machine_emitter.hpp"
 #include "mkpro/core/joint_representation_search.hpp"
@@ -156,6 +157,39 @@ void deferred_joint_contracts() {
       const std::vector<PreloadReport> input{{.register_name = "0", .value = seed}};
       require(run(original, seed, input, true) == run(final.items, seed, input, true),
               "joint projection must preserve ROM display, stack, X1/X2, data and returns");
+    }
+
+
+    for (const int corruption:{0,1,2}) {
+      std::size_t corruptions=0;
+      const auto tampered=core::search_joint_representation_constraints(root,options,
+          [&](const core::LayoutSearchArtifact& artifact)
+              -> std::optional<core::LayoutSearchArtifact> {
+            auto output=artifact;
+            const bool coalesced=std::any_of(output.items.begin(),output.items.end(),
+                [](const auto& item) {
+                  return std::find(item.roles.begin(),item.roles.end(),
+                                   "selector-sunk-literal-coalesced")!=item.roles.end();
+                });
+            if (!coalesced) return output;
+            const auto low_role=core::make_late_bound_decimal_selector_role(
+                core::LateBoundDecimalSelectorPart::Low,pending.front().target_label);
+            for (auto& item:output.items) {
+              if (corruption==1) {
+                const auto before=item.roles.size();
+                std::erase(item.roles,"selector-sunk-literal-coalesced");
+                if (before!=item.roles.size()) ++corruptions;
+              } else if (std::find(item.roles.begin(),item.roles.end(),low_role)!=item.roles.end()) {
+                if (corruption==2) item.roles.push_back("late-decimal-selector-register:7");
+                else item.opcode=(item.opcode+1)%10;
+                ++corruptions;
+              }
+            }
+            return output;
+          });
+      require(corruptions>0,"the negative finalizer must reach a literal-certified artifact");
+      require(!tampered.incumbent || !has_report(*tampered.incumbent,"joint-data-control-literal-layout"),
+              "finalization cannot publish a damaged exact-value, identity or ownership certificate");
     }
 
     auto missing = final.items;

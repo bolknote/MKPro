@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <limits>
 #include <optional>
 #include <set>
 #include <string>
@@ -66,6 +67,21 @@ constexpr bool transaction_growth_fits(
   return original_cells >= 0 && candidate_cells >= 0 && maximum_growth_cells >= 0 &&
       (candidate_cells <= original_cells ||
        candidate_cells - original_cells <= maximum_growth_cells);
+}
+
+
+// The parent may have earned space, or borrowed some, in a proved earlier
+// step. Preserve the immutable root's allowance rather than restarting a
+// local growth limit. Saturation loses no representable int-sized candidate.
+inline std::optional<int> transaction_remaining_growth_budget(
+    int original_cells, int parent_cells, int maximum_growth_cells) {
+  if (!transaction_growth_fits(original_cells, parent_cells, maximum_growth_cells))
+    return std::nullopt;
+  if (parent_cells > original_cells)
+    return maximum_growth_cells - (parent_cells - original_cells);
+  const int earned = original_cells - parent_cells;
+  return maximum_growth_cells > std::numeric_limits<int>::max() - earned
+      ? std::numeric_limits<int>::max() : maximum_growth_cells + earned;
 }
 
 template <class Node> struct ProvedSearchTransition {
