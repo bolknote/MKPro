@@ -1078,7 +1078,36 @@ TransactionSearchResult<LayoutSearchArtifact> search_joint_representation_constr
     }
   };
 
-  const auto close_node = [&](const ConstrainedRepresentation& node, const std::vector<std::string>& path, bool composition = false)
+  const auto retain_closed_continuation = [&](const LayoutSearchArtifact& artifact,
+                                              std::vector<ConstrainedRepresentation>* continuations) {
+    if (!continuations) return;
+    ConstrainedRepresentation continuation{artifact, {}};
+    if (!refresh_constraint_targets(continuation)) return;
+    // Reopen only a target-closed, rebound transaction. Conditional selector
+    // origins must never be inferred from provisional label geometry.
+    if (auto view = representation_view(continuation.artifact, options)) {
+      continuation.artifact.items = lower_ir_to_machine(*view);
+      if (!refresh_constraint_targets(continuation) ||
+          !build_post_layout_control_flow(continuation.artifact.items, control_options).proved)
+        return;
+      continuation.artifact.optimizations.push_back({
+          "joint-proof-closed-continuation",
+          "Reopened a target-closed transaction as symbolic command identities; "
+          "retired only obsolete cell-origin bookkeeping and retained all "
+          "selector, input, data and return obligations. Publication still "
+          "requires the caller's independent complete-artifact gate."});
+    }
+    if (std::none_of(continuations->begin(), continuations->end(),
+        [&](const auto& old) {
+          return old.targets == continuation.targets &&
+              old.encoded_selectors == continuation.encoded_selectors &&
+              same_layout_search_artifact(old.artifact, continuation.artifact);
+        }))
+      continuations->push_back(std::move(continuation));
+  };
+
+  const auto close_node = [&](const ConstrainedRepresentation& node, const std::vector<std::string>& path, bool composition = false,
+                              std::vector<ConstrainedRepresentation>* continuations = nullptr)
           -> std::optional<ConstrainedRepresentation> {
         std::optional<ConstrainedRepresentation> best;
         // Each closure owns its downstream finalization. A smaller intermediate
@@ -1100,12 +1129,17 @@ TransactionSearchResult<LayoutSearchArtifact> search_joint_representation_constr
               "Closed representation, register and target equations together (" + chain +
               "); every immutable binding, flexible preload and matched return is "
               "certified before final size comparison."});
+          // The finalizer can greedily lower away an otherwise useful seam.
+          // Keep its proof-closed input as well as its output. This is an
+          // exploration edge only; no incumbent bypasses final publication.
+          if (composition) retain_closed_continuation(*closed, continuations);
           if (composition && finalize_intermediate) closed = finalize_intermediate(*closed);
           else if (finalize) closed = finalize(*closed);
           if (!closed) continue;
           ConstrainedRepresentation result{std::move(*closed), {}};
-          if (refresh_constraint_targets(result) &&
-              (!best || cells(result.artifact) < cells(best->artifact)))
+          if (!refresh_constraint_targets(result)) continue;
+          retain_closed_continuation(result.artifact, continuations);
+          if (!best || cells(result.artifact) < cells(best->artifact))
             best = std::move(result);
           }
         }
@@ -1383,14 +1417,11 @@ TransactionSearchResult<LayoutSearchArtifact> search_joint_representation_constr
       return edges;
     };
     auto composition_limits = limits;
-    composition_limits.maximum_expansions =
-        std::min<std::size_t>(6, limits.maximum_expansions);
-    composition_limits.maximum_candidates =
-        std::min<std::size_t>(24, limits.maximum_candidates);
-    composition_limits.maximum_depth =
-        std::min<std::size_t>(4, limits.maximum_depth);
+    // Closure continuations are real search steps. Do not silently halve the
+    // caller's expansion/depth allowance: one first-generation node per rule
+    // family can otherwise consume every slot before any techniques compose.
     std::optional<LayoutSearchArtifact> composition_incumbent;
-    const auto composed = search_proved_transactions(
+    const auto composed = search_proved_transaction_closures(
         std::move(composition_seeds), std::vector<ConstrainedRepresentation>{initial},
         cells(root), composition_limits,
         [](const auto& node) { return cells(node.artifact); },
@@ -1406,13 +1437,16 @@ TransactionSearchResult<LayoutSearchArtifact> search_joint_representation_constr
           return edges;
         },
         [&](const auto& node, const auto& path)
-            -> std::optional<ConstrainedRepresentation> {
-          auto explored = close_node(node, path, true);
-          if (!explored || !transaction_growth_fits(
-                  cells(root), cells(explored->artifact), limits.maximum_growth_cells))
-            return std::nullopt;
-          if (cells(explored->artifact) < cells(root)) {
-            std::optional<LayoutSearchArtifact> published = explored->artifact;
+            -> std::vector<ConstrainedRepresentation> {
+          std::vector<ConstrainedRepresentation> continuations;
+          (void)close_node(node, path, true, &continuations);
+          std::erase_if(continuations, [&](const auto& explored) {
+            return !transaction_growth_fits(
+                cells(root), cells(explored.artifact), limits.maximum_growth_cells);
+          });
+          for (const auto& explored : continuations) {
+          if (cells(explored.artifact) < cells(root)) {
+            std::optional<LayoutSearchArtifact> published = explored.artifact;
             if (finalize) published = finalize(*published);
             if (published && cells(*published) < cells(root) &&
                 build_post_layout_control_flow(published->items, control_options).proved &&
@@ -1420,14 +1454,15 @@ TransactionSearchResult<LayoutSearchArtifact> search_joint_representation_constr
                  cells(*published) < cells(*composition_incumbent)))
               composition_incumbent = std::move(*published);
           }
-          return explored;
+          }
+          return continuations;
         });
     if (composition_incumbent &&
         (!output.incumbent || cells(*composition_incumbent) < cells(*output.incumbent))) {
       composition_incumbent->optimizations.push_back({
           "joint-composed-representation-frontier",
-          "Composed representation, complete-family allocation and validated neutral "
-          "finalization without spending the historical search's budget; paid growth "
+          "Composed representation, complete-family allocation and all distinct proved "
+          "closure continuations without spending the historical search's budget; paid growth "
           "against the immutable root and independently authorized the final saving."});
       output.incumbent = std::move(*composition_incumbent);
     }

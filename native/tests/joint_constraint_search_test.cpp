@@ -1071,6 +1071,50 @@ void composed_family_contracts() {
         });
     require(!vetoed.incumbent && intermediate_calls > 0 && publication_vetoes > 0,
             "validated private intermediates never bypass the final publication veto");
+    std::size_t reopened_publications = 0;
+    const auto reopened = search_joint_representation_constraints(original, options,
+        [&](const LayoutSearchArtifact& artifact) -> std::optional<LayoutSearchArtifact> {
+          if (!report(artifact, "joint-proof-closed-continuation")) return std::nullopt;
+          require(std::none_of(artifact.items.begin(), artifact.items.end(),
+              [](const auto& item) {
+                return std::any_of(item.roles.begin(), item.roles.end(), [](const auto& role) {
+                  return role.starts_with("finalization-cell-origin:");
+                });
+              }), "a reopened closure must not freeze obsolete finalization geometry");
+          require(build_post_layout_control_flow(artifact.items).proved &&
+                      composed_family_observe(original, "-2") ==
+                          composed_family_observe(artifact, "-2"),
+                  "reopening retains the final CFG, full ROM bank, stack and X1/X2");
+          ++reopened_publications;
+          return artifact;
+        }, {}, true,
+        [](const LayoutSearchArtifact& artifact) -> std::optional<LayoutSearchArtifact> {
+          auto tagged = artifact;
+          for (std::size_t i = 0; i < tagged.items.size(); ++i)
+            tagged.items[i].roles.push_back("finalization-cell-origin:" + std::to_string(i));
+          return tagged;
+        });
+    require(reopened.incumbent && reopened_publications > 0,
+            "proof-closed continuations must reopen independently of the publication lane");
+    const auto before_irreversible_lowering = search_joint_representation_constraints(original, options,
+        [](const LayoutSearchArtifact& artifact) -> std::optional<LayoutSearchArtifact> {
+          if (!report(artifact, "joint-proof-closed-continuation") ||
+              std::any_of(artifact.items.begin(), artifact.items.end(),
+                  [](const auto& item) { return item.raw; }))
+            return std::nullopt;
+          return artifact;
+        }, {}, true,
+        [](const LayoutSearchArtifact& artifact) -> std::optional<LayoutSearchArtifact> {
+          auto opaque = artifact;
+          for (auto& item : opaque.items)
+            if (item.kind == MachineItemKind::Op) item.raw = true;
+          return opaque;
+        });
+    require(before_irreversible_lowering.incumbent &&
+                composed_family_observe(original, "7") ==
+                    composed_family_observe(*before_irreversible_lowering.incumbent, "7"),
+            "a greedy opaque finalization must not destroy its independently closed input; "
+            "publication must still authorize the actual nonopaque candidate");
     TransactionSearchLimits stopped;
     stopped.maximum_depth=1;
     const auto shallow=search_joint_representation_constraints(original,options,{},stopped);
@@ -1734,6 +1778,67 @@ void checkpoint_model_transport_contracts() {
   std::cout << "checkpoint model transport: 104 -> 102 cells; unsafe models rejected\n";
 }
 
+void set_valued_closure_frontier_contracts() {
+  struct Node {
+    int identity;
+    int size;
+    bool operator==(const Node&) const = default;
+  };
+  const auto count = [](const Node& node) { return node.size; };
+  const auto equal = [](const Node& a, const Node& b) { return a == b; };
+  const auto expand = [](const Node& node) {
+    std::vector<ProvedSearchTransition<Node>> edges;
+    if (node.identity == 3) {
+      edges.push_back({Node{4, 22}, "shared-tail", true});
+      edges.push_back({Node{8, 1}, "unproved-shortcut", false});
+    }
+    return edges;
+  };
+  const auto close = [](const Node& node, const std::vector<std::string>&) {
+    if (node.identity == 1)
+      return std::vector<Node>{{2, 28}, {3, 31}, {6, 35}, {2, 28}};
+    if (node.identity == 4)
+      return std::vector<Node>{{5, 21}};
+    return std::vector<Node>{};
+  };
+  const std::vector<ProvedSearchTransition<Node>> seeds{{Node{1, 32}, "codec", true}};
+  const TransactionSearchLimits limits{
+      .maximum_expansions = 8, .maximum_candidates = 16,
+      .maximum_depth = 5, .maximum_growth_cells = 4};
+  const auto run_search = [&] {
+    return search_proved_transaction_closures(
+        seeds, std::vector<Node>{}, 30, limits, count, equal, expand, close);
+  };
+  const auto result = run_search();
+  require(result.incumbent == std::optional<Node>{Node{5, 21}} &&
+              result.duplicate > 0 && result.rejected > 0,
+          "a larger proved closure must survive local canonicalization, while duplicate, "
+          "unproved and over-budget alternatives remain rejected");
+  const auto repeated = run_search();
+  require(repeated.incumbent == result.incumbent && repeated.expanded == result.expanded &&
+              repeated.admitted == result.admitted && repeated.rejected == result.rejected,
+          "set-valued closure exploration must be deterministic");
+  const auto greedy = search_proved_transactions(
+      seeds, std::vector<Node>{}, 30, limits, count, equal, expand,
+      [&](const Node& node, const std::vector<std::string>& path) -> std::optional<Node> {
+        const auto closures = close(node, path);
+        return closures.empty() ? std::nullopt : std::optional{closures.front()};
+      });
+  require(greedy.incumbent == std::optional<Node>{Node{2, 28}},
+          "the legacy optional-finalizer lane must retain its old choice and ordering");
+  auto shallow = limits;
+  shallow.maximum_depth = 2;
+  const auto bounded = search_proved_transaction_closures(
+      seeds, std::vector<Node>{}, 30, shallow, count, equal, expand, close);
+  require(bounded.incumbent == std::optional<Node>{Node{2, 28}},
+          "closure edges must spend the same depth budget as other transformations");
+  const auto vetoed = search_proved_transaction_closures(
+      seeds, std::vector<Node>{}, 30, limits, count, equal, expand,
+      [](const Node&, const std::vector<std::string>&) { return std::vector<Node>{}; });
+  require(!vetoed.incumbent,
+          "an absent complete-artifact certificate must never become a closure edge");
+}
+
 void run() {
   CompileOptions options;
   options.defer_return_suffix_until_callee_hole = true;
@@ -1810,6 +1915,7 @@ void run() {
 
 int main() {
   try {
+    set_valued_closure_frontier_contracts();
     deferred_web_recoloring_contracts();
     prepared_joint_proof_input_contracts();
     joint_origin_transport_contracts();

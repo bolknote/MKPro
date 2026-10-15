@@ -1361,3 +1361,49 @@ A second ROM fact absorbs a one-cell repeated stable jump into the unchanged roo
 entry (7 -> 6 cells), retaining the loop exit, complete register bank and X1/X2.
 This accounts for the Labyrinth777 hoistSharedHelpers variants, alone and with
 shareRandomCell, changing from 115 to 114 cells; the default listing is unchanged.
+
+## Set-valued executable closure
+
+Finalization is not a canonical form for further optimization. Two completely
+proved layouts of one conditional artifact can differ in which later rewrites
+remain possible: an early address/code overlay may be shorter but irreversible,
+while a neutral ordinary layout still exposes a useful register or region seam.
+
+The independent composition lane therefore retains all distinct proved ordinary
+and projected closures of its already bounded web/stack alternatives. It does
+not replace them with their local size minimum. Each continuation keeps its
+complete machine items, observation metadata, preloads and command-identity
+bindings, spends the same candidate/depth/growth budget as any other edge, and
+must pass the publication finalizer again before becoming an incumbent.
+Duplicate and over-budget closures do not get new exploration slots. There is
+no cross-program cache, source recognizer or relaxed final CFG/stack contract.
+This lane uses the caller's existing limits, rather than internally cutting
+them to six expansions, 24 candidates and four steps. The ordinary lane still
+has its independent budget and incumbent.
+
+A closed continuation re-enters the existing symbolic representation view before
+its next rewrite. Only obsolete `finalization-cell-origin:` bookkeeping is
+retired; typed inputs, executable charges and observation metadata remain.
+Complete symbolic target reconstruction and CFG validation are required again.
+Both the target-closed input and the output of intermediate finalization remain
+alternatives: greedy lowering cannot destroy its own useful input. The input's
+semantic, selector, layout and stack proofs authorize exploration, not
+publication. The caller's complete-artifact gate is mandatory for every winner,
+including these pre-finalization continuations. A regression makes intermediate
+finalization opaque and rejects opaque publication; the separately closed
+ordinary continuation must still reach its independent publication gate.
+
+This reopening is forbidden on conditional geometry: an encoded callback origin
+is not its speculative current label position. Unsupported raw/formal overlays
+remain publication-only artifacts, not permissions to rewrite their addresses.
+The compiler/ROM regression marks every intermediate cell and admits publication
+only through a reopened continuation, comparing the complete hardware bank,
+stack, X1 and X2 with the source.
+
+The generic search exposes this relation through
+`search_proved_transaction_closures`. The historical optional-finalizer API is
+an adapter with precisely one or zero results, preserving the old lane order.
+A deterministic search regression keeps a 31-cell closure instead of discarding
+it for a 28-cell local winner; the former enables a later 21-cell result. The
+same test covers duplicate, unproved, over-growth, depth-exhausted and vetoed
+continuations. These are search-contract figures, not a measured 4x4 saving.

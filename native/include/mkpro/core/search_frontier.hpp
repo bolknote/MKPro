@@ -181,7 +181,7 @@ template <class Node> struct TransactionSearchResult {
 // not occupy a frontier slot, and its size does not narrow the exploration
 // allowance: that allowance is fixed relative to the original artifact.
 template <class Node, class Cells, class Equal, class Expand, class Finalize>
-TransactionSearchResult<Node> search_proved_transactions(
+TransactionSearchResult<Node> search_proved_transaction_closures(
     std::vector<ProvedSearchTransition<Node>> seeds,
     const std::vector<Node>& already_expanded, int original_cells,
     const TransactionSearchLimits& limits, Cells cells, Equal equal,
@@ -249,12 +249,16 @@ TransactionSearchResult<Node> search_proved_transactions(
     // Child admission can reallocate entries. Keep the parent independent.
     const Entry parent = entries[*selected];
     ++result.expanded;
-    const auto closed = finalize(parent.node, parent.path);
-    if (closed) {
-      if (cells(*closed) < original_cells &&
-          (!result.incumbent || cells(*closed) < cells(*result.incumbent)))
-        result.incumbent = *closed;
-      admit({*closed, "final-layout", true}, parent.path, parent.lane);
+    // Closure is a relation, not a greedy canonicalizer. A shorter executable
+    // artifact can have fewer legal continuations than a neutral alternative
+    // (for example after an irreversible address/code overlay). Keep every
+    // independently proved closure within the same ordinary search bounds.
+    for (auto& closed : finalize(parent.node, parent.path)) {
+      if (transaction_growth_fits(original_cells, cells(closed), limits.maximum_growth_cells) &&
+          cells(closed) < original_cells &&
+          (!result.incumbent || cells(closed) < cells(*result.incumbent)))
+        result.incumbent = closed;
+      admit({std::move(closed), "final-layout", true}, parent.path, parent.lane);
     }
     if (parent.path.size() < limits.maximum_depth) {
       for (auto& child : expand(parent.node))
@@ -265,6 +269,26 @@ TransactionSearchResult<Node> search_proved_transactions(
       std::any_of(entries.begin(), entries.end(),
                   [](const Entry& entry) { return !entry.expanded; });
   return result;
+}
+
+// Preserve the historical optional-finalizer interface and ordering. Clients
+// with several proof-valid closures opt into the relation above explicitly;
+// an unproved or absent closure never becomes a speculative search edge.
+template <class Node, class Cells, class Equal, class Expand, class Finalize>
+TransactionSearchResult<Node> search_proved_transactions(
+    std::vector<ProvedSearchTransition<Node>> seeds,
+    const std::vector<Node>& already_expanded, int original_cells,
+    const TransactionSearchLimits& limits, Cells cells, Equal equal,
+    Expand expand, Finalize finalize) {
+  return search_proved_transaction_closures(
+      std::move(seeds), already_expanded, original_cells, limits,
+      std::move(cells), std::move(equal), std::move(expand),
+      [&](const Node& node, const std::vector<std::string>& path) {
+        std::vector<Node> closures;
+        if (auto closed = finalize(node, path))
+          closures.push_back(std::move(*closed));
+        return closures;
+      });
 }
 
 } // namespace mkpro::core
