@@ -493,8 +493,8 @@ simulation/vertol.txt	simulation/vertol.md	Vertol	Сергей Тарасов	Е
 simulation/videosalon.txt	simulation/videosalon.md	videosalon	С. Бекетов		https://lordbss.narod.ru/pmk170.html	game	simulation	classic;economy;management	lordbss	
 simulation/virus-lordbss.txt	simulation/virus-lordbss.md	virus	Владимир Трофимчук	Евгений Кузниченко	https://lordbss.narod.ru/pmk169.html	game	simulation	classic	lordbss	
 simulation/virus.txt	simulation/virus.md	Virus	Александер Крючков	Евгений Кузниченко	https://lordbss.narod.ru/pmk08.html	game	simulation	classic	lordbss	
-simulation/vostok-1-atmosphere.txt	simulation/vostok-1-atmosphere.md	Vostok-1 Atmosphere Program	darth.righter		https://pmk.arbinada.com/category/01621.html	game	simulation	space		vostok-1
-simulation/vostok-1-carrier.txt	simulation/vostok-1-carrier.md	Vostok-1 Carrier Vehicle	darth.righter		https://pmk.arbinada.com/category/01621.html	game	simulation	space		vostok-1
+simulation/vostok-1-atmosphere.txt	simulation/vostok-1-atmosphere.md	Восток-1: Атмосфера	darth.righter		https://darth-righter.livejournal.com/5756.html; https://pmk.arbinada.com/category/01621.html	game	simulation	space		vostok-1
+simulation/vostok-1-carrier.txt	simulation/vostok-1-carrier.md	Восток-1: Ракета-Носитель	darth.righter		https://darth-righter.livejournal.com/5756.html; https://pmk.arbinada.com/category/01621.html	game	simulation	space		vostok-1
 simulation/vozhdenie-avtomobilya-c3000.txt	simulation/vozhdenie-avtomobilya-c3000.md	Вождение автомобиля	Я. К. Трохименко		Я. К. Трохименко, Игры с микро-ЭВМ, Киев: Техніка, 1986; http://old-dos.ru/index.php?page=files&mode=files&do=show&id=4952	game	simulation	book;classic		
 simulation/vysshie-morekhodnye-kursy-c3000.txt	simulation/vysshie-morekhodnye-kursy-c3000.md	Высшие мореходные курсы	Я. К. Трохименко		Я. К. Трохименко, Игры с микро-ЭВМ, Киев: Техніка, 1986; http://old-dos.ru/index.php?page=files&mode=files&do=show&id=4952	game	simulation	book;classic;naval		
 simulation/yadernyy-reaktor.txt	simulation/yadernyy-reaktor.md	yadernyy reaktor	Андрей Ивушкин	Евгений Кузниченко	https://lordbss.narod.ru/pmk252.html	game	simulation	classic	lordbss	
