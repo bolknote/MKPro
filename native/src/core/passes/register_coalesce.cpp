@@ -457,13 +457,88 @@ private:
     return colors;
   }
 
+  // Interchange whole connected components of two colors, never individual
+  // conflicting values. Fixed hardware homes and list-color domains are part
+  // of the certificate. The caller still proves its data/CFG rewrite.
+  bool color_interchange(const std::string& node) {
+    const auto spend = [&] { return recoloring_work_ < options_.maximum_recoloring_work && ++recoloring_work_; };
+    const auto allowed = [&](const std::string& name, int color) {
+      const auto domain = options_.allowed_colors.find(name);
+      return domain == options_.allowed_colors.end() || domain->second.contains(color);
+    };
+    std::vector<int> wanted;
+    const auto preferred = options_.preferred_colors.find(node);
+    if (preferred != options_.preferred_colors.end() && preferred->second >= 0 &&
+        preferred->second < options_.color_count && allowed(node, preferred->second))
+      wanted.push_back(preferred->second);
+    for (int color = 0; color < options_.color_count; ++color)
+      if (allowed(node, color) && std::find(wanted.begin(), wanted.end(), color) == wanted.end())
+        wanted.push_back(color);
+    const auto neighbors = graph_.neighbors.find(node);
+    if (neighbors == graph_.neighbors.end()) return false;
+    for (const int first : wanted) {
+      for (int second = 0; second < options_.color_count; ++second) {
+        if (first == second) continue;
+        if (!spend()) return false;
+        RegisterSet component;
+        std::vector<std::string> pending;
+        for (const auto& neighbor : neighbors->second) {
+          if (!spend()) return false;
+          const auto assigned = assignments_.find(neighbor);
+          if (assigned != assignments_.end() && assigned->second == first)
+            pending.push_back(neighbor);
+        }
+        bool valid = !pending.empty();
+        while (valid && !pending.empty()) {
+          const auto current = pending.back(); pending.pop_back();
+          if (!spend()) return false;
+          if (!component.insert(current).second) continue;
+          const int old = assignments_.at(current);
+          const int next = old == first ? second : first;
+          if (options_.fixed_colors.contains(current) || !allowed(current, next) ||
+              (next == first && neighbors->second.contains(current))) {
+            valid = false; break;
+          }
+          const auto edges = graph_.neighbors.find(current);
+          if (edges == graph_.neighbors.end()) continue;
+          for (const auto& adjacent : edges->second) {
+            if (!spend()) return false;
+            const auto assigned = assignments_.find(adjacent);
+            if (assigned != assignments_.end() &&
+                (assigned->second == first || assigned->second == second))
+              pending.push_back(adjacent);
+          }
+        }
+        if (!valid) continue;
+        auto candidate = assignments_;
+        for (const auto& current : component)
+          candidate[current] = candidate.at(current) == first ? second : first;
+        candidate[node] = first;
+        for (const auto& [source, edges] : graph_.neighbors) {
+          const auto a = candidate.find(source);
+          if (a == candidate.end()) continue;
+          for (const auto& adjacent : edges) {
+            if (!spend()) return false;
+            const auto b = candidate.find(adjacent);
+            if (b != candidate.end() && a->second == b->second) valid = false;
+          }
+        }
+        if (valid) { assignments_ = std::move(candidate); return true; }
+      }
+    }
+    return false;
+  }
+
   bool greedy_seed() {
     const RegisterSet remaining = nodes_;
     for (std::size_t count = 0; count < remaining.size(); ++count) {
       const std::string node = select_node();
       const std::vector<int> colors = candidate_colors(node, true);
-      if (colors.empty())
-        return false;
+      if (colors.empty()) {
+        if (!color_interchange(node)) return false;
+        nodes_.erase(node);
+        continue;
+      }
       assignments_[node] = colors.front();
       nodes_.erase(node);
     }
@@ -490,6 +565,7 @@ private:
   RegisterSet nodes_;
   std::map<std::string, int> assignments_;
   std::set<int> anchored_colors_;
+  std::size_t recoloring_work_ = 0;
 };
 
 std::map<std::string, std::string>

@@ -703,10 +703,10 @@ bool selector_charge_entry_closer_opcode(int opcode) {
          (opcode >= 0xa7 && opcode <= 0xae);
 }
 
-std::optional<std::vector<bool>> analyze_post_layout_automatic_entry_lift(
+static std::optional<std::vector<bool>> analyze_entry_lift_impl(
     const std::vector<MachineItem>& items,
     const AuthoritativePostLayoutControlFlow& flow,
-    std::size_t maximum_work) {
+    std::size_t maximum_work,bool include_indirect) {
   const std::size_t count = flow.execution_states.size();
   if (!flow.proved || count == 0 || count > maximum_work ||
       flow.execution_successors.size() != count)
@@ -749,6 +749,10 @@ std::optional<std::vector<bool>> analyze_post_layout_automatic_entry_lift(
       if (selector_charge_entry_closer_opcode(item.opcode)) {
         outgoing = enabled;
       } else if (item.opcode == 0x51 || item.opcode == 0x54 ||
+                 (include_indirect && (item.opcode & 15)>=7 && (item.opcode & 15)<=14 &&
+                  ((item.opcode & 0xf0)==0x70 || (item.opcode & 0xf0)==0x80 ||
+                   (item.opcode & 0xf0)==0x90 || (item.opcode & 0xf0)==0xc0 ||
+                   (item.opcode & 0xf0)==0xe0)) ||
                  (item.opcode == 0x52 && !context.return_stack.empty())) {
         // Return to this exact caller, not a syntactic call-site shortcut.
         // Empty-stack hardware returns have a separate, deliberately absent
@@ -774,6 +778,9 @@ std::optional<std::vector<bool>> analyze_post_layout_automatic_entry_lift(
     proved[state] = incoming[state] == enabled;
   return proved;
 }
+
+std::optional<std::vector<bool>> analyze_post_layout_automatic_entry_lift(const std::vector<MachineItem>& items,const AuthoritativePostLayoutControlFlow& flow,std::size_t maximum_work){return analyze_entry_lift_impl(items,flow,maximum_work,false);}
+std::optional<std::vector<bool>> analyze_post_layout_automatic_entry_lift_with_indirect_flow_facts(const std::vector<MachineItem>& items,const AuthoritativePostLayoutControlFlow& flow,std::size_t maximum_work){return analyze_entry_lift_impl(items,flow,maximum_work,true);}
 
 bool selector_charge_has_automatic_entry_lift(const std::vector<IrOp>& ops,
                                              std::size_t entry, AddressSpaceModel model) {

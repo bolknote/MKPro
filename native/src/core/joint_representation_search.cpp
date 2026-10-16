@@ -1,6 +1,7 @@
 #include "mkpro/core/joint_representation_search.hpp"
 #include "mkpro/core/joint_proof_input.hpp"
 #include "mkpro/core/joint_constraint_origins.hpp"
+#include "mkpro/core/post_layout_packed_sign.hpp"
 
 #include "mkpro/core/callee_hole_boundary_normalization.hpp"
 #include "mkpro/core/indirect_addressing.hpp"
@@ -835,7 +836,8 @@ TransactionSearchResult<LayoutSearchArtifact> search_joint_representation_constr
     const JointRepresentationFinalizer& finalize,
     const TransactionSearchLimits& limits, bool preload_environment_complete,
     ProloguePartitionLane partition_lane, JointProofPreparationCounts& proof_counts,
-    const JointRepresentationFinalizer& finalize_intermediate) {
+    const JointRepresentationFinalizer& finalize_intermediate,
+    bool coupled_geometry = false) {
   TransactionSearchResult<LayoutSearchArtifact> output;
   CompileOptions configured = options;
   configured.defer_return_suffix_until_callee_hole = true;
@@ -892,11 +894,16 @@ TransactionSearchResult<LayoutSearchArtifact> search_joint_representation_constr
                  .runtime_preloads = preload_environment_complete
                      ? &parent.artifact.preloads : nullptr,
                  .preserve_compiler_selector_charges = preload_environment_complete,
-                 .assumed_target_addresses = &*data_origins}))
+                 .assumed_target_addresses = &*data_origins,
+                 .normalize_unit_arguments = coupled_geometry}))
       add(std::move(proposal.transformation), "representation-equations",
           &proposal.required_target_addresses);
 
     auto requests = passes::semantic_region_register_requests(ops, true);
+    if (coupled_geometry) {
+      const auto processor_requests = passes::common_processor_factoring_register_requests(ops);
+      requests.insert(requests.end(), processor_requests.begin(), processor_requests.end());
+    }
     const auto tail_requests = passes::semantic_region_tail_register_requests(ops, true);
     requests.insert(requests.end(),tail_requests.begin(),tail_requests.end());
     if (data_origins)
@@ -998,6 +1005,48 @@ TransactionSearchResult<LayoutSearchArtifact> search_joint_representation_constr
       if (topology_seeds.size() == 4U) break;
     }
   }
+  if (coupled_geometry) {
+  std::vector<std::vector<ConstrainedRepresentation>> product_queues;
+  const auto coupled_root_limit = std::min<std::size_t>(6, limits.maximum_expansions);
+  for(const auto& source:unrotated_allocation_roots) {
+    std::vector<ConstrainedRepresentation> queue;
+    for(auto& edge:expand(source)) {
+      if (edge.rule != "representation-equations" ||
+          std::none_of(edge.node.artifact.items.begin(), edge.node.artifact.items.end(),
+              [](const auto& item) {
+                return std::find(item.roles.begin(), item.roles.end(),
+                                 kUnitProjectionDemandRole) != item.roles.end();
+              })) continue;
+      if(auto hoisted=apply(edge.node.artifact,passes::distribute_constant_call_prefix(
+          raise_machine_to_ir(edge.node.artifact.items,effective_optimizer_feature_profile(options)),context,control_options))) {
+        ConstrainedRepresentation distributed{std::move(*hoisted),edge.node.targets,edge.node.encoded_selectors};
+        if(refresh_constraint_targets(distributed)) queue.push_back(std::move(distributed));
+      }
+      queue.push_back(edge.node);
+      auto seed_options=configured;seed_options.allow_size_neutral_selector_seed_reuse=true;
+      const passes::PassContext seed_context{seed_options};
+      auto seed=passes::deferred_indirect_selector_seed_reuse(
+          raise_machine_to_ir(edge.node.artifact.items,effective_optimizer_feature_profile(options)),
+          seed_context,control_options,edge.node.targets);
+      if(auto child=apply(edge.node.artifact,std::move(seed.transformation))) {
+        ConstrainedRepresentation seeded{std::move(*child),std::move(seed.encoded_target_origins),edge.node.encoded_selectors};
+        if(refresh_constraint_targets(seeded)) queue.push_back(std::move(seeded));
+      }
+    }
+    product_queues.push_back(std::move(queue));
+  }
+  std::vector<ConstrainedRepresentation> coupled_roots;
+  for(std::size_t depth=0;coupled_roots.size()<coupled_root_limit;++depth) {
+    bool found=false;
+    for(auto& queue:product_queues) if(depth<queue.size()) {
+      found=true;coupled_roots.push_back(std::move(queue[depth]));
+      if(coupled_roots.size()==coupled_root_limit) break;
+    }
+    if(!found) break;
+  }
+  if (coupled_roots.empty()) return output;
+  allocation_roots.insert(allocation_roots.begin(),coupled_roots.begin(),coupled_roots.end());
+  }
   // Recompute web interference after representation and whole-family choices.
   // Keep the original closure first: a local copy saving must not replace a
   // neutral variant whose geometry wins only after shared-tail projection.
@@ -1040,6 +1089,28 @@ TransactionSearchResult<LayoutSearchArtifact> search_joint_representation_constr
           if (refresh_constraint_targets(alternative))
             variants.push_back(std::move(alternative));
         }
+    }
+    if (coupled_geometry) {
+    const auto seed_bases=variants;
+    auto seed_options=configured; seed_options.allow_size_neutral_selector_seed_reuse=true;
+    const passes::PassContext seed_context{seed_options};
+    for(const auto& base:seed_bases) {
+      const auto seed_origins=detail::joint_target_origins(base.artifact.items,base.targets,base.encoded_selectors);
+      if(!seed_origins) continue;
+      auto seed=passes::deferred_indirect_selector_seed_reuse(raise_machine_to_ir(base.artifact.items,effective_optimizer_feature_profile(options)),seed_context,control_options,*seed_origins);
+      auto child=apply(base.artifact,std::move(seed.transformation));
+      if(!child) continue;
+      ConstrainedRepresentation seeded{std::move(*child),std::move(seed.encoded_target_origins),base.encoded_selectors};
+      if(!refresh_constraint_targets(seeded)) continue;
+      variants.push_back(seeded);
+      const auto next_origins=detail::joint_target_origins(seeded.artifact.items,seeded.targets,seeded.encoded_selectors);
+      if(!next_origins) continue;
+      for(auto& erased:passes::deferred_stack_producer_erasure_candidates(raise_machine_to_ir(seeded.artifact.items,effective_optimizer_feature_profile(options)),context,control_options,*next_origins,{.maximum_candidates=2,.maximum_erased_cells=2,.maximum_proof_attempts=16})) {
+        auto erased_child=apply(seeded.artifact,std::move(erased)); if(!erased_child) continue;
+        ConstrainedRepresentation after{std::move(*erased_child),seeded.targets,seeded.encoded_selectors};
+        if(refresh_constraint_targets(after)) variants.push_back(std::move(after));
+      }
+    }
     }
     return variants;
   };
@@ -1203,9 +1274,18 @@ TransactionSearchResult<LayoutSearchArtifact> search_joint_representation_constr
   // before another rewrite can repay a released family's extra operands.
   if (preload_environment_complete && limits.maximum_expansions > 0 &&
       limits.maximum_depth > 0 && limits.maximum_candidates > 0) {
-    const std::size_t cap = std::min<std::size_t>(24, limits.maximum_candidates);
+    const std::size_t cap = coupled_geometry
+        ? std::min<std::size_t>(128, std::min<std::size_t>(128, limits.maximum_candidates) *
+                                      std::min<std::size_t>(128, limits.maximum_expansions))
+        : std::min<std::size_t>(24, limits.maximum_candidates);
     std::size_t roots = 0;
     for (const auto& source : allocation_roots) {
+      if (coupled_geometry && std::none_of(
+              source.artifact.items.begin(), source.artifact.items.end(), [](const auto& item) {
+                return std::find(item.roles.begin(), item.roles.end(),
+                                 kTransportedConstantPrefixRole) != item.roles.end();
+              }))
+        continue;
       if (roots++ >= limits.maximum_expansions) break;
       const auto source_flow = build_post_layout_control_flow(source.artifact.items, control_options);
       std::map<std::string, int> encoded = source.encoded_selectors;
@@ -1228,7 +1308,10 @@ TransactionSearchResult<LayoutSearchArtifact> search_joint_representation_constr
         (void)targets;
       }
       if (!consistent) continue;
-      const auto allocations = deferred_natural_target_selector_allocations(
+      const auto allocate = coupled_geometry
+          ? balanced_deferred_natural_target_selector_allocations
+          : deferred_natural_target_selector_allocations;
+      const auto allocations = allocate(
           source.artifact.items, source.artifact.preloads, source_flow, encoded,
           control_options, {.maximum_assignments = 128, .maximum_candidates = cap,
                             .maximum_growth_cells = limits.maximum_growth_cells});
@@ -1294,6 +1377,26 @@ TransactionSearchResult<LayoutSearchArtifact> search_joint_representation_constr
           for (std::size_t i = 1; i < alternatives.size(); ++i)
             variants.push_back(std::move(alternatives[i]));
         }
+        if (coupled_geometry) {
+        auto geometry_bases=variants;
+        std::stable_sort(geometry_bases.begin(),geometry_bases.end(),[](const auto& a,const auto& b){return cells(a.artifact)<cells(b.artifact);});
+        std::size_t geometry_count=0;
+        for(const auto& base:geometry_bases) {
+          if(geometry_count>=4U) break;
+          for(auto& edge:topology_edges(base)) {
+            if(geometry_count++>=4U) break;
+            variants.push_back(edge.node);
+            const auto origins=detail::joint_target_origins(edge.node.artifact.items,edge.node.targets,edge.node.encoded_selectors);
+            if(!origins)continue;
+            for(auto& bridge:passes::deferred_stable_target_split_bridge_candidates(raise_machine_to_ir(edge.node.artifact.items,effective_optimizer_feature_profile(options)),edge.node.artifact.preloads,*origins,context,control_options,2)) {
+              if(auto child=apply(edge.node.artifact,std::move(bridge))) {
+                ConstrainedRepresentation next{std::move(*child),edge.node.targets,edge.node.encoded_selectors};
+                if(refresh_constraint_targets(next)) variants.push_back(std::move(next));
+              }
+            }
+          }
+        }
+        }
         for (const auto& variant : variants) {
           PreparedJointProofInput proof_input(variant.artifact.items,variant.artifact.preloads,
                                              control_options,&proof_counts);
@@ -1315,6 +1418,14 @@ TransactionSearchResult<LayoutSearchArtifact> search_joint_representation_constr
         for (const auto& variant : variants) close_data_control_literals(variant);
       }
     }
+  }
+  // Every older lane already completed in the independent invocation.
+  // Do not replay it when the new coupled lane has finished its closures.
+  if (coupled_geometry) {
+    if (data_control_incumbent &&
+        (!output.incumbent || cells(*data_control_incumbent) < cells(*output.incumbent)))
+      output.incumbent = std::move(*data_control_incumbent);
+    return output;
   }
   if (!projection_seeds.empty()) {
     const auto projection_search = search_proved_transactions(
@@ -1531,6 +1642,36 @@ TransactionSearchResult<LayoutSearchArtifact> search_joint_representation_constr
   auto result = search_joint_representation_constraints_impl(
       root, options, finalize, limits, preload_environment_complete,
       ProloguePartitionLane::Enabled, proof_counts, finalize_intermediate);
+  // A new representation/layout lane cannot spend the established search's
+  // beam or displace its equal-size incumbent. Its cheap demand gate names
+  // only a producer/call shape, never a source function or example.
+  bool unit_call_demand = false;
+  for (std::size_t at = 0; at < root.items.size(); ++at) {
+    if (root.items[at].kind != MachineItemKind::Op ||
+        root.items[at].raw || root.items[at].opcode != 1) continue;
+    auto next = at + 1U;
+    if (next < root.items.size() && root.items[next].kind == MachineItemKind::Op &&
+        !root.items[next].raw && root.items[next].opcode == 0x0b) ++next;
+    if (next < root.items.size() && root.items[next].kind == MachineItemKind::Op) {
+      const int opcode = root.items[next].opcode;
+      unit_call_demand = unit_call_demand || opcode == 0x53 ||
+          (opcode >= 0xa7 && opcode <= 0xae);
+    }
+  }
+  if (preload_environment_complete && unit_call_demand && limits.maximum_expansions &&
+      limits.maximum_candidates && limits.maximum_depth) {
+    auto coupled = search_joint_representation_constraints_impl(
+        root, options, finalize, limits, preload_environment_complete,
+        ProloguePartitionLane::Disabled, proof_counts, finalize_intermediate, true);
+    if (coupled.incumbent && (!result.incumbent ||
+        cells(*coupled.incumbent) < cells(*result.incumbent)))
+      result.incumbent = std::move(coupled.incumbent);
+    result.expanded += coupled.expanded;
+    result.admitted += coupled.admitted;
+    result.duplicate += coupled.duplicate;
+    result.rejected += coupled.rejected;
+    result.budget_exhausted = result.budget_exhausted || coupled.budget_exhausted;
+  }
   if (std::getenv("MKPRO_NATIVE_TRACE_JOINT_PROOF_INPUT"))
     std::cerr << "[joint-proof-input] inputs=" << proof_counts.inputs
               << " selector-proofs=" << proof_counts.selector_proofs

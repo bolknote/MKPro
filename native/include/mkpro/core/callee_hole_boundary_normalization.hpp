@@ -4,6 +4,7 @@
 #include "mkpro/core/stack_value_equivalence.hpp"
 
 #include <cstddef>
+#include <string_view>
 #include <functional>
 #include <optional>
 #include <vector>
@@ -110,4 +111,14 @@ normalize_callee_hole_boundaries(const std::vector<IrOp>& ops);
 // budget exhaustion reject the proposed outline rather than guessing a bound.
 bool callee_hole_return_stack_fits(const std::vector<IrOp>& ops);
 
+} // namespace mkpro::core
+
+namespace mkpro::core {
+// Precision opt-in: additionally transport closed digit entry through stable
+// R7..Re indirect control, using ROM-verified entry-state effects.
+std::optional<std::vector<bool>> analyze_post_layout_automatic_entry_lift_with_indirect_flow_facts(
+    const std::vector<MachineItem>& items,
+    const AuthoritativePostLayoutControlFlow& flow, std::size_t maximum_work);
+inline constexpr std::string_view kTransportedConstantPrefixRole =
+    "transported-constant-prefix";
 } // namespace mkpro::core

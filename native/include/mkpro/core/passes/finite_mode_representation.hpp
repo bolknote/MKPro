@@ -16,6 +16,10 @@ namespace mkpro::core::passes {
 // Opaque max boundaries require restoration instead of an ordering assumption:
 // a singleton finite integer may be rematerialized at a proved fresh-entry
 // boundary, with its code cost and all changed stack/X1/X2 slots accounted for.
+// At a proved true predicate exit, the decoded X may be restored independently
+// of the carrier. Exponent adjustment preserves last-X; exact unary decoders
+// must prove their changed last-X/X2 unobserved. The encoded carrier relation
+// stays live until an independently proved overwrite or private exit.
 // Other unsupported or unprojected observations fail closed. Calls retain their exact
 // return contexts; aliases, external entries and hidden stack state are proof
 // obligations, not assumptions based on source names.
@@ -39,6 +43,8 @@ struct FiniteModeCandidateOptions {
   // data proof only; the unrefined CFG still owns relocation and publication.
   // A caller must discharge every binding before publishing an artifact.
   const std::map<std::string, int>* assumed_target_addresses = nullptr;
+  // Neutral producer/consumer composition belongs to the independent joint lane.
+  bool normalize_unit_arguments = false;
 };
 
 struct DeferredFiniteModeRepresentation {

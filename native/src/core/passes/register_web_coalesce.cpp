@@ -514,6 +514,7 @@ static PassResult process_register_webs(
     PrecoloredRegisterAllocationOptions allocation;
     allocation.color_count = kRegisters;
     allocation.greedy_only = true;
+    allocation.maximum_recoloring_work = 4096;
     for (Node node = 0; node < webs.parents.size(); ++node) {
       if (webs.root(node) != node)
         continue;

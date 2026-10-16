@@ -1,6 +1,7 @@
 #pragma once
 
 #include "mkpro/core/passes/helpers.hpp"
+#include "mkpro/core/passes/register_coalesce.hpp"
 
 #include <cstddef>
 #include <vector>
@@ -36,3 +37,8 @@ std::vector<PassResult> common_processor_partitioned_entry_candidates(
     const CommonProcessorFactoringOptions& options = {});
 
 } // namespace mkpro::core::passes
+
+namespace mkpro::core::passes {
+std::vector<RegisterWebRecoloringRequest> common_processor_factoring_register_requests(
+    const std::vector<IrOp>& ops);
+}

@@ -5833,13 +5833,13 @@ bool better_candidate(const CandidateArtifact& left, const CandidateArtifact& ri
 } // namespace
 
 std::vector<DeferredNaturalTargetSelectorAllocation>
-deferred_natural_target_selector_allocations(
+deferred_selector_allocation_impl(
     const std::vector<MachineItem>& items,
     const std::vector<PreloadReport>& preloads,
     const AuthoritativePostLayoutControlFlow& control_flow,
     const std::map<std::string, int>& encoded_selector_targets,
     const PostLayoutControlFlowOptions& control_options,
-    const DeferredNaturalTargetSelectorAllocationOptions& options) {
+    const DeferredNaturalTargetSelectorAllocationOptions& options,bool diverse) {
   std::vector<DeferredNaturalTargetSelectorAllocation> result;
   const auto model = control_options.address_space_model;
   if (!control_flow.proved || control_flow.address_space_model != model ||
@@ -5982,7 +5982,7 @@ deferred_natural_target_selector_allocations(
   // Whole-family permutations run first; replacements by direct-only groups
   // and complete releases then use their own remaining assignment choices.
   const auto enumerate = [&](auto&& self, std::size_t at, bool incumbent_groups_only) -> void {
-    if (assignments.size() >= options.maximum_assignments || ++work > 20000U) return;
+    if ((!diverse && assignments.size() >= options.maximum_assignments) || ++work > 20000U) return;
     if (at == carriers.size()) {
       int delta = 0;
       for (std::size_t g = 0; g < groups.size(); ++g)
@@ -6014,7 +6014,7 @@ deferred_natural_target_selector_allocations(
       chosen[at] = group;
       self(self, at + 1U, incumbent_groups_only);
       if (group >= 0) occupied.erase(group);
-      if (assignments.size() >= options.maximum_assignments || work > 20000U) break;
+      if ((!diverse && assignments.size() >= options.maximum_assignments) || work > 20000U) break;
     }
     chosen[at] = -1;
   };
@@ -6023,6 +6023,32 @@ deferred_natural_target_selector_allocations(
   std::stable_sort(assignments.begin(), assignments.end(),
       [](const auto& a, const auto& b) { return a.delta < b.delta; });
 
+  if(diverse) {
+    using Key=std::vector<int>;
+    struct Bucket {Key targets;std::vector<Assignment> choices;};
+    std::map<int,std::vector<Bucket>> tiers;
+    for(auto& assignment:assignments) {
+      Key targets;for(int group:assignment.group_by_carrier)if(group>=0)targets.push_back(group);
+      std::sort(targets.begin(),targets.end());
+      auto& buckets=tiers[assignment.delta];
+      auto found=std::find_if(buckets.begin(),buckets.end(),[&](const auto& b){return b.targets==targets;});
+      if(found==buckets.end()){buckets.push_back({targets,{}});found=std::prev(buckets.end());}
+      found->choices.push_back(std::move(assignment));
+    }
+    assignments.clear();
+    for(auto& [delta,buckets]:tiers) {
+      (void)delta;
+      for(std::size_t depth=0;;++depth) {
+        bool any=false;
+        for(auto& bucket:buckets)if(depth<bucket.choices.size()) {
+          any=true;assignments.push_back(std::move(bucket.choices[depth]));
+        }
+        if(!any)break;
+      }
+    }
+  }
+
+  if(diverse && assignments.size()>options.maximum_assignments) assignments.resize(options.maximum_assignments);
   for (const auto& assignment : assignments) {
     std::map<std::size_t, const Carrier*> selected;
     std::vector<NaturalTargetAnchorCandidate> anchors;
@@ -6140,6 +6166,23 @@ deferred_natural_target_selector_allocations(
   }
   return result;
 }
+
+std::vector<DeferredNaturalTargetSelectorAllocation>
+deferred_natural_target_selector_allocations(
+    const std::vector<MachineItem>& items,
+    const std::vector<PreloadReport>& preloads,
+    const AuthoritativePostLayoutControlFlow& control_flow,
+    const std::map<std::string, int>& encoded_selector_targets,
+    const PostLayoutControlFlowOptions& control_options,
+    const DeferredNaturalTargetSelectorAllocationOptions& options) {return deferred_selector_allocation_impl(items,preloads,control_flow,encoded_selector_targets,control_options,options,false);}
+std::vector<DeferredNaturalTargetSelectorAllocation>
+balanced_deferred_natural_target_selector_allocations(
+    const std::vector<MachineItem>& items,
+    const std::vector<PreloadReport>& preloads,
+    const AuthoritativePostLayoutControlFlow& control_flow,
+    const std::map<std::string, int>& encoded_selector_targets,
+    const PostLayoutControlFlowOptions& control_options,
+    const DeferredNaturalTargetSelectorAllocationOptions& options) {return deferred_selector_allocation_impl(items,preloads,control_flow,encoded_selector_targets,control_options,options,true);}
 
 
 std::optional<std::string> rebind_proved_natural_fractional_selector_preload(

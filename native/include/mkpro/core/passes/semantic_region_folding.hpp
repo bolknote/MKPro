@@ -99,3 +99,18 @@ PassResult semantic_region_folding(const std::vector<IrOp>& ops,
 IrPass semantic_region_folding_pass();
 
 } // namespace mkpro::core::passes
+
+namespace mkpro::core::passes {
+// Deferred geometry: immutable selector words retain their recorded origins
+// until final layout. Every final destination still requires rebinding proof.
+std::vector<PassResult> deferred_stable_target_split_bridge_candidates(
+    const std::vector<IrOp>& ops, const std::vector<PreloadReport>& preloads,
+    const std::map<std::string, int>& encoded_targets,
+    const PassContext& context, const PostLayoutControlFlowOptions& control_options,
+    std::size_t maximum_candidates = 2);
+
+// Move a closed, exclusively called literal prefix across its call while
+// preserving the shared entry store and exact numeric/return-state contract.
+PassResult distribute_constant_call_prefix(const std::vector<IrOp>& ops,
+    const PassContext& context, const PostLayoutControlFlowOptions& control_options);
+} // namespace mkpro::core::passes

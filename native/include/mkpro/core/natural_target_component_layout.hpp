@@ -380,3 +380,13 @@ deferred_natural_target_selector_allocations(
     const DeferredNaturalTargetSelectorAllocationOptions& options = {});
 
 } // namespace mkpro::core
+
+// Bounded, target-set-diverse matching; historical ordering remains separate.
+namespace mkpro::core { std::vector<DeferredNaturalTargetSelectorAllocation>
+balanced_deferred_natural_target_selector_allocations(
+    const std::vector<MachineItem>& items,
+    const std::vector<PreloadReport>& preloads,
+    const AuthoritativePostLayoutControlFlow& control_flow,
+    const std::map<std::string, int>& encoded_selector_targets,
+    const PostLayoutControlFlowOptions& control_options,
+    const DeferredNaturalTargetSelectorAllocationOptions& options = {}); }

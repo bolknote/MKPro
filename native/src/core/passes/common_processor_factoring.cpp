@@ -1,4 +1,5 @@
 #include "mkpro/core/passes/common_processor_factoring.hpp"
+#include "mkpro/core/passes/register_coalesce.hpp"
 
 #include "mkpro/core/callee_hole_boundary_normalization.hpp"
 #include "mkpro/core/opcodes.hpp"
@@ -448,6 +449,33 @@ PassResult rewrite(const std::vector<IrOp>& ops, const Index& index,
 }
 
 } // namespace
+
+
+std::vector<RegisterWebRecoloringRequest> common_processor_factoring_register_requests(
+    const std::vector<IrOp>& ops) {
+  std::vector<RegisterWebRecoloringRequest> result;
+  const auto index=index_ops(ops);
+  if(!index.valid) return result;
+  for(std::size_t call=4;call<ops.size();++call) {
+    const auto base=projection_prologue(ops,index,call,false);
+    if(!base) continue;
+    for(std::size_t other=3;other<ops.size();++other) {
+      const auto begin=other-3;
+      if(other==call || !(other<base->ordinary_begin || call<begin) ||
+          call_target(ops[other],index)!=std::optional{base->helper} ||
+          ops[begin].kind!=IrKind::Recall || ops[begin+1].kind!=IrKind::Store ||
+          ops[begin+2].kind!=IrKind::Recall ||
+          !plain_metadata(ops[begin]) || !plain_metadata(ops[begin+1]) || !plain_metadata(ops[begin+2]) ||
+          !ordinary_register(ops[begin]) || !ordinary_register(ops[begin+1]) || !ordinary_register(ops[begin+2]) ||
+          register_index(ops[begin+1].register_name)!=register_index(ops[base->ordinary_begin+1].register_name) ||
+          register_index(ops[begin+2].register_name)==register_index(ops[base->recall_second].register_name)) continue;
+      RegisterWebRecoloringRequest request{{base->recall_second,begin+2}};
+      if(std::find(result.begin(),result.end(),request)==result.end()) result.push_back(std::move(request));
+      if(result.size()>=4) return result;
+    }
+  }
+  return result;
+}
 
 std::vector<PassResult> common_processor_factoring_candidates(
     const std::vector<IrOp>& ops, const PassContext& context,

@@ -1,3 +1,4 @@
+#include "mkpro/core/post_layout_packed_sign.hpp"
 #include "mkpro/core/post_layout_numeric_ranges.hpp"
 #include "mkpro/core/post_layout_progress_bounds.hpp"
 
@@ -854,6 +855,21 @@ static PostLayoutNumericRangeProof prove_numeric_ranges_on_graph(
     fact.mantissa = shape;
     return fact;
   };
+  std::optional<std::map<std::size_t,int>> packed_signs;
+  const auto packed_sign = [&](std::size_t state) -> std::optional<int> {
+    if(!packed_signs) {
+      std::vector<std::size_t> queries;
+      for(std::size_t q=0;q<flow.execution_states.size();++q)
+        if(items[flow.execution_states[q].item_index].opcode==0x32 &&
+           std::find(items[flow.execution_states[q].item_index].roles.begin(),items[flow.execution_states[q].item_index].roles.end(),kUnitProjectionDemandRole)!=items[flow.execution_states[q].item_index].roles.end()) queries.push_back(q);
+      auto proof=prove_post_layout_packed_sign_inputs(items,flow,automatic_entry_lift,queries,preloads,
+          maximum_work-std::min(maximum_work,result.work));
+      result.work+=proof.work; result.exhausted=result.exhausted || proof.exhausted;
+      packed_signs=std::move(proof.signs);
+    }
+    if(const auto at=packed_signs->find(state);at!=packed_signs->end()) return at->second;
+    return std::nullopt;
+  };
   std::map<Key, Fact> cache;
   std::map<Key, std::set<Key>> dependents;
   std::map<Key, std::size_t> changes;
@@ -1064,6 +1080,10 @@ static PostLayoutNumericRangeProof prove_numeric_ranges_on_graph(
         return !y.grounded || !x.grounded ? Fact{} : constant(binary(code, y.range, x.range), binary_quantized(code, y.quantum, x.quantum));
       }
       const auto x = input(0);
+      if (x.grounded && code == 0x32) {
+        if (x.mantissa.normalized_eight) return decimal("1");
+        if (const auto sign=packed_sign(state)) return decimal(std::to_string(*sign));
+      }
       if (x.grounded && code == 0x34 && x.mantissa.normalized_eight)
         return decimal("8");
       if (code == 0x3a) {

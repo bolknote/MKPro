@@ -59742,7 +59742,7 @@ bool callee_hole_indirect_call_targets_proved(const std::vector<OptimizationRepo
               return reject("callee-hole fallthrough charge has an opaque decimal entry");
           }
         }
-        if (!explicit_lift) {
+        if (!explicit_lift && !sunk_entry) {
           bool saw_closer = false;
           for (std::size_t source = 0; source < resolved_flow.successors.size(); ++source) {
             const auto& successors = resolved_flow.successors[source];
@@ -75185,30 +75185,12 @@ select_absolute_dark_layout_for_final_artifact(const CompileResult& selected,
 }
 
 std::optional<CompileResult>
-apply_absolute_dark_layout_once(const std::string& source,
-                                const CompileResult& selected,
-                                const CompileOptions& options,
-                                bool allow_proved_prefix_repayment = false) {
+materialize_proved_layout_result(const std::string& source,
+                                 const CompileResult& selected,
+                                 const CompileOptions& options,
+                                 const SelectedAbsoluteDarkLayout& selected_layout) {
+  const auto* layout = &selected_layout;
   const bool trace = std::getenv("MKPRO_NATIVE_TRACE_CANDIDATES") != nullptr;
-  if (selected.manual_startup_sequence.has_value())
-    return std::nullopt;
-  std::optional<SelectedAbsoluteDarkLayout> layout =
-      select_absolute_dark_layout_for_final_artifact(selected, options);
-  if (!layout.has_value() && allow_proved_prefix_repayment &&
-      core::machine_cell_count(selected.items) < static_cast<int>(selected.steps.size())) {
-    // The caller already owns a complete selector/data/CFG proof for this
-    // smaller prefix. Do not discard its saving merely because the next
-    // absolute-layout transaction cannot remove another cell.
-    layout = SelectedAbsoluteDarkLayout{
-        .items = selected.items, .preloads = selected.preloads, .optimizations = {},
-    };
-  }
-  if (!layout.has_value()) {
-    if (trace)
-      std::cerr << "[selected-dark-layout] no selected layout\n";
-    return std::nullopt;
-  }
-
   CompileResult candidate = selected;
   candidate.items = layout->items;
   candidate.preloads = layout->preloads;
@@ -75275,6 +75257,33 @@ apply_absolute_dark_layout_once(const std::string& source,
     return std::nullopt;
   populate_public_report(candidate, ast, options);
   return candidate;
+}
+
+
+std::optional<CompileResult>
+apply_absolute_dark_layout_once(const std::string& source,
+                                const CompileResult& selected,
+                                const CompileOptions& options,
+                                bool allow_proved_prefix_repayment = false) {
+  if (selected.manual_startup_sequence) return std::nullopt;
+  std::vector<SelectedAbsoluteDarkLayout> alternatives;
+  if (auto layout = select_absolute_dark_layout_for_final_artifact(selected, options))
+    alternatives.push_back(std::move(*layout));
+  if (allow_proved_prefix_repayment &&
+      core::machine_cell_count(selected.items) < static_cast<int>(selected.steps.size()))
+    alternatives.push_back({.items = selected.items, .preloads = selected.preloads,
+                            .optimizations = {}});
+  std::optional<CompileResult> best;
+  for (const auto& alternative : alternatives) {
+    auto candidate = materialize_proved_layout_result(source, selected, options, alternative);
+    if (!candidate || (allow_proved_prefix_repayment &&
+        candidate_needs_static_proof_gate(options) &&
+        optimizer_static_gate_rejection_reason(options, *candidate)))
+      continue;
+    if (!best || candidate_beats_best(*candidate, *best, options))
+      best = std::move(candidate);
+  }
+  return best;
 }
 
 
@@ -75655,9 +75664,6 @@ apply_absolute_dark_layout_to_selected_result(const std::string& source,
             (candidate_needs_static_proof_gate(options) &&
              optimizer_static_gate_rejection_reason(options, *candidate).has_value()))
           return std::nullopt;
-        if (!intermediate && candidate->steps.size() < constraint_root.steps.size() &&
-            (!best || candidate_beats_best(*candidate, *best, options)))
-          best = *candidate;
         return artifact(*candidate);
       };
   const auto constrained = core::search_joint_representation_constraints(
@@ -75665,6 +75671,21 @@ apply_absolute_dark_layout_to_selected_result(const std::string& source,
       [&](const LayoutArtifact& closed){return finalize_constraints(closed,false);},
       core::kJointRepresentationConstraintLimits, true,
       [&](const LayoutArtifact& closed){return finalize_constraints(closed,true);});
+  // Finalization is a pure search callback. Publish only the incumbent that
+  // survived the joint search's subsequent literal/selector certificates.
+  if (constrained.incumbent) {
+    const auto& closed = *constrained.incumbent;
+    CompileResult materialization_root = constraint_root;
+    materialization_root.optimizations = closed.optimizations;
+    auto candidate = materialize_proved_layout_result(
+        source, materialization_root, options,
+        SelectedAbsoluteDarkLayout{.items = closed.items, .preloads = closed.preloads,
+                                   .optimizations = {}});
+    if (candidate && (!candidate_needs_static_proof_gate(options) ||
+        !optimizer_static_gate_rejection_reason(options, *candidate)) &&
+        (!best || candidate_beats_best(*candidate, *best, options)))
+      best = std::move(candidate);
+  }
   if (std::getenv("MKPRO_NATIVE_TRACE_JOINT_LAYOUT_SEARCH"))
     std::cerr << "[joint-constraint-search] expanded=" << constrained.expanded
               << " admitted=" << constrained.admitted

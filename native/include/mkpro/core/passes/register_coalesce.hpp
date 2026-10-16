@@ -46,6 +46,10 @@ struct PrecoloredRegisterAllocationOptions {
   // Optional MRV ordering for bounded speculative list coloring. The default
   // exact/legacy DSATUR ordering is unchanged.
   bool prioritize_constrained_domains = false;
+  // Opt-in polynomial two-color chain repair after a failed greedy choice.
+  // Counts graph/domain visits over this solver invocation; zero preserves the
+  // historical greedy/exact ordering. Exhaustion exports no partial witness.
+  std::size_t maximum_recoloring_work = 0;
 };
 
 // Cost-preserving domains for already lowered logical FL/indirect operations.

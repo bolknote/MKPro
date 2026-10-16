@@ -1,6 +1,8 @@
 #include "mkpro/core/passes/liveness_analysis.hpp"
 
 #include "mkpro/core/indirect_addressing.hpp"
+#include "mkpro/core/callee_hole_boundary_normalization.hpp"
+#include "mkpro/core/post_layout_packed_sign.hpp"
 #include "mkpro/core/passes/cfg.hpp"
 #include "mkpro/core/post_layout_control_flow.hpp"
 #include "mkpro/core/opcodes.hpp"
@@ -139,7 +141,8 @@ GuardedLifetimeProof guarded_register_lifetimes(
     const std::vector<std::vector<std::size_t>>& predecessors,
     const std::vector<std::size_t>& roots, const LivenessOptions& options,
     const std::vector<GuardedDefinitionUseQuery>& queries = {},
-    std::size_t maximum_work = 400000U) {
+    std::size_t maximum_work = 400000U,
+    const std::map<std::size_t,int>* exact_signs = nullptr) {
   using Id = std::size_t;
   using Pair = std::pair<std::string, std::string>;
   GuardedLifetimeProof proved;
@@ -285,7 +288,7 @@ GuardedLifetimeProof guarded_register_lifetimes(
       return std::nullopt;
     return number;
   };
-  const auto transfer = [&](Facts state, Id id, bool retain_selector) {
+  const auto transfer = [&](Facts state, Id id, bool retain_selector, bool global_path) {
     const IrOp& op = op_at(id);
     const RegisterEffects& effect = effects.at(instructions.at(id));
     const auto old_memory = state.memory;
@@ -337,6 +340,9 @@ GuardedLifetimeProof guarded_register_lifetimes(
         // The numeric value is known, but sign entry is not a proof that a
         // following digit starts a new mantissa rather than continuing input.
         state.entry = Entry::Unknown;
+      } else if (op.opcode == 0x32 && global_path && exact_signs && exact_signs->contains(id)) {
+        state.x=exact_signs->at(id);
+        state.entry=Entry::Closed;
       } else if (op.opcode == 0x0d) {
         state.x = 0;
         state.entry = Entry::Closed;
@@ -438,7 +444,7 @@ GuardedLifetimeProof guarded_register_lifetimes(
         if (effect.must_defs.contains(name))
           continue;
       }
-      const Facts after = transfer(*states.at(id), id, retain.contains(id));
+      const Facts after = transfer(*states.at(id), id, retain.contains(id), payload == nullptr);
       for (const Id to : successors.at(id))
         if (permits(id, to, *states.at(id)))
           merge(to, after);
@@ -523,7 +529,7 @@ GuardedLifetimeProof guarded_register_lifetimes(
       // already rejected the matched-context proof before reaching here.
       if (!global->at(id).has_value())
         continue;
-      const Facts after = transfer(global->at(id).value_or(Facts{}), id, false);
+      const Facts after = transfer(global->at(id).value_or(Facts{}), id, false, true);
       for (const Id to : successors.at(id))
         starts.emplace_back(to, after);
     }
@@ -552,7 +558,7 @@ GuardedLifetimeProof guarded_register_lifetimes(
     for (Id id = 0; id < instructions.size(); ++id) {
       if (instructions.at(id) != query.definition || !global->at(id).has_value())
         continue;
-      const Facts after = transfer(*global->at(id), id, false);
+      const Facts after = transfer(*global->at(id), id, false, true);
       for (const Id to : successors.at(id))
         if (permits(id, to, *global->at(id)))
           starts.emplace_back(to, after);
@@ -842,11 +848,30 @@ GuardedDefinitionUseProof analyze_unreachable_definition_uses(
     }
   }
   options.closed_program_entry = false;
+  std::map<std::size_t,int> sign_facts;
+  std::size_t sign_work=0;
+  std::vector<std::size_t> sign_queries;
+  for(std::size_t s=0;s<instructions.size();++s)
+    if(ops[instructions[s]].kind==IrKind::Plain && ops[instructions[s]].opcode==0x32 &&
+        std::find(ops[instructions[s]].meta.roles.begin(),ops[instructions[s]].meta.roles.end(),core::kUnitProjectionDemandRole)!=ops[instructions[s]].meta.roles.end())
+      sign_queries.push_back(s);
+  if(!sign_queries.empty()) {
+    const auto items=lower_ir_to_machine(ops);
+    const auto lift=analyze_post_layout_automatic_entry_lift(items,flow,maximum_work);
+    std::vector<PreloadReport> preloads;
+    for(const auto& [reg,word]:options.equal_entry_value_classes)
+      if(word.starts_with("literal:")) preloads.push_back({.register_name=reg,.value=word.substr(8)});
+    if(lift) {
+      auto signs=core::prove_post_layout_packed_sign_inputs(items,flow,*lift,sign_queries,&preloads,maximum_work);
+      sign_work=signs.work; if(signs.exhausted) return {{},sign_work,true};
+      sign_facts=std::move(signs.signs);
+    }
+  }
   auto proof = guarded_register_lifetimes(ops, effects, instructions, flow.execution_successors,
-      predecessors, roots, options, queries, maximum_work);
+      predecessors, roots, options, queries, maximum_work-std::min(maximum_work,sign_work), &sign_facts);
   return {proof.exhausted ? std::set<GuardedDefinitionUseQuery>{}
                           : std::move(proof.excluded_uses),
-          proof.work, proof.exhausted};
+          proof.work+sign_work, proof.exhausted};
 }
 
 std::set<GuardedDefinitionUseQuery> prove_unreachable_definition_uses(

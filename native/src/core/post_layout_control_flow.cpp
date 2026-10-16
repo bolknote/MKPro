@@ -1,6 +1,5 @@
 #include "mkpro/core/post_layout_control_flow.hpp"
 
-#include "mkpro/core/callee_hole_boundary_normalization.hpp"
 #include "mkpro/core/passes/helpers.hpp"
 
 #include "mkpro/core/callee_hole_boundary_normalization.hpp"
@@ -20,6 +19,7 @@
 #include <tuple>
 #include <utility>
 #include <vector>
+
 
 namespace mkpro::core {
 
@@ -1232,8 +1232,12 @@ static SelectorConsistentExecutionGraph build_selector_execution_graph_impl(
   // In particular, a digit appended to an unknown mantissa/exponent is NOT
   // the corresponding small integer. Calls and jumps may transport a proved
   // value to a shared store; all other unsupported producers forget it.
-  const auto entry_lift = analyze_post_layout_automatic_entry_lift(
-      items, control, maximum_states * 8U);
+  const auto entry_lift = bindings && std::any_of(items.begin(), items.end(), [](const auto& item) {
+        return std::find(item.roles.begin(), item.roles.end(),
+                         kTransportedConstantPrefixRole) != item.roles.end();
+      })
+      ? analyze_post_layout_automatic_entry_lift_with_indirect_flow_facts(items,control,maximum_states * 8U)
+      : analyze_post_layout_automatic_entry_lift(items,control,maximum_states * 8U);
   std::vector<std::vector<std::size_t>> predecessors(count);
   std::set<std::size_t> external_items;
   for (const auto& entry : control.external_entries)

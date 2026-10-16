@@ -1407,3 +1407,42 @@ A deterministic search regression keeps a 31-cell closure instead of discarding
 it for a 28-cell local winner; the former enables a later 21-cell result. The
 same test covers duplicate, unproved, over-growth, depth-exhausted and vetoed
 continuations. These are search-contract figures, not a measured 4x4 saving.
+
+
+## Coupled producer and geometry closure
+
+The established search is evaluated first, with its complete original budgets
+and tie order. An independent bounded lane composes a proved unit-argument
+producer/consumer normalization, closed constant-prefix distribution across a
+matched call, selector seed re-projection, register-web coalescing and deletion
+subsets, target-set-diverse complete-family allocation, conditional polarity,
+and both eligible stable fallthrough cuts. None of these edges names a source
+function, reference, board size or example constant.
+
+The lane's demand gate is a unit literal immediately supplied to a call. A
+canonical packed logical producer is positive; a negative packed difference
+requires an OR-only zero-seeded strict-progress edge, old-minus-new operands,
+and a singleton edge certificate. Every invocation must establish the same
+unit argument before the shared Ksign is introduced. Full stack, X1, X2,
+register, return and external-entry equality is still required. An arbitrary
+super-number, non-unit caller or exhaustion supplies no fact.
+
+Moving a fresh closed ordinary literal before its exclusive call is cell
+neutral. The retained shared store converges numeric entry. The compiler-owned
+charge protocol is transported to the new call; its marker does not establish
+a proof. Precise indirect-control entry facts are opt-in for these transported
+literals and independently covered by ROM tests. Deferred stable words retain
+their encoded target origins, not provisional physical PCs; final rebinding
+and every callback charge are re-proved after placement.
+
+Whole-family matching keeps the historical enumerator unchanged. The new
+policy round-robins equally costly assignments across target sets before its
+bounded proof frontier, so register permutations of one set cannot occupy the
+entire frontier. The existing 20,000-node matching bound remains in force.
+
+Finalization compares independently materialized and proof-checked layout
+alternatives, including an already closed smaller prefix. Search callbacks do
+not publish an incumbent before the joint search's final literal certificate.
+The unchanged high-level 4x4 regression currently measures 127 cells, down
+from 129; this is a measured two-cell improvement, not a claim of reaching the
+105-cell stock-machine limit.

@@ -1,3 +1,5 @@
+#include "mkpro/core/stable_register_value_flow.hpp"
+#include "mkpro/core/joint_constraint_origins.hpp"
 #include "mkpro/core/passes/semantic_region_folding.hpp"
 
 #include "mkpro/core/callee_hole_boundary_normalization.hpp"
@@ -513,11 +515,11 @@ std::vector<PassResult> conditional_region_exchange_candidates(
   return result;
 }
 
-std::vector<PassResult> stable_target_split_bridge_candidates(
+static std::vector<PassResult> stable_target_split_bridge_candidates_impl(
     const std::vector<IrOp>& ops, const std::vector<PreloadReport>& preloads,
     const std::map<std::string, int>& encoded_targets,
     const PassContext& context, const PostLayoutControlFlowOptions& control_options,
-    std::size_t maximum_candidates) {
+    std::size_t maximum_candidates, bool allow_deferred) {
   std::vector<PassResult> result;
   if (maximum_candidates == 0 || !symbolic(ops, true) ||
       control_options.address_space_model != flow_options(context).address_space_model)
@@ -556,9 +558,22 @@ std::vector<PassResult> stable_target_split_bridge_candidates(
     if (!decoded || !decoded->formal_address ||
         decoded->formal_address->kind != FormalAddressKind::Official ||
         !indirect_writeback_preserves_literal_word(*decoded, preload.value) ||
-        !rebind_stable_preloaded_indirect_flow_selector(
+        !(rebind_stable_preloaded_indirect_flow_selector(
             input, preload, flow, encoded_targets.at(*label), encoded_targets.at(*label),
-            control_options.address_space_model))
+            control_options.address_space_model) ||
+          (allow_deferred && mkpro::core::detail::joint_literal_word(preload) &&
+           decoded->actual_flow_target == std::optional{encoded_targets.at(*label)} &&
+           prove_post_layout_input_boundaries(input, flow).proved &&
+           std::none_of(input.begin(), input.end(), [&](const auto& op) {
+             if (op.raw) return true;
+             if (op.kind != MachineItemKind::Op) return false;
+             if (op.opcode == 0x40 + reg) return true;
+             if ((op.opcode & 0xf0) != 0xb0) return false;
+             const auto at = static_cast<std::size_t>(&op - input.data());
+             const auto found = flow.indirect_memory_targets.find(at);
+             return found == flow.indirect_memory_targets.end() ||
+                 std::find(found->second.begin(), found->second.end(), reg) != found->second.end();
+           }))))
       continue;
     const auto& jump_effect = opcode_by_code(0x80 + reg);
     if (jump_effect.stack_effect != StackEffect::Preserves ||
@@ -640,6 +655,24 @@ std::vector<PassResult> stable_target_split_bridge_candidates(
       break;
   }
   return result;
+}
+
+std::vector<PassResult> stable_target_split_bridge_candidates(
+    const std::vector<IrOp>& ops, const std::vector<PreloadReport>& preloads,
+    const std::map<std::string, int>& encoded_targets,
+    const PassContext& context, const PostLayoutControlFlowOptions& control_options,
+    std::size_t maximum_candidates) {
+  return stable_target_split_bridge_candidates_impl(
+      ops, preloads, encoded_targets, context, control_options, maximum_candidates, false);
+}
+
+std::vector<PassResult> deferred_stable_target_split_bridge_candidates(
+    const std::vector<IrOp>& ops, const std::vector<PreloadReport>& preloads,
+    const std::map<std::string, int>& encoded_targets,
+    const PassContext& context, const PostLayoutControlFlowOptions& control_options,
+    std::size_t maximum_candidates) {
+  return stable_target_split_bridge_candidates_impl(
+      ops, preloads, encoded_targets, context, control_options, maximum_candidates, true);
 }
 
 static PassResult semantic_region_folding_impl(
@@ -931,6 +964,131 @@ std::vector<RegisterWebRecoloringRequest> semantic_region_tail_register_requests
 IrPass semantic_region_folding_pass() {
   return {.name = "semantic-multi-entry-region-folding", .run = semantic_region_folding,
           .layout_safe = false};
+}
+
+} // namespace mkpro::core::passes
+
+namespace mkpro::core::passes {
+PassResult distribute_constant_call_prefix(const std::vector<IrOp>& ops,
+    const PassContext& context,const PostLayoutControlFlowOptions& control_options) {
+  const auto unchanged=[&]{return PassResult{.ops=ops};};
+  if (!symbolic(ops, true) || control_options.address_space_model !=
+      flow_options(context).address_space_model) return unchanged();
+  const auto input=lower_ir_to_machine(ops);
+  const auto flow=build_post_layout_control_flow(input,control_options);
+  if(!flow.proved) return unchanged();
+  const auto lift=analyze_post_layout_automatic_entry_lift_with_indirect_flow_facts(input,flow,100000);
+  if(!lift) return unchanged();
+  const auto machine=machine_indexes(ops);
+  std::map<std::string,std::size_t> labels;
+  for(std::size_t i=0;i<ops.size();++i) if(ops[i].kind==IrKind::Label)
+    if(!labels.emplace(ops[i].name,i).second) return unchanged();
+  std::vector<std::vector<std::size_t>> predecessors(flow.execution_states.size());
+  for(std::size_t s=0;s<flow.execution_states.size();++s)
+    for(const auto n:flow.execution_successors[s]) predecessors[n].push_back(s);
+  for(std::size_t call=0;call<ops.size();++call) {
+    const auto& command=ops[call];
+    std::optional<std::string> selected;
+    if(command.kind==IrKind::Call && std::holds_alternative<std::string>(command.target)) selected=std::get<std::string>(command.target);
+    else if(command.kind==IrKind::IndirectCall && command.opcode>=0xa7 && command.opcode<=0xae && command.meta.indirect_flow_targets && command.meta.indirect_flow_targets->size()==1U && !command.meta.indirect_flow_formal_targets && std::holds_alternative<std::string>(command.meta.indirect_flow_targets->front())) selected=std::get<std::string>(command.meta.indirect_flow_targets->front());
+    const auto* target=selected?&*selected:nullptr;
+    if(!target || !labels.contains(*target) ||
+       command.meta.raw || command.meta.manual_interaction || command.target_meta.formal_opcode)
+      continue;
+    auto first=labels.at(*target);
+    while(first<ops.size() && ops[first].kind==IrKind::Label) ++first;
+    if(first==ops.size() || first==0 || ops[first].kind!=IrKind::Plain ||
+       ops[first].opcode<1 || ops[first].opcode>9) continue;
+
+    auto prefix_label=first;
+    while(prefix_label>0 && ops[prefix_label-1U].kind==IrKind::Label) --prefix_label;
+    if(prefix_label==0 || !ends_chain(ops[prefix_label-1U])) {continue;}
+    auto end=first;
+    for(;end<ops.size() && end-first<8U;++end) {
+      const auto& digit=ops[end];
+      if(digit.kind!=IrKind::Plain || digit.opcode<0 || digit.opcode>9 ||
+         digit.meta.raw || digit.meta.manual_interaction || digit.meta.indirect_flow_targets ||
+         digit.meta.indirect_memory_targets || digit.meta.logical_register_analysis ||
+         digit.procedure_boundary || !digit.meta.semantic_call_origins.empty()) break;
+    }
+    if(end==first || end==ops.size()) {continue;}
+    std::optional<std::size_t> tail_jump;
+    std::string body_label;std::size_t body=0;
+    if(ops[end].kind==IrKind::Label) {body_label=ops[end].name;body=end;}
+    else if(ops[end].kind==IrKind::Jump && !ops[end].meta.raw && !ops[end].meta.manual_interaction && !ops[end].target_meta.formal_opcode && std::holds_alternative<std::string>(ops[end].target) && labels.contains(std::get<std::string>(ops[end].target))) {
+      tail_jump=end;body_label=std::get<std::string>(ops[end].target);body=labels.at(body_label);
+    } else continue;
+    while(body<ops.size() && ops[body].kind==IrKind::Label) ++body;
+    if(command.kind==IrKind::IndirectCall && tail_jump) continue;
+    if(body==ops.size() || ops[body].kind!=IrKind::Store || ops[body].meta.raw ||
+       ops[body].meta.manual_interaction || ops[body].opcode<0x40 || ops[body].opcode>0x4e)
+      {continue;}
+    bool reached=false, safe=true;
+    for(std::size_t s=0;s<flow.execution_states.size();++s) {
+      const auto at=flow.execution_states[s].item_index;
+      if(at==machine[call] || at==machine[first]) {
+        reached=true; safe=safe && (*lift)[s];
+      }
+      if(at==machine[first]) {
+        safe=safe && !predecessors[s].empty();
+        for(const auto p:predecessors[s]) safe=safe && flow.execution_states[p].item_index==machine[call];
+      }
+    }
+    for(const auto& e:flow.external_entries)
+      if(e.entry.item_index>=machine[first] && e.entry.item_index<machine[end]) safe=false;
+    if(!reached || !safe) {continue;}
+    // The only reordered control operation is a direct call. Fresh ordinary
+    // digits cannot observe/clobber its return frames, and the retained store
+    // closes both number-entry modes before any continuation can observe them.
+    std::vector<IrOp> rewritten;
+    std::vector<std::size_t> retained_origin;
+    for(std::size_t i=0;i<ops.size();++i) {
+      if((i>=first && i<end) || tail_jump==i) continue;
+      if(i==call) for(std::size_t p=first;p<end;++p) {
+        auto digit=ops[p];digit.procedure_name=command.procedure_name;digit.hidden=command.hidden;
+        if (p == first) digit.meta.roles.push_back(std::string(kTransportedConstantPrefixRole));
+        rewritten.push_back(std::move(digit));retained_origin.push_back(p);
+      }
+      auto op=ops[i]; if(i==call && command.kind==IrKind::Call) op.target=body_label;
+      constexpr std::string_view charge_store="callee-hole charge-entry store; ";
+      if(i==call && ops[body].meta.comment && ops[body].meta.comment->starts_with(charge_store)) {
+        const auto original=op.meta.comment;
+        op.meta.comment="callee-hole charge-entry call; "+ops[body].meta.comment->substr(charge_store.size());
+        if(original && !original->empty()) *op.meta.comment+="; "+*original;
+      }
+      rewritten.push_back(std::move(op));retained_origin.push_back(i);
+    }
+    const auto output=lower_ir_to_machine(rewritten);
+    const auto delivered=build_post_layout_control_flow(output,control_options);
+    if(!delivered.proved || delivered.maximum_observed_return_depth!=flow.maximum_observed_return_depth) continue;
+    std::vector<IrOp> before_control,after_control;
+    std::vector<std::size_t> before_origins,after_origins;
+    for(std::size_t i=0;i<ops.size();++i) if(i<first || i>=end) {
+      before_control.push_back(ops[i]);before_origins.push_back(i);
+    }
+    for(std::size_t i=0;i<rewritten.size();++i)
+      if(retained_origin[i]<first || retained_origin[i]>=end) {
+        after_control.push_back(rewritten[i]);after_origins.push_back(retained_origin[i]);
+      }
+    const auto old_machine=machine_indexes(before_control);
+    const auto new_machine=machine_indexes(after_control);
+    std::map<std::size_t,std::size_t> next_origin;
+    for(std::size_t i=0;i<after_origins.size();++i) next_origin.emplace(after_origins[i],i);
+    const auto a=lower_ir_to_machine(before_control),b=lower_ir_to_machine(after_control);
+    std::vector<std::optional<std::size_t>> mapping(a.size());
+    for(std::size_t i=0;i<before_control.size();++i) {
+      const auto to=next_origin.find(before_origins[i]); if(to==next_origin.end()) {if(tail_jump==before_origins[i])continue;safe=false;break;}
+      const auto width=before_control[i].kind==IrKind::Label?1U:static_cast<std::size_t>(cells_per_op(before_control[i]));
+      for(std::size_t c=0;c<width;++c) mapping[old_machine[i]+c]=new_machine[to->second]+c;
+    }
+    const auto proof=prove_post_layout_execution_relocation(a,b,build_post_layout_control_flow(a,control_options),build_post_layout_control_flow(b,control_options),mapping,{.allow_bypassed_direct_jumps=tail_jump.has_value()});
+    if(!safe || !proof.proved){continue;}
+
+    return {.ops=std::move(rewritten),.applied=1,
+      .optimizations={{"constant-call-prefix-distribution",
+        "Moved one exclusively called fresh ordinary constant prefix to its caller; kept the shared entry store, exact matched returns and deferred target identities. The neutral cell distribution competes only after joint layout."}}};
+  }
+  return unchanged();
 }
 
 } // namespace mkpro::core::passes

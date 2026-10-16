@@ -140,17 +140,25 @@ bool literal_entry_is_closed(const std::vector<MachineItem>& items,
     if (external.entry.item_index == entry)
       return false;
   bool reached = false;
+  bool immediate=true;
   for (std::size_t source = 0; source < flow.execution_successors.size(); ++source) {
     for (const auto target : flow.execution_successors[source]) {
       if (flow.execution_states[target].item_index != entry)
         continue;
       const auto& before = items[flow.execution_states[source].item_index];
-      if (before.raw || before.manual_interaction.has_value() ||
-          !selector_charge_entry_closer_opcode(before.opcode))
-        return false;
+      if (before.raw || before.manual_interaction.has_value()) return false;
+      if (!selector_charge_entry_closer_opcode(before.opcode)) immediate=false;
       reached = true;
     }
   }
+  if (immediate) return reached;
+  if (std::find(items[entry].roles.begin(), items[entry].roles.end(),
+                kTransportedConstantPrefixRole) == items[entry].roles.end())
+    return false;
+  const auto lift=analyze_post_layout_automatic_entry_lift_with_indirect_flow_facts(items,flow,100000);
+  if(!lift)return false;
+  for(std::size_t state=0;state<flow.execution_states.size();++state)
+    if(flow.execution_states[state].item_index==entry && !(*lift)[state]) return false;
   return reached;
 }
 
