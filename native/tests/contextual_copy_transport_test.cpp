@@ -205,6 +205,48 @@ void closed_toggle_sign_facts(){
     }else require(proof.signs.empty(),"raw transitions, dynamic writes, aliases and side entries reject finite sign facts");
   }
 }
+void formal_toggle_sign_facts(){
+  for(int kind=0;kind<7;++kind){
+    MachineEmitter e;
+    e.emit_jump(0x53,"formal first phase",kind==3?"neg_entry":kind==2?"prefix_entry":"toggle");
+    e.items.back().formal_opcode=kind==3?0xec:kind==2?0xea:kind==6?0x100:0xeb;
+    e.emit_op(0x6c);e.emit_op(0x32);e.emit_op(0x48);
+    e.emit_jump(0x53,"canonical second phase","toggle");
+    e.emit_op(0x6c);e.emit_op(0x32);e.emit_stop(StopDisposition::Terminal);
+    while(cells(e.items)<38)e.emit_op(0x54);
+    e.emit_label("prefix_entry");e.emit_op(0x54);
+    e.emit_label("toggle");e.emit_op(0x6c);
+    e.emit_label("neg_entry");e.emit_op(0x0b);
+    if(kind==1)e.items.back().raw=true;
+    if(kind==4)e.items.back().formal_opcode=0x0b;
+    e.emit_op(0x4c);
+    if(kind==5){e.emit_op(2);e.emit_op(0x4c);}
+    e.emit_op(0x52);
+    const auto flow=build_post_layout_control_flow(e.items);
+    std::vector<std::size_t> queries;
+    for(std::size_t s=0;s<flow.execution_states.size();++s)
+      if(e.items[flow.execution_states[s].item_index].opcode==0x32)queries.push_back(s);
+    const std::vector<PreloadReport> words{{.register_name="c",.value="0.25"}};
+    const auto proof=prove_post_layout_toggle_sign_inputs(e.items,flow,queries,words);
+    if(kind!=0 && kind!=2){
+      require(proof.signs.empty(),"invalid formal routes, raw/overridden commands, transition side entries and dynamic writes reject: "+std::to_string(kind));
+      continue;
+    }
+    require(flow.proved && proof.signs.size()==2U &&
+        proof.signs.begin()->second==-1 && proof.signs.rbegin()->second==1,
+        "one finite automaton preserves exact signs across formal and canonical call contexts");
+    const auto exhausted=prove_post_layout_toggle_sign_inputs(e.items,flow,queries,words,1);
+    require(exhausted.exhausted && exhausted.signs.empty(),"formal route exhaustion exports no partial fact");
+    const auto bytes=resolve_machine_items(e.items);
+    require(bytes.diagnostics.empty(),"formal finite-state ROM fixture resolves");
+    std::vector<int> code;for(const auto& step:bytes.steps)code.push_back(step.opcode);
+    emulator::MK61 calc;require(calc.load_program(code).diagnostics.empty(),"formal finite-state fixture fits stock memory");
+    calc.set_register("c","0.25").press_sequence({"\u0412/\u041e","\u0421/\u041f"});
+    require(calc.run_until_stable(5000,8).stopped &&
+        calc.read_register("8").starts_with("-1,") && calc.read_register("X").starts_with("1,"),
+        "stock ROM confirms both signs and the canonical continuation after the formal call");
+  }
+}
 void transition_store_sign_facts(){
   for(int kind=0;kind<4;++kind){
     MachineEmitter e;e.emit_jump(0x53,"first phase","toggle");e.emit_op(0x48);
@@ -1464,6 +1506,35 @@ void transitive_value_origin_preferences(){
 }
 
 
+void sibling_value_origin_preferences(){
+  CompileOptions options;options.analysis=true;options.coalesce_copies=true;
+  for(const int kind:{0,1,2}){
+    MachineEmitter e;e.emit_op(0x69);e.emit_op(0x40);
+    const auto first=e.items.size()-1U;
+    e.emit_op(0x60);e.emit_op(0x41);
+    e.emit_op(2);e.emit_op(0x49); // Same source, deliberately different word.
+    e.emit_op(0x69);e.emit_op(0x4a);
+    const auto second=e.items.size()-1U;
+    if(kind==1){e.emit_op(0x60);e.emit_op(0x4b);}
+    if(kind==2)e.items[first-1U].raw=true;
+    e.emit_op(kind==1?0x6b:0x61);e.emit_op(0x6a);e.emit_stop(StopDisposition::Terminal);
+    const auto ops=raise_machine_to_ir(e.items);
+    const auto requests=passes::contextual_copy_origin_register_requests(ops,16);
+    const auto wanted=std::find(requests.begin(),requests.end(),
+        passes::RegisterWebRecoloringRequest{{first,second}});
+    if(kind==2){require(wanted==requests.end(),"raw ancestry never creates a sibling preference");continue;}
+    require(wanted!=requests.end(),"independent captures of a common source propose a sibling affinity");
+    const std::vector<PreloadReport> words{{.register_name="9",.value="3"}};
+    std::vector<std::vector<IrOp>> recolored;
+    passes::for_each_deferred_register_web_recoloring(ops,{options},{*wanted},{},{},
+        [&](auto next){recolored.push_back(std::move(next));},&words,true);
+    require(recolored.empty()==(kind==1),
+        "complete liveness rejects overlapping siblings even when their source names agree");
+    for(const auto& next:recolored)
+      require(observe({e.items,words,{}},-1,true)==observe({lower_ir_to_machine(next),words,{}},-1,true),
+          "disjoint siblings with different captured values preserve all later ROM observations");
+  }
+}
 void guarded_context_word_identity(){
   for(int kind=0;kind<3;++kind){
     MachineEmitter e;e.emit_op(0x0d);
@@ -1849,7 +1920,79 @@ void fresh_literal_producer_proof(){
         "a literal mode proof must complete within its work budget");
   }
 }
+void selector_product_identity_returns(){
+  for(const bool equal:{false,true}){
+    MachineEmitter e;
+    e.emit_op(0x0d);
+    if(equal)e.emit_op(4);
+    e.emit_op(0x43);e.emit_op(0x48);
+    e.emit_op(1);e.emit_op(0x0b);e.emit_op(0x40);
+    e.emit_jump(0x53,"first invocation has no surviving output","shared");
+    e.emit_op(4);e.emit_op(0x42);e.emit_label("scan");
+    e.emit_op(0x69);e.emit_jump(0x5e,"skip candidate","next");
+    e.emit_op(0x6d);e.emit_op(0x4a);e.emit_op(0xaa);
+    e.items.back().indirect_flow_targets=std::vector<IrTarget>{"alpha","beta"};
+    e.emit_op(0x62);e.emit_op(0x60);e.emit_op(0x36);e.emit_op(0x40);e.emit_op(0x11);
+    e.emit_jump(0x5e,"retain maximum","next");
+    e.emit_op(equal?0x62:2);e.emit_op(0x43);e.emit_op(0x62);e.emit_op(0x48);
+    e.emit_label("next");e.emit_jump(0x58,"finite scan","scan");
+    e.emit_op(0x60);e.emit_jump(0x5c,"selected value exists","chosen");
+    e.emit_op(0);e.emit_stop(StopDisposition::Terminal);
+    e.emit_label("chosen");e.emit_jump(0x53,"observable invocation","shared");
+    e.emit_op(0x68);e.emit_stop(StopDisposition::Terminal);
+    e.emit_label("shared");
+    e.emit_op(0x68);e.emit_jump(0x53,"normalize first value","normalize");e.emit_op(0x42);
+    e.emit_op(0x63);e.emit_jump(0x53,"normalize independent second value","normalize");e.emit_op(0x41);
+    e.emit_op(0x61);e.emit_op(0x48,std::nullopt,"product-qualified-copy");e.emit_op(0x52);
+    e.emit_label("normalize");
+    for(const int code:{0x34,4,0x13,0x35,1,0x11,0x35,1,0x10,4,0x12})e.emit_op(code);
+    e.emit_op(0x52);e.emit_label("alpha");e.emit_op(0x52);
+    e.emit_label("beta");e.emit_op(0x52);
+    const auto preloads=[](const auto& items){
+      std::vector<PreloadReport> words{{.register_name="9",.value="0"}};
+      int address=0;
+      for(const auto& item:items){
+        if(item.kind!=MachineItemKind::Label){++address;continue;}
+        if(item.name=="alpha" || item.name=="beta")
+          words.push_back({.register_name=item.name=="alpha"?"a":"d",.value=std::to_string(address)});
+      }
+      return words;
+    };
+    const auto play=[&](const auto& items){
+      const auto program=resolve_machine_items(items);
+      require(program.diagnostics.empty(),"product-context fixture resolves after selector rebinding");
+      std::vector<int> bytes;for(const auto& step:program.steps)bytes.push_back(step.opcode);
+      emulator::MK61 calc;
+      require(calc.load_program(bytes).diagnostics.empty(),"independent product-context fixture fits stock ROM");
+      for(const auto& word:preloads(items))calc.set_register(word.register_name,word.value);
+      calc.press_sequence({"В/О","С/П"});
+      require(calc.run_until_stable(5000,8).stopped,"both invocations return to the observer");
+      std::vector<std::string> values;
+      for(const char* reg:{"X","Y","Z","T","X1","1","2","3","8"})values.push_back(calc.read_register(reg));
+      calc.press(".");values.push_back(calc.display_text(true));return values;
+    };
+    const auto ops=raise_machine_to_ir(e.items);
+    const auto words=preloads(e.items);CompileOptions options;options.analysis=true;
+    const auto candidates=passes::contextual_redundant_copy_store_candidates(ops,{options},
+        {.maximum_work=400000,.maximum_candidates=16,.maximum_copy_sites=32,.runtime_preloads=&words});
+    bool erased=false;
+    for(const auto& candidate:candidates){
+      const bool removes=std::none_of(candidate.transformation.ops.begin(),candidate.transformation.ops.end(),
+          [](const auto& op){return op.meta.comment=="product-qualified-copy";});
+      if(!removes)continue;
+      erased=true;
+      require(play(e.items)==play(lower_ir_to_machine(candidate.transformation.ops)),
+          "same-PC return rows preserve independent values, all future stack slots, X1 and decimal shadow");
+    }
+    require(!erased || equal,
+        "an identity cannot import equality from a different selector row or an unreachable caller");
+    require(std::stod(play(e.items).front())==(equal?4:2),
+        "the negative fixture observes genuinely unequal selected values");
+  }
+}
+
 void data_and_rom(){
+  selector_product_identity_returns();
   typed_direct_webs_ignore_comment_homes();
   anticipatory_copy_and_literal_loads();
   fresh_literal_producer_proof();
@@ -1860,6 +2003,7 @@ void data_and_rom(){
   predicate_qualified_store_identity();
   guarded_context_word_identity();
   transitive_value_origin_preferences();
+  sibling_value_origin_preferences();
   contextual_word_identity();
   x2_join_idempotence();
   neutral_helper_abi();
@@ -1889,6 +2033,7 @@ void data_and_rom(){
   literal_recall_boundary_rom();
   allocation_exposed_pool();
   closed_toggle_sign_facts();
+  formal_toggle_sign_facts();
   transition_store_sign_facts();
   finite_value_dependency_facts();
   encoded_guarded_lifetime();

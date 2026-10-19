@@ -777,6 +777,42 @@ Fixture companion_address_selector_rebind_fixture(bool data_visible = false) {
   return result;
 }
 
+
+// Side and ordinary entries share physical commands, not their fallthrough.
+// The official tail clears R9; the EB/F1 path wraps before that tail.
+Fixture side_counter_fixture(int formal, const std::string& helper, bool nested) {
+  Fixture result;
+  result.items = {op(0x52), op(0x60), op(0x53), MachineItem::address(helper),
+      op(0x69), op(0x43), op(0x53), MachineItem::address(helper),
+      op(0x53), MachineItem::address(helper), op(0x63), stop()};
+  result.items[3].formal_opcode = formal;
+  result.visible_stop = 11;
+  while (cell_count(result.items) < 38) result.items.push_back(op(0x54));
+  result.items.push_back(op(0x52));
+  result.items.push_back(MachineItem::label(helper));
+  for (int n = 0; n < 9; ++n) result.items.push_back(op(0x31));
+  result.items.push_back(op(0x0d));
+  result.items.push_back(op(0x49));
+  result.items.push_back(op(0x52));
+  // This independent component lets the ordinary calls shrink without moving
+  // the pinned side-space body. It must not buy a different execution mode.
+  result.items.push_back(op(0x54));
+  result.items.push_back(op(0x52));
+  if (nested) {
+    // A call fetched in the side domain must restore a side return counter,
+    // even though the same command is also executed by ordinary callers.
+    result.items[item_at_address(result.items, 43)] = op(0x53);
+    result.items[item_at_address(result.items, 44)] = MachineItem::address(helper + "_nested");
+    result.items.push_back(MachineItem::label(helper + "_nested"));
+    result.items.push_back(op(0x31));
+    result.items.push_back(op(0x52));
+  }
+  result.preloads = {{.register_name="0", .value="-3"},
+      {.register_name="3", .value="0"}, {.register_name="8", .value="39"},
+      {.register_name="9", .value="7"}};
+  return result;
+}
+
 core::AuthoritativePostLayoutControlFlow flow(const Fixture& fixture_value) {
   return core::build_post_layout_control_flow(fixture_value.items);
 }
@@ -863,6 +899,47 @@ bool reason_contains(const core::NaturalTargetComponentLayoutPlan& plan,
 } // namespace
 
 void natural_target_component_layout_is_generic_and_proof_gated() {
+
+  for (const bool nested : {false, true})
+  for (const auto& [counter, helper] : {
+           std::pair{0xeb, std::string{"side_leaf_alpha"}},
+           std::pair{0xf1, std::string{"renamed_side_leaf_beta"}}}) {
+    const auto input = side_counter_fixture(counter, helper, nested);
+    core::PostLayoutControlFlowOptions control;
+    control.empty_return_target = 1;
+    const auto original_flow = core::build_post_layout_control_flow(input.items, control);
+    require(original_flow.proved, "side-counter fixture has exact call/return contexts");
+    const auto before = observe(input.items, input.preloads);
+    require(before.stopped && before.state.at("x") == "7,",
+            "the side entry must return before the official R9 write");
+    const auto optimized = core::optimize_natural_target_component_layout(
+        input.items, input.preloads, original_flow);
+    require(optimized.applied == 2 && optimized.removed_cells == 2 &&
+                optimized.plan.final_artifact_proved &&
+                cell_count(optimized.items) + 2 == cell_count(input.items),
+            "independent ordinary calls still shorten beside a real side entry");
+    const auto after = observe(optimized.items, optimized.preloads);
+    require(after.stopped && before.state == after.state,
+            "layout preserves side successors, stack/X1, registers and matched returns");
+    require(std::any_of(optimized.items.begin(), optimized.items.end(), [&](const auto& item) {
+              return item.kind == MachineItemKind::Address && item.formal_opcode == counter;
+            }), "the delivered side operand retains its hardware counter");
+    core::NaturalTargetComponentLayoutOptions forced;
+    forced.required_flow_selectors.push_back({.command_item=2, .register_name="8"});
+    const auto rejected = core::optimize_natural_target_component_layout(
+        input.items, input.preloads, original_flow, forced);
+    require(rejected.applied == 0,
+            "a physical-target match does not authorize a side call to become ordinary KPP");
+
+    auto outside = input.items;
+    auto definition = std::find_if(outside.begin(), outside.end(), [&](const auto& item) {
+      return item.kind == MachineItemKind::Label && item.name == helper;
+    });
+    outside.insert(definition, 70, op(0x54));
+    const auto normalized = core::normalize_natural_target_overflow_formals(outside);
+    require(normalized && normalized->at(3).formal_opcode == counter,
+            "a genuine side counter never becomes a linear cache when a label crosses 105");
+  }
   {
     std::vector<MachineItem> items{op(0x52), op(0x61), op(0x62), op(0x50),
         op(0x43), op(0x53), MachineItem::address(std::string{"resume_leaf"}),

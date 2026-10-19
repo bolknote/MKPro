@@ -67,8 +67,9 @@ std::vector<ContextualCopyTransportCandidate> contextual_pure_return_completion_
 std::vector<ContextualCopyTransportCandidate> contextual_anticipatory_copy_store_candidates(
     const std::vector<IrOp>& ops,const PassContext& context,
     const ContextualCopyTransportOptions& limits = {});
-// Bounded, fairly enumerated transitive value-origin preferences. These are
-// not equality claims; complete-web allocation and downstream data proofs are
+// Bounded, fairly enumerated transitive value-origin preferences, followed by
+// sibling-copy affinities in the remaining budget. Neither common ancestry nor
+// a common source name is an equality claim; complete-web allocation and downstream data proofs are
 // mandatory, including when a producer helper transforms its argument.
 std::vector<RegisterWebRecoloringRequest> contextual_copy_origin_register_requests(
     const std::vector<IrOp>& ops,std::size_t maximum_requests=16);

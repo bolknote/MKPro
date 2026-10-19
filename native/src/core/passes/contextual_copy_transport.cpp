@@ -352,15 +352,25 @@ ContextWordProof prove_context_words(const Model& m,const std::vector<PreloadRep
               evaluator.state.stack[0]!=*input){identity=false;break;}
         }
         if(!identity)continue;
-        const auto& entry=m.flow.execution_states[call.entry];
-        for(Id s=0;s<count;++s){
+        // A selector product may repeat the same PC/return frames for distinct
+        // data rows. Bind the identity to the actual invocation path, never a
+        // return with merely matching physical frames (or an unreachable caller
+        // whose greatest-fixed-point input still contains top equalities).
+        if(result.unreachable.contains(call.call))continue;
+        Id returned=call.entry, expected=m.instruction[call.entry];
+        bool exact_path=true;
+        for(const auto& command:call.body){
           if(!spend())return result;
-          const auto& state=m.flow.execution_states[s];
-          if(!result.unreachable.contains(s) && state.item_index==call.ret && state.return_stack==entry.return_stack &&
-              state.formal_return_stack==entry.formal_return_stack && !m.entries.external[s]){
-            identities[s].insert(call.call);identity_users[call.call].push_back(s);++result.finite_returns;
-          }
+          while(expected<m.ops.size() && m.ops[expected].kind==IrKind::Label)++expected;
+          if(result.unreachable.contains(returned) || m.entries.external[returned] ||
+              m.instruction[returned]!=expected || m.ops[expected].opcode!=command.opcode ||
+              m.flow.execution_successors[returned].size()!=1U){exact_path=false;break;}
+          returned=m.flow.execution_successors[returned].front();++expected;
         }
+        if(!exact_path || result.unreachable.contains(returned) || m.entries.external[returned] ||
+            m.flow.execution_states[returned].item_index!=call.ret)continue;
+        identities[returned].insert(call.call);
+        identity_users[call.call].push_back(returned);++result.finite_returns;
       }
     }
   }
@@ -823,6 +833,26 @@ std::vector<RegisterWebRecoloringRequest> contextual_copy_origin_register_reques
       added=true;if(result.size()==maximum_requests)break;
     }
     if(!added)break;
+  }
+  // Two captured copies can need the same home without either one being a
+  // transitive ancestor of the other. Preserve the historical preferences
+  // first; use only their unspent budget for these sibling affinities. A common
+  // source spelling is NOT a value equality or an interference exemption.
+  std::map<std::string,std::vector<Id>> siblings;
+  for(Id i=1;i<ops.size();++i)
+    if(direct(ops[i]) && ops[i].kind==IrKind::Store &&
+        direct(ops[i-1U]) && ops[i-1U].kind==IrKind::Recall &&
+        ops[i].register_name!=ops[i-1U].register_name)
+      siblings[ops[i-1U].register_name].push_back(i);
+  for(const auto& [source,sites]:siblings){
+    (void)source;
+    for(Id left=0;left<sites.size() && result.size()<maximum_requests;++left)
+      for(Id right=left+1U;right<sites.size() && result.size()<maximum_requests;++right){
+        const auto a=sites[left],b=sites[right];
+        if(ops[a].register_name==ops[b].register_name || !unique.insert({a,b}).second)continue;
+        result.push_back({{a,b}});
+      }
+    if(result.size()>=maximum_requests)break;
   }
   return result;
 }

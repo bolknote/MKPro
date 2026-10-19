@@ -270,8 +270,10 @@ struct PreloadedIndirectFlowCellErasurePlan {
 };
 
 // Recover authoritative label or numeric identities from resolver-generated
-// wrapped formal operands whose targets currently lie beyond the official
-// window. Opaque/raw and super-dark multi-command operands fail closed.
+// ordinary address operands whose targets currently lie beyond the official
+// window. Genuine side counters retain their hardware mode, even if their
+// symbolic target is temporarily outside that window. Opaque/raw and
+// super-dark multi-command operands fail closed.
 std::optional<std::vector<MachineItem>> normalize_natural_target_overflow_formals(
     const std::vector<MachineItem>& items,
     AddressSpaceModel model = AddressSpaceModel::Standard);

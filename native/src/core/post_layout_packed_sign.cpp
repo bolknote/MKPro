@@ -207,7 +207,12 @@ ToggleSignInputProof prove_post_layout_toggle_sign_inputs(
   if(!entries || !inputs.proved) {if(trace)std::cerr<<"[toggle-sign] entry/boundary rejected\n";return result;}
   std::set<int> protocols;
   for(const auto& item:items) {
-    if(item.raw || item.formal_opcode || item.logical_register_name) {if(trace)std::cerr<<"[toggle-sign] opaque metadata\n";return unproved();}
+    // A formal counter on an Address is an already resolved call/jump target,
+    // not a raw instruction. The authoritative graph and input-boundary proof
+    // retain its exact route and every formal return frame. Executable aliases
+    // and opcode overrides still need their own data semantics and stay opaque.
+    if(item.raw || (item.formal_opcode && item.kind!=MachineItemKind::Address) ||
+        item.logical_register_name) {if(trace)std::cerr<<"[toggle-sign] opaque metadata\n";return unproved();}
     if(item.manual_interaction && item.manual_interaction->kind==ManualInteractionAnchorKind::PromptStop &&
         std::find(item.roles.begin(),item.roles.end(),kTypedDisplayObservationRole)!=item.roles.end())
       protocols.insert(item.manual_interaction->protocol_id);

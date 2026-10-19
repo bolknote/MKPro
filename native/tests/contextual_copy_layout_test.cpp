@@ -195,6 +195,7 @@ void contextual_copy_contracts() {
 
 void budget_publication_contracts() {
   struct Case { FeatureProfile profile; int padding; int budget; };
+  for (const bool fast : {false, true})
   for (const auto test : {Case{FeatureProfile::Standard, 0, 17},
                           Case{FeatureProfile::Standard, 88, 105},
                           Case{FeatureProfile::Mk61SMiniExpanded, 95, 112}}) {
@@ -202,6 +203,7 @@ void budget_publication_contracts() {
     source.insert(source.begin(), static_cast<std::size_t>(test.padding),
                   MachineItem::op(0x54, "independent reachable no-op"));
     CompileOptions options;
+    options.fast_candidate_search = fast;
     options.feature_profile = test.profile;
     options.budget = test.budget;
     CompileResult oversized;

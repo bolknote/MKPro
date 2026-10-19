@@ -59,11 +59,21 @@ void emulator_fox_hunt_100_optimized_loop_returns_to_input() {
           "fox-hunt-100 source should be available from the repository root");
   const std::string source((std::istreambuf_iterator<char>(input)),
                            std::istreambuf_iterator<char>());
-  const CompileResult compiled = compile_source(source);
+  for (const bool without_portfolio : {false, true}) {
+  CompileOptions options;
+  if (without_portfolio) {
+    options.analysis = true;
+    options.budget = 999999;
+    options.disable_candidate_search = true;
+  }
+  const CompileResult compiled = compile_source(source, options);
   require(compiled.implemented && compiled.diagnostics.empty(),
           "optimized fox-hunt-100 source should compile without diagnostics");
-  require(compiled.steps.size() == 102U,
-          "reclaimed loop selector should keep fox-hunt-100 at 102 program cells");
+  // Exact sizes belong to the example/variant baselines. This contract must
+  // execute both delivery paths completely, not truncate an oversized image.
+  require(compiled.steps.size() <= 105U &&
+              (!without_portfolio || compiled.steps.size() <= 104U),
+          "both the late closure and default portfolio winner must fit stock memory");
 
   emulator::MK61 calculator({.angle_mode = "grad"});
   const emulator::ProgramLoadResult loaded =
@@ -91,6 +101,7 @@ void emulator_fox_hunt_100_optimized_loop_returns_to_input() {
   const emulator::RunResult next_prompt = calculator.run_until_stable(2000, 5);
   require(next_prompt.stopped && calculator.program_counter() == "01",
           "optimized fox-hunt-100 loop-back should return to the input stop");
+  }
 }
 
 } // namespace mkpro::tests

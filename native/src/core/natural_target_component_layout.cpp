@@ -123,6 +123,7 @@ struct DirectReference {
   std::size_t command = 0;
   std::size_t operand = 0;
   std::size_t target = 0;
+  std::optional<int> preserved_formal_opcode;
 };
 
 struct DirectFlowSite {
@@ -280,6 +281,10 @@ enum class TraceEdgeKind {
 struct TraceState {
   std::size_t command = 0;
   std::vector<std::size_t> returns;
+  // Logical and official linear PCs share one class; side counters and
+  // return frames retain their distinct hardware successor domains.
+  int counter_domain = 0;
+  std::vector<int> return_domains;
   auto operator<=>(const TraceState&) const = default;
 };
 
@@ -505,6 +510,10 @@ std::optional<OverflowTargetNormalization> normalize_overflow_formals(
           formal.extra.has_value()) {
         return std::nullopt;
       }
+      // A real side counter retains its own fetch/return contract even when
+      // its symbolic label is temporarily outside the physical window. Only
+      // an ordinary address byte is a discardable resolver cache.
+      if (formal.kind != FormalAddressKind::Official) continue;
     } catch (const std::exception&) {
       return std::nullopt;
     }
@@ -541,10 +550,19 @@ std::optional<std::vector<DirectReference>> collect_direct_references(
     const std::optional<std::size_t> target = command_at_address(items, index, *address);
     if (!target.has_value())
       return std::nullopt;
+    std::optional<int> preserved;
+    if (items[*operand].formal_opcode) {
+      const auto formal = formal_address_info(*items[*operand].formal_opcode, model);
+      if (formal.kind != FormalAddressKind::Official) {
+        if (formal.actual != *address) return std::nullopt;
+        preserved = items[*operand].formal_opcode;
+      }
+    }
     result.push_back(DirectReference{
         .command = item_index,
         .operand = *operand,
         .target = *target,
+        .preserved_formal_opcode = preserved,
     });
   }
   return result;
@@ -556,7 +574,8 @@ std::vector<DirectFlowSite> shortenable_direct_flows(
   std::vector<DirectFlowSite> result;
   for (const DirectReference& reference : references) {
     const int opcode = items.at(reference.command).opcode;
-    if (!indirect_family_for_direct_flow(opcode).has_value())
+    if (reference.preserved_formal_opcode ||
+        !indirect_family_for_direct_flow(opcode).has_value())
       continue;
     result.push_back(DirectFlowSite{
         .command = reference.command,
@@ -2946,7 +2965,7 @@ bool retarget_direct_references(
     std::vector<MachineItem>& items, const std::vector<DirectReference>& references,
     const std::set<std::size_t>& removed_operands,
     const std::map<std::size_t, std::size_t>& new_item_by_origin,
-    const std::map<std::size_t, int>& new_address_by_origin) {
+    const std::map<std::size_t, int>& new_address_by_origin, AddressSpaceModel model) {
   for (const DirectReference& reference : references) {
     if (removed_operands.contains(reference.operand))
       continue;
@@ -2957,8 +2976,11 @@ bool retarget_direct_references(
     MachineItem& address = items.at(operand->second);
     if (address.kind != MachineItemKind::Address)
       return false;
+    if (reference.preserved_formal_opcode &&
+        target->second != formal_address_info(*reference.preserved_formal_opcode, model).actual)
+      return false;
     address.target = target->second;
-    address.formal_opcode.reset();
+    address.formal_opcode = reference.preserved_formal_opcode;
   }
   return true;
 }
@@ -3557,18 +3579,6 @@ int count_moved_segments(const std::vector<std::size_t>& order) {
   return moved;
 }
 
-std::optional<int> sequential_address(const ArtifactIndex& index, int after,
-                                      AddressSpaceModel model) {
-  const int next = after + 1;
-  if (next < index.cells)
-    return next;
-  if (index.cells == official_program_step_limit(model) &&
-      after == index.cells - 1) {
-    return 0;
-  }
-  return std::nullopt;
-}
-
 std::optional<std::size_t> origin_for_item(
     const std::map<std::size_t, std::size_t>& origin_by_item,
     std::size_t item_index) {
@@ -3577,181 +3587,125 @@ std::optional<std::size_t> origin_for_item(
                                        : std::optional<std::size_t>(found->second);
 }
 
+std::optional<int> trace_counter_domain(std::optional<int> counter, AddressSpaceModel model) {
+  if (!counter) return 0; // Unplaced linear code is not a guessed physical alias.
+  try {
+    const auto info = formal_address_info(*counter, model);
+    if (info.kind == FormalAddressKind::Official) return 0;
+    if (info.one_command || info.extra) return std::nullopt;
+    return 1000 * static_cast<int>(info.kind) + info.ordinal - info.actual;
+  } catch (const std::exception&) { return std::nullopt; }
+}
+
 std::optional<TraceGraph> build_trace_graph(
     const std::vector<MachineItem>& items,
     const AuthoritativePostLayoutControlFlow& flow,
     const std::map<std::size_t, std::size_t>& origin_by_item,
     AddressSpaceModel model, int maximum_states,
     const std::map<std::size_t, std::size_t>* transparent_aliases = nullptr) {
-  if (!flow.proved || maximum_states <= 0)
+  if (!flow.proved || maximum_states <= 0 ||
+      flow.execution_states.size() != flow.execution_edges.size())
     return std::nullopt;
   const ArtifactIndex index = index_artifact(items);
-  const std::optional<std::vector<DirectReference>> direct =
-      collect_direct_references(items, index, model);
-  if (!direct.has_value())
-    return std::nullopt;
-  std::map<std::size_t, DirectReference> direct_by_command;
-  for (const DirectReference& reference : *direct)
-    direct_by_command.emplace(reference.command, reference);
-
-  std::deque<TraceState> pending;
-  for (const PostLayoutExternalEntryState& entry : flow.external_entries) {
-    const std::optional<std::size_t> command =
-        origin_for_item(origin_by_item, entry.entry.item_index);
-    if (!command.has_value())
-      return std::nullopt;
-    if (transparent_aliases != nullptr && transparent_aliases->contains(*command))
-      return std::nullopt;
-    TraceState state{.command = *command};
-    for (const PostLayoutCommandIdentity& slot : entry.return_stack) {
-      const std::optional<std::size_t> origin =
-          origin_for_item(origin_by_item, slot.item_index);
-      if (!origin.has_value())
-        return std::nullopt;
-      if (transparent_aliases != nullptr && transparent_aliases->contains(*origin))
-        return std::nullopt;
-      state.returns.push_back(*origin);
+  const auto canonical_origin = [&](std::size_t origin) {
+    if (transparent_aliases) {
+      const auto found = transparent_aliases->find(origin);
+      if (found != transparent_aliases->end()) return found->second;
     }
-    pending.push_back(std::move(state));
-  }
-
-  const auto command_item = [&](std::size_t origin) -> std::optional<std::size_t> {
-    for (const auto& [item_index, item_origin] : origin_by_item) {
-      if (item_origin == origin)
-        return item_index;
+    return origin;
+  };
+  // Only independently proved transparent jumps can stutter. Follow the real
+  // execution edge, retaining its counter and every return frame; never
+  // reconstruct fallthrough from a physical address.
+  const auto retained_state = [&](std::size_t state) -> std::optional<std::size_t> {
+    std::set<std::size_t> seen;
+    for (;;) {
+      if (state >= flow.execution_states.size() || !seen.insert(state).second)
+        return std::nullopt;
+      const auto at = flow.execution_states[state].item_index;
+      const auto origin = origin_for_item(origin_by_item, at);
+      if (!origin || at >= items.size()) return std::nullopt;
+      if (!transparent_aliases || !transparent_aliases->contains(*origin)) return state;
+      if (items[at].kind != MachineItemKind::Op ||
+          (items[at].opcode != kJumpOpcode && (items[at].opcode & 0xf0) != 0x80) ||
+          flow.execution_edges[state].size() != 1U)
+        return std::nullopt;
+      const auto next = flow.execution_edges[state].front().target_state;
+      if (next >= flow.execution_states.size()) return std::nullopt;
+      const auto& before = flow.execution_states[state];
+      const auto& after = flow.execution_states[next];
+      const auto target = origin_for_item(origin_by_item, after.item_index);
+      if (!target || *target != transparent_aliases->at(*origin) ||
+          before.return_stack != after.return_stack ||
+          before.formal_return_stack != after.formal_return_stack)
+        return std::nullopt;
+      state = next;
     }
-    return std::nullopt;
   };
-  const auto origin_at_address = [&](int address) -> std::optional<std::size_t> {
-    const std::optional<std::size_t> item = command_at_address(items, index, address);
-    return item.has_value() ? origin_for_item(origin_by_item, *item) : std::nullopt;
+  const auto projected = [&](std::size_t state) -> std::optional<TraceState> {
+    if (state >= flow.execution_states.size()) return std::nullopt;
+    const auto& execution = flow.execution_states[state];
+    const auto origin = origin_for_item(origin_by_item, execution.item_index);
+    const auto mode = trace_counter_domain(execution.formal_opcode, model);
+    if (!origin || !mode || execution.return_stack.size() != execution.formal_return_stack.size())
+      return std::nullopt;
+    TraceState result{.command = *origin, .counter_domain = *mode};
+    for (std::size_t n = 0; n < execution.return_stack.size(); ++n) {
+      const auto item = command_at_address(items, index, execution.return_stack[n]);
+      const auto frame = item ? origin_for_item(origin_by_item, *item) : std::nullopt;
+      const auto frame_mode = trace_counter_domain(execution.formal_return_stack[n], model);
+      if (!frame || !frame_mode) return std::nullopt;
+      result.returns.push_back(canonical_origin(*frame));
+      result.return_domains.push_back(*frame_mode);
+    }
+    return result;
   };
-
   TraceGraph graph;
-  while (!pending.empty()) {
-    TraceState state = std::move(pending.front());
-    pending.pop_front();
-    if (graph.contains(state))
-      continue;
-    if (graph.size() >= static_cast<std::size_t>(maximum_states))
+  for (std::size_t state = 0; state < flow.execution_states.size(); ++state) {
+    const auto retained = retained_state(state);
+    if (!retained) return std::nullopt;
+    if (*retained != state) continue;
+    const auto source = projected(state);
+    const auto at = flow.execution_states[state].item_index;
+    if (!source || at >= items.size() || items[at].kind != MachineItemKind::Op)
       return std::nullopt;
-    const std::optional<std::size_t> item_index = command_item(state.command);
-    if (!item_index.has_value() || items.at(*item_index).kind != MachineItemKind::Op)
-      return std::nullopt;
-    const MachineItem& item = items.at(*item_index);
-    const int address = index.item_addresses.at(*item_index);
+    const auto& item = items[at];
     std::vector<TraceEdge> edges;
-
-    const auto enqueue = [&](TraceEdgeKind kind, std::size_t command,
-                             std::vector<std::size_t> returns) {
-      if (transparent_aliases != nullptr) {
-        const auto alias = transparent_aliases->find(command);
-        if (alias != transparent_aliases->end())
-          command = alias->second;
-        for (std::size_t& continuation : returns) {
-          const auto continuation_alias = transparent_aliases->find(continuation);
-          if (continuation_alias != transparent_aliases->end())
-            continuation = continuation_alias->second;
-        }
+    for (const auto& edge : flow.execution_edges[state]) {
+      const auto target_state = retained_state(edge.target_state);
+      const auto target = target_state ? projected(*target_state) : std::nullopt;
+      if (!target) return std::nullopt;
+      TraceEdgeKind kind;
+      switch (edge.kind) {
+      case PostLayoutExecutionEdgeKind::Fallthrough:
+        kind = is_direct_conditional(item.opcode) || is_indirect_conditional(item.opcode)
+            ? TraceEdgeKind::Fallthrough : TraceEdgeKind::Next;
+        break;
+      case PostLayoutExecutionEdgeKind::DirectTarget:
+      case PostLayoutExecutionEdgeKind::IndirectTarget:
+        kind = item.opcode == kCallOpcode || is_indirect_call(item.opcode)
+            ? TraceEdgeKind::Call : TraceEdgeKind::Taken;
+        break;
+      case PostLayoutExecutionEdgeKind::Return: kind = TraceEdgeKind::Next; break;
+      case PostLayoutExecutionEdgeKind::Resume: kind = TraceEdgeKind::Resume; break;
       }
-      TraceEdge edge{
-          .kind = kind,
-          .target = TraceState{.command = command, .returns = std::move(returns)},
-      };
-      pending.push_back(edge.target);
-      edges.push_back(std::move(edge));
-    };
-    const auto sequential_origin = [&](int after_address) -> std::optional<std::size_t> {
-      const std::optional<int> next = sequential_address(index, after_address, model);
-      return next.has_value() ? origin_at_address(*next) : std::nullopt;
-    };
-
-    if (item.opcode == kStopOpcode || item.opcode == kErrorStopOpcode) {
-      // The authoritative CFG owns both kinds of stop and their external
-      // resumes. In particular, an error resumes after one skipped cell,
-      // never by falling through into that cell or the next helper body.
-      if (item.stop_disposition == StopDisposition::Unknown)
-        return std::nullopt;
-    } else if (item.opcode == kReturnOpcode) {
-      if (state.returns.empty()) {
-        if (!flow.empty_return_target.has_value())
-          return std::nullopt;
-        const std::optional<std::size_t> target =
-            origin_for_item(origin_by_item, flow.empty_return_target->item_index);
-        if (!target.has_value())
-          return std::nullopt;
-        enqueue(TraceEdgeKind::Next, *target, state.returns);
-      } else {
-        std::vector<std::size_t> returns = state.returns;
-        const std::size_t target = returns.back();
-        returns.pop_back();
-        enqueue(TraceEdgeKind::Next, target, std::move(returns));
-      }
-    } else if (takes_address(item)) {
-      const auto direct_it = direct_by_command.find(*item_index);
-      if (direct_it == direct_by_command.end())
-        return std::nullopt;
-      const std::optional<std::size_t> target =
-          origin_for_item(origin_by_item, direct_it->second.target);
-      const int operand_address = index.item_addresses.at(direct_it->second.operand);
-      const std::optional<std::size_t> fallthrough = sequential_origin(operand_address);
-      if (!target.has_value())
-        return std::nullopt;
-      if (item.opcode == kJumpOpcode) {
-        enqueue(TraceEdgeKind::Taken, *target, state.returns);
-      } else if (item.opcode == kCallOpcode) {
-        if (!fallthrough.has_value())
-          return std::nullopt;
-        std::vector<std::size_t> returns = state.returns;
-        returns.push_back(*fallthrough);
-        enqueue(TraceEdgeKind::Call, *target, std::move(returns));
-      } else if (is_direct_conditional(item.opcode)) {
-        if (!fallthrough.has_value())
-          return std::nullopt;
-        enqueue(TraceEdgeKind::Taken, *target, state.returns);
-        enqueue(TraceEdgeKind::Fallthrough, *fallthrough, state.returns);
-      } else {
-        return std::nullopt;
-      }
-    } else if (is_indirect_flow(item.opcode)) {
-      const auto targets = flow.indirect_flow_targets.find(*item_index);
-      if (targets == flow.indirect_flow_targets.end() || targets->second.empty())
-        return std::nullopt;
-      std::vector<std::size_t> call_returns = state.returns;
-      if (is_indirect_call(item.opcode)) {
-        const std::optional<std::size_t> continuation = sequential_origin(address);
-        if (!continuation.has_value())
-          return std::nullopt;
-        call_returns.push_back(*continuation);
-      }
-      for (const PostLayoutCommandIdentity& identity : targets->second) {
-        const std::optional<std::size_t> target =
-            origin_for_item(origin_by_item, identity.item_index);
-        if (!target.has_value())
-          return std::nullopt;
-        enqueue(is_indirect_call(item.opcode) ? TraceEdgeKind::Call : TraceEdgeKind::Taken,
-                *target, call_returns);
-      }
-      if (is_indirect_conditional(item.opcode)) {
-        const std::optional<std::size_t> fallthrough = sequential_origin(address);
-        if (!fallthrough.has_value())
-          return std::nullopt;
-        enqueue(TraceEdgeKind::Fallthrough, *fallthrough, state.returns);
-      }
-    } else {
-      const std::optional<std::size_t> next = sequential_origin(address);
-      if (!next.has_value())
-        return std::nullopt;
-      enqueue(TraceEdgeKind::Next, *next, state.returns);
+      edges.push_back({.kind = kind, .target = *target});
     }
     std::sort(edges.begin(), edges.end());
-    graph.emplace(std::move(state), std::move(edges));
+    edges.erase(std::unique(edges.begin(), edges.end()), edges.end());
+    const auto [found, inserted] = graph.emplace(*source, edges);
+    // A quotient must be deterministic with respect to the retained context.
+    // Never hide different hardware continuations by unioning their edges.
+    if ((!inserted && found->second != edges) ||
+        graph.size() > static_cast<std::size_t>(maximum_states))
+      return std::nullopt;
   }
   return graph;
 }
 
 using ExternalIdentity =
-    std::tuple<std::size_t, std::vector<std::size_t>, int, bool, int, int, int>;
+    std::tuple<std::size_t, std::vector<std::size_t>, int, bool, int, int, int,
+               int, std::vector<int>>;
 
 std::optional<std::vector<ExternalIdentity>> external_identities(
     const AuthoritativePostLayoutControlFlow& flow,
@@ -3776,8 +3730,18 @@ std::optional<std::vector<ExternalIdentity>> external_identities(
     const int manual_kind = has_manual
                                 ? static_cast<int>(entry.manual_interaction->kind)
                                 : -1;
+    const auto domain = trace_counter_domain(entry.formal_opcode, flow.address_space_model);
+    if (!domain || entry.return_stack.size() != entry.formal_return_stack.size())
+      return std::nullopt;
+    std::vector<int> frame_domains;
+    for (const auto counter : entry.formal_return_stack) {
+      const auto frame = trace_counter_domain(counter, flow.address_space_model);
+      if (!frame) return std::nullopt;
+      frame_domains.push_back(*frame);
+    }
     result.emplace_back(*command, std::move(returns), static_cast<int>(entry.kind),
-                        has_manual, protocol, phase, manual_kind);
+                        has_manual, protocol, phase, manual_kind, *domain,
+                        std::move(frame_domains));
   }
   std::sort(result.begin(), result.end());
   return result;
@@ -5691,7 +5655,7 @@ std::optional<CandidateArtifact> try_candidate(
       removed_indirect_flow_commands.insert(fold.command_origin);
   }
   if (!retarget_direct_references(candidate.items, references, removed_operands,
-                                  candidate.new_item_by_origin, new_address_by_origin) ||
+                                  candidate.new_item_by_origin, new_address_by_origin, options.address_space_model) ||
       !retarget_indirect_facts(candidate.items, control_flow,
                                candidate.new_item_by_origin, new_address_by_origin,
                                rewrites, displaced_flows, anchors, trampolines,

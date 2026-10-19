@@ -366,6 +366,7 @@ set_tests_properties(mkpro.validate_trig PROPERTIES
   WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..
 )
 set(MKPRO_NATIVE_TEST_NAMES
+  emulator_fox_hunt_100_optimized_loop_returns_to_input
   address_formula_solver_synthesizes_dispatch
   computed_dispatch_targets_survive_dead_code_elimination
   computed_dispatch_discovery_keeps_program_correct

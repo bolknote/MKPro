@@ -81678,14 +81678,6 @@ CompileResult close_final_contextual_layout_roots(
       (!soft_budget && original.steps.size() <= trigger))
     return original;
 
-  // This is an additional exhaustive ABI/checkpoint portfolio, not part of
-  // the caller-requested fast candidate pass. Keep the already proved fast
-  // incumbent; ordinary compilation still explores every historical root.
-  if(comparison_options.fast_candidate_search){
-    original.optimizations.push_back({"fast-search-late-root-policy",
-        "Retained the independently proved bounded-search result. The explicitly requested fast mode does not regenerate the additional post-root ABI/checkpoint portfolio; ordinary search and all correctness gates are unchanged."});
-    return original;
-  }
 
   CompileResult best = original;
   if (soft_budget) {
@@ -81706,7 +81698,10 @@ CompileResult close_final_contextual_layout_roots(
   // original roots intact, then independently regenerate the finite-state ABI
   // with singleton physical preferences. The normal regenerated interference
   // and publication gates still decide whether any candidate is admissible.
-  if (!lowering_options.alternating_sign_toggle_args) {
+  // Fast search limits optional source-ABI regeneration, never closure of
+  // already constructed roots or rescue of a budget-only failure.
+  if (!lowering_options.alternating_sign_toggle_args &&
+      !comparison_options.fast_candidate_search) {
     auto discovery = parse_v2_program_for_optimizer_discovery(source);
     std::vector<OptimizationReport> changed;
     if (discovery) toggle_alternating_literal_call_args(*discovery, changed);

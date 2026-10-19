@@ -5832,14 +5832,69 @@ reconstructed. This changes ownership/copy cost only, not any lattice fact,
 selector policy, publication gate, candidate budget or machine-code size.
 
 
-### Explicit fast-search policy
+### Fast-search policy
 
-The opt-in fast candidate mode now also governs the late joint portfolio:
-its constraint search admits at most two expansions, twelve candidates and
-two semantic steps, with the SAME four-cell root-relative debt and all
-unchanged complete-artifact proof gates. It does not regenerate the additional
-post-root ABI/checkpoint portfolio after the bounded fast result is selected.
-Ordinary compilation keeps the historical full limits and every independent
-root. No wall-clock cancellation, test timeout increase, or default-search
-size tradeoff implements this policy. The RF monotonicity regression explicitly
-requests this fast mode; it still compares independent memory/allocation roots.
+Fast candidate search is enabled by default. It bounds the late joint
+portfolio to two expansions, twelve candidates and depth two; ordinary mode
+keeps the established limits. Both modes retain the same growth accounting
+and every data, CFG, selector, setup and publication proof.
+
+Fast mode omits additional source-ABI regeneration, but always closes all
+already constructed roots and retained checkpoints. It must not bypass
+budget-only rescue, finite initializer replacement or final report rebuilding.
+Compiler/ROM regressions exercise both modes, stock and 105+7 memory, rejected
+tight budgets and unrelated errors. No timeout is raised and no running proof
+is cancelled.
+
+### Finite-state proofs across resolved formal calls
+
+A compiler-owned formal address operand is not an opaque command. Finite
+Recall/Negate/Store automata can retain caller-specific signs across these calls
+using the authoritative physical/formal execution graph and typed input
+boundaries. Every transition still checks its exact predecessors and complete
+return frames. Mismatched addresses, executable opcode overrides, raw commands,
+side entries into a transition, unknown writes and exhausted work reject.
+These facts may enable guarded lifetime separation and allocation before
+selector/layout closure; they do not themselves change code or waive any
+publication proof.
+
+### Sibling-copy allocation affinities
+
+After the historical transitive-origin preferences, unused preference capacity
+can propose a common home for two captured copies of the same source register.
+The source may have changed between captures: ancestry is only a placement
+hint. The complete reaching-definition/interference graph, hardware domains,
+typed observations and initializer ownership must validate every allocation.
+Context-qualified GVN and selector/layout closure independently decide whether
+the new allocation removes executable cells. Raw ancestors are excluded and
+overlapping unequal captures remain separate.
+
+
+### Natural layout: authoritative counter-context traces
+
+Natural-target placement compares the already proved execution graph rather
+than reconstructing a second, physically linear interpreter. Trace identities
+retain side-counter domains, matched return frames, conditional edge polarity
+and resumable-error edges. Logical and official linear locations can still be
+relocated; noncanonical contexts with different successor sets never merge.
+Transparent bridges stutter only along their independently certified real CFG
+edge with unchanged return frames.
+
+A side-space direct operand cannot become an ordinary indirect call just
+because both fetch the same first physical command. Its exact counter survives
+rebinding and is not erased as an over-window address cache. Ordinary calls in
+the same program remain optimizable. ROM regressions cover two synonymous side
+entries and alpha-renamed helpers: both ordinary calls shrink, while a forced
+side-to-ordinary conversion is rejected and every observed state is preserved.
+
+
+### Pure-helper identities in selector products
+
+An identity summary belongs to a particular call and its actual straight-line
+execution path. Equal physical return addresses and hardware frames do not
+identify an invocation in a selector-product graph: different data rows may
+share both. Follow the authoritative successor edges through every expected
+pure command to its own return. Excluded callers and excluded path states
+cannot contribute equality facts from the must-analysis top element. The
+ordinary numeric, complete-word and future-observation obligations remain
+mandatory before erasing any copied store.

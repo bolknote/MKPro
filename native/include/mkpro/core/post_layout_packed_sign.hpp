@@ -50,8 +50,10 @@ struct ToggleSignInputProof {
 // Read-only finite-state certificate for a delivered nonzero scalar carrier
 // whose only writes are complete Recall/Negate/Store transitions. Derive each
 // queried immediate-recall or transition-store sign from Main and validated typed resumes, retaining
-// every branch and exact return context. Unknown rows, aliases, side entries,
-// untyped input and exhausted work export no assumptions or partial facts.
+// every branch and exact physical/formal return context. Resolved formal
+// address operands are supported by the same authoritative graph; raw command
+// overrides, unknown rows, memory aliases, transition side entries, untyped
+// input and exhausted work export no assumptions or partial facts.
 ToggleSignInputProof prove_post_layout_toggle_sign_inputs(
     const std::vector<MachineItem>& items,
     const AuthoritativePostLayoutControlFlow& flow,

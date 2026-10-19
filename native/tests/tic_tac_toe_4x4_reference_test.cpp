@@ -856,6 +856,31 @@ void tic_tac_toe_4x4_source_responses_match_original_listing() {
     require(display_integer(translated) == x, "winning report must not overwrite the X coordinate");
   }
 
+  // A normal reply must show X:Y, not Y:Y. Wins and occupied-cell reports
+  // exercise a different definition of the displayed register.
+  const std::array<std::string, 4> ordinary_banks = {"44444.4", "44444.4", "44444.4", "44444.4"};
+  for (const auto& [ordinary_x, ordinary_y] :
+       std::array<std::pair<int, int>, 3>{{{2, 4}, {3, 4}, {4, 2}}}) {
+    auto ordinary = boot_reference_game(reference);
+    for (std::size_t bank = 0; bank < ordinary_banks.size(); ++bank)
+      ordinary.set_register(std::to_string(bank + 4U), ordinary_banks[bank]);
+    ordinary.set_register("a", "-ГE-2").set_register("0", "8")
+        .set_register("1", std::to_string(ordinary_x))
+        .set_register("2", std::to_string(ordinary_y))
+        .set_register("3", std::to_string(ordinary_x));
+    ordinary.press_sequence({"БП", "5", "4", "С/П"});
+    run_to_stop(ordinary, "original ordinary coordinate response");
+    auto translated = compile_response_contract(source, ordinary_banks, ordinary_x, ordinary_y, false);
+    require(display_integer(ordinary) == ordinary_x && display_integer(translated) == ordinary_x,
+            "a normal response displays its selected X, independently of selected Y");
+    require(compact(translated.read_register("Y")) == compact(ordinary.read_register("Y")),
+            "a normal response retains the selected Y underneath X");
+    for (std::size_t bank = 4; bank <= 7; ++bank)
+      require(compact(translated.read_register(std::to_string(bank))) ==
+                  compact(ordinary.read_register(std::to_string(bank))),
+              "a normal response must complete every line-bank update");
+  }
+
   auto original = boot_reference_game(reference);
   enter_x(original, "1", "first reference X");
   enter_y_and_run(original, "1", "first reference Y");

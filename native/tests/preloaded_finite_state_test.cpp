@@ -250,34 +250,37 @@ program AlternatingProducts {
   options.suppress_constant_preloads = {"10", "100", "1000"};
   const auto baseline = compile_source(source, options);
   require(baseline.implemented, "high-level fixture must compile");
-  auto comparison = options; comparison.budget = 1;
-  const auto optimized = close_final_contextual_layouts_for_testing(source, baseline, options, comparison);
-  if (!optimized.implemented || optimized.steps.size() >= baseline.steps.size())
-    std::cerr << "baseline=" << baseline.steps.size() << " optimized=" << optimized.steps.size()
-              << "\n" << baseline.listing << "\n";
-  require(optimized.implemented && optimized.steps.size() < baseline.steps.size(),
-          "compiler must regenerate setup and publish a smaller artifact");
-  require(std::any_of(optimized.optimizations.begin(), optimized.optimizations.end(), [](const auto& report) {
-    return report.name == "preloaded-finite-state-carrier";
-  }), "compiler must select the proved initializer encoding");
-  const auto play = [](const CompileResult& result) {
-    emulator::MK61 calc; std::vector<int> code;
-    for (const auto& step : result.steps) code.push_back(step.opcode);
-    require(calc.load_program(code).diagnostics.empty(), "compiler fixture must fit ROM");
-    for (const auto& word : result.preloads) calc.set_register(word.register_name, word.value);
-    calc.press_sequence({reset_key, run_key}); std::vector<std::string> output;
-    for (int turn = 0; turn < 4; ++turn) {
-      require(calc.run_until_stable(5000, 8).stopped, "compiled phase must reach typed prompt");
-      output.push_back(calc.display_text(true)); output.push_back(calc.read_register("Y"));
-      if (turn == 3) break;
-      calc.input_number(std::to_string(1 + turn), true).press(step_key);
-      require(calc.run_until_stable(5000, 8).stopped, "compiled PP phase must stop");
-      calc.input_number(std::to_string(2 + turn), true).press(run_key);
-    }
-    return output;
-  };
-  require(play(baseline) == play(optimized), "compiled setup and repeated interactive results must agree");
-  std::cout << "preloaded high-level cells " << baseline.steps.size() << " -> " << optimized.steps.size() << '\n';
+  for (const bool fast : {false, true}) {
+    auto comparison = options; comparison.budget = 1;
+    comparison.fast_candidate_search = fast;
+    const auto optimized = close_final_contextual_layouts_for_testing(source, baseline, options, comparison);
+    if (!optimized.implemented || optimized.steps.size() >= baseline.steps.size())
+      std::cerr << "baseline=" << baseline.steps.size() << " optimized=" << optimized.steps.size()
+                << "\n" << baseline.listing << "\n";
+    require(optimized.implemented && optimized.steps.size() < baseline.steps.size(),
+            "compiler must regenerate setup and publish a smaller artifact");
+    require(std::any_of(optimized.optimizations.begin(), optimized.optimizations.end(), [](const auto& report) {
+      return report.name == "preloaded-finite-state-carrier";
+    }), "compiler must select the proved initializer encoding");
+    const auto play = [](const CompileResult& result) {
+      emulator::MK61 calc; std::vector<int> code;
+      for (const auto& step : result.steps) code.push_back(step.opcode);
+      require(calc.load_program(code).diagnostics.empty(), "compiler fixture must fit ROM");
+      for (const auto& word : result.preloads) calc.set_register(word.register_name, word.value);
+      calc.press_sequence({reset_key, run_key}); std::vector<std::string> output;
+      for (int turn = 0; turn < 4; ++turn) {
+        require(calc.run_until_stable(5000, 8).stopped, "compiled phase must reach typed prompt");
+        output.push_back(calc.display_text(true)); output.push_back(calc.read_register("Y"));
+        if (turn == 3) break;
+        calc.input_number(std::to_string(1 + turn), true).press(step_key);
+        require(calc.run_until_stable(5000, 8).stopped, "compiled PP phase must stop");
+        calc.input_number(std::to_string(2 + turn), true).press(run_key);
+      }
+      return output;
+    };
+    require(play(baseline) == play(optimized), "compiled setup and repeated interactive results must agree");
+    std::cout << "preloaded high-level cells " << baseline.steps.size() << " -> " << optimized.steps.size() << '\n';
+  }
 }
 } // namespace
 int main() {
