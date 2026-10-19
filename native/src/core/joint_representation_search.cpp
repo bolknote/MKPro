@@ -1429,6 +1429,31 @@ TransactionSearchResult<LayoutSearchArtifact> search_joint_representation_constr
             variants.push_back(std::move(alternative));
         }
     }
+    // A GVN-erased store can expose a recall immediately before a fresh
+    // literal, even when no anticipatory store was needed. Compose that
+    // independent proof before demanding a placement, not after publishing.
+    if(preload_environment_complete&&limits.maximum_depth>0&&limits.maximum_expansions>0){
+      const auto literal_bases=variants;
+      for(const auto& base:literal_bases){
+        const auto code=raise_machine_to_ir(base.artifact.items,effective_optimizer_feature_profile(options));
+        bool demand=false;
+        for(std::size_t i=1;i<code.size();++i)demand=demand||
+            ((code[i-1U].kind==IrKind::Recall||(code[i-1U].kind==IrKind::Plain&&code[i-1U].opcode==0x0e))&&
+             code[i].kind==IrKind::Plain&&code[i].opcode>=0&&code[i].opcode<=9);
+        if(!demand)continue;
+        const auto literal_origins=detail::joint_target_origins(base.artifact.items,base.targets,base.encoded_selectors);
+        if(!literal_origins)continue;
+        for(auto& erased:passes::deferred_stack_producer_erasure_candidates(code,context,control_options,*literal_origins,
+            {.maximum_candidates=2,.maximum_erased_cells=1,.maximum_proof_attempts=16,.allow_fresh_literal_replacement=true})){
+          if(auto rewritten=apply(base.artifact,std::move(erased))){
+            auto next=base;next.artifact=std::move(*rewritten);if(!refresh_constraint_targets(next))continue;
+            if(std::none_of(variants.begin(),variants.end(),[&](const auto& old){
+                return same_layout_search_artifact(old.artifact,next.artifact)&&old.targets==next.targets&&old.encoded_selectors==next.encoded_selectors;
+              }))variants.push_back(std::move(next));
+          }
+        }
+      }
+    }
     if (coupled_geometry) {
     const auto seed_bases=variants;
     auto seed_options=configured; seed_options.allow_size_neutral_selector_seed_reuse=true;
@@ -2705,6 +2730,42 @@ contextual_copy_transport_layout_transactions(const LayoutSearchArtifact& artifa
       }
     }
     for(auto& next:word_feedback)allocations.push_back(std::move(next));
+    // An early private copy can make a later load/store pair disappear only
+    // after lifetime repair. Keep this product independent of the old beam.
+    std::vector<std::size_t> anticipation_order;
+    for(std::size_t n=0;n<allocations.size();++n)anticipation_order.push_back(n);
+    std::stable_sort(anticipation_order.begin(),anticipation_order.end(),[&](auto a,auto b){return resource_key(allocations[a])<resource_key(allocations[b]);});
+    std::vector<ConstrainedRepresentation> anticipations;
+    for(const auto n:anticipation_order){
+      if(anticipations.size()>=4U)break;
+      const auto root=allocations[n];
+      const auto origins=detail::joint_target_origins(root.artifact.items,root.targets,root.encoded_selectors);
+      if(!origins)continue;
+      const auto code=raise_machine_to_ir(root.artifact.items,effective_optimizer_feature_profile(options));
+      for(auto& anticipated:passes::contextual_anticipatory_copy_store_candidates(code,context,
+          {.maximum_work=200000,.maximum_candidates=2,.maximum_copy_sites=8,.control=&control,
+           .encoded_target_origins=&*origins,.runtime_preloads=&root.artifact.preloads})){
+        auto rewritten=apply(root.artifact,std::move(anticipated.transformation));if(!rewritten)continue;
+        auto next=root;next.artifact=std::move(*rewritten);if(!refresh_constraint_targets(next))continue;
+        std::vector<ConstrainedRepresentation> family{next};
+        const auto next_origins=detail::joint_target_origins(next.artifact.items,next.targets,next.encoded_selectors);
+        if(next_origins)for(auto& erased:passes::deferred_stack_producer_erasure_candidates(
+            raise_machine_to_ir(next.artifact.items,effective_optimizer_feature_profile(options)),context,control,*next_origins,
+            {.maximum_candidates=2,.maximum_erased_cells=2,.maximum_proof_attempts=16,.allow_fresh_literal_replacement=true})){
+          if(auto erased_artifact=apply(next.artifact,std::move(erased))){
+            auto reduced=next;reduced.artifact=std::move(*erased_artifact);
+            if(refresh_constraint_targets(reduced))family.push_back(std::move(reduced));
+          }
+        }
+        for(auto& alternative:family){
+          const auto same=[&](const auto& old){return same_layout_search_artifact(old.artifact,alternative.artifact)&&old.targets==alternative.targets&&old.encoded_selectors==alternative.encoded_selectors;};
+          if(std::none_of(allocations.begin(),allocations.end(),same)&&std::none_of(anticipations.begin(),anticipations.end(),same))anticipations.push_back(std::move(alternative));
+          if(anticipations.size()>=4U)break;
+        }
+        if(anticipations.size()>=4U)break;
+      }
+    }
+    for(auto& next:anticipations)allocations.push_back(std::move(next));
     // A newly encoded finite word may also supply a return address. Keep
     // these semantic alternatives before choosing/pinning any final geometry.
     const auto selector_parent_count=allocations.size();

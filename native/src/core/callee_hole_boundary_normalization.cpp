@@ -410,8 +410,10 @@ bool prove_post_layout_stack_producer_erasure(
   const auto& closer = items[retained];
   const bool retained_recall = closer.opcode >= 0x60 && closer.opcode <= 0x6e;
   const bool retained_store = enter && closer.opcode >= 0x40 && closer.opcode <= 0x4e;
+  const bool retained_literal = options.allow_fresh_literal_replacement &&
+      closer.opcode >= 0 && closer.opcode <= 9;
   if (closer.kind != MachineItemKind::Op || closer.raw || closer.manual_interaction ||
-      (!retained_recall && !retained_store))
+      (!retained_recall && !retained_store && !retained_literal))
     return false;
 
   // Removing a producer can change entry mode. Do not pretend that the two
@@ -422,12 +424,19 @@ bool prove_post_layout_stack_producer_erasure(
   equality.stack_equal = {enter, false, false, false};
   equality.x1_equal = true;
   equality.x2_equal = false;
-  if (transfer_stack_value_equality(
+  if (!retained_literal && transfer_stack_value_equality(
           equality, closer.opcode, retained_recall ? StackValueEqualityStepKind::Recall
                                                    : StackValueEqualityStepKind::Store) ==
       StackValueEqualityTransfer::Rejected)
     return false;
 
+  const auto entry_lift = retained_literal
+      ? (options.use_indirect_store_entry_facts
+          ? analyze_post_layout_automatic_entry_lift_with_indirect_store_facts(items,flow,options.maximum_work)
+          : analyze_post_layout_automatic_entry_lift(items,flow,options.maximum_work))
+      : std::optional<std::vector<bool>>{};
+  if(retained_literal && !entry_lift)return false;
+  std::set<std::size_t> literal_roots;
   std::set<int> continuations;
   for (std::size_t state = 0; state < flow.execution_states.size(); ++state) {
     const auto& before = flow.execution_states[state];
@@ -444,11 +453,23 @@ bool prove_post_layout_stack_producer_erasure(
     if (after.item_index != retained || before.return_stack != after.return_stack ||
         before.formal_return_stack != after.formal_return_stack)
       return false;
+    if(retained_literal){
+      // Without the recall/Enter, this literal still must start a fresh
+      // number on EVERY invocation. Never guess this from visible X.
+      if(!entry_lift->at(state))return false;
+      literal_roots.insert(next);
+      continue;
+    }
     const auto& exits = flow.execution_edges[next];
     if (exits.size() != 1U || exits.front().kind != PostLayoutExecutionEdgeKind::Fallthrough ||
         exits.front().target_state >= flow.execution_states.size())
       return false;
     continuations.insert(flow.execution_states[exits.front().target_state].address);
+  }
+  if(retained_literal){
+    auto proof_options=options;proof_options.numeric_entry_closed=true;
+    return !literal_roots.empty() && prove_post_layout_stack_state_equality(
+        items,flow,{literal_roots.begin(),literal_roots.end()},equality,proof_options);
   }
   if (continuations.empty()) return false;
   for (const int entry : continuations)

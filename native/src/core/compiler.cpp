@@ -63330,6 +63330,12 @@ struct PackedScoreAccumulatorTermBreakdown {
 
 PackedScoreAccumulatorTermBreakdown
 packed_score_accumulator_terms_from_detail(const OptimizationReport& optimization) {
+  // Every accepted grammar contains this exact token. Reject unrelated
+  // (potentially long) proof details before invoking either regex engine.
+  if (optimization.detail.find("packed_score()") == std::string::npos)
+    return optimization.name == "x-param-packed-score-line-stack-accumulate"
+        ? PackedScoreAccumulatorTermBreakdown{.positive_terms = 1}
+        : PackedScoreAccumulatorTermBreakdown{};
   static const std::regex signed_terms(
       R"((?:Lowered|Accumulated)\s+(\d+)\s+packed_score\(\)\s+terms\s+\(positive=(\d+),\s+negative=(\d+)\))");
   static const std::regex numeric_terms(
@@ -75238,7 +75244,8 @@ materialize_proved_layout_result(const std::string& source,
                                  const CompileResult& selected,
                                  const CompileOptions& options,
                                  const SelectedAbsoluteDarkLayout& selected_layout,
-                                 FinalLayoutMaterialization mode = FinalLayoutMaterialization::StrictImprovement) {
+                                 FinalLayoutMaterialization mode = FinalLayoutMaterialization::StrictImprovement,
+                                 bool build_public_reports = true) {
   const auto* layout = &selected_layout;
   const bool trace = std::getenv("MKPRO_NATIVE_TRACE_CANDIDATES") != nullptr;
   CompileResult candidate = selected;
@@ -75316,7 +75323,8 @@ materialize_proved_layout_result(const std::string& source,
   candidate.implemented = !has_errors(candidate.diagnostics);
   if (!candidate.implemented)
     return std::nullopt;
-  populate_public_report(candidate, ast, options);
+  if (build_public_reports)
+    populate_public_report(candidate, ast, options);
   return candidate;
 }
 
@@ -75387,7 +75395,8 @@ apply_absolute_dark_layout_once(const std::string& source,
                                 const CompileResult& selected,
                                 const CompileOptions& options,
                                 bool allow_proved_prefix_repayment = false,
-                                FinalLayoutMaterialization mode = FinalLayoutMaterialization::StrictImprovement) {
+                                FinalLayoutMaterialization mode = FinalLayoutMaterialization::StrictImprovement,
+                                 bool build_public_reports = true) {
   if (selected.manual_startup_sequence) return std::nullopt;
   std::vector<SelectedAbsoluteDarkLayout> alternatives;
   if (auto layout = select_absolute_dark_layout_for_final_artifact(selected, options))
@@ -75399,7 +75408,8 @@ apply_absolute_dark_layout_once(const std::string& source,
                             .optimizations = {}});
   std::optional<CompileResult> best;
   for (const auto& alternative : alternatives) {
-    auto candidate = materialize_proved_layout_result(source, selected, options, alternative, mode);
+    auto candidate = materialize_proved_layout_result(
+        source, selected, options, alternative, mode, build_public_reports);
     if (!candidate || (allow_proved_prefix_repayment &&
         candidate_needs_static_proof_gate(options) &&
         optimizer_static_gate_rejection_reason(options, *candidate)))
@@ -75819,7 +75829,8 @@ apply_absolute_dark_layout_to_selected_result(const std::string& source,
         const auto candidate = apply_absolute_dark_layout_once(
             source, alternative, options, /*allow_proved_prefix_repayment=*/true,
             intermediate ? FinalLayoutMaterialization::ProvedSearchIntermediate
-                         : FinalLayoutMaterialization::StrictImprovement);
+                         : FinalLayoutMaterialization::StrictImprovement,
+            /*build_public_reports=*/false);
         if (!candidate || (!intermediate && candidate->steps.size() >= constraint_root.steps.size()) ||
             (candidate_needs_static_proof_gate(options) &&
              optimizer_static_gate_rejection_reason(options, *candidate).has_value()))
@@ -75829,7 +75840,7 @@ apply_absolute_dark_layout_to_selected_result(const std::string& source,
   const auto constrained = core::search_joint_representation_constraints(
       artifact(constraint_root), options,
       [&](const LayoutArtifact& closed){return finalize_constraints(closed,false);},
-      core::kJointRepresentationConstraintLimits, true,
+      core::joint_representation_search_limits(options.fast_candidate_search), true,
       [&](const LayoutArtifact& closed){return finalize_constraints(closed,true);});
   // Finalization is a pure search callback. Publish only the incumbent that
   // survived the joint search's subsequent literal/selector certificates.
@@ -75972,11 +75983,11 @@ std::optional<CompileResult> entered_contract_failure(const std::string& source,
 std::optional<CompileResult> materialize_proved_layout_for_testing(
     const std::string& source,const CompileResult& root,const CompileOptions& options,
     const std::vector<MachineItem>& items,const std::vector<PreloadReport>& preloads,
-    bool intermediate){
+    bool intermediate,bool build_public_reports){
   return materialize_proved_layout_result(source,root,options,
       SelectedAbsoluteDarkLayout{.items=items,.preloads=preloads,.optimizations={}},
       intermediate ? FinalLayoutMaterialization::ProvedSearchIntermediate
-                   : FinalLayoutMaterialization::StrictImprovement);
+                   : FinalLayoutMaterialization::StrictImprovement,build_public_reports);
 }
 
 bool refresh_proved_layout_annotations_for_testing(
@@ -81666,6 +81677,15 @@ CompileResult close_final_contextual_layout_roots(
       original.feature_profile != comparison_options.feature_profile ||
       (!soft_budget && original.steps.size() <= trigger))
     return original;
+
+  // This is an additional exhaustive ABI/checkpoint portfolio, not part of
+  // the caller-requested fast candidate pass. Keep the already proved fast
+  // incumbent; ordinary compilation still explores every historical root.
+  if(comparison_options.fast_candidate_search){
+    original.optimizations.push_back({"fast-search-late-root-policy",
+        "Retained the independently proved bounded-search result. The explicitly requested fast mode does not regenerate the additional post-root ABI/checkpoint portfolio; ordinary search and all correctness gates are unchanged."});
+    return original;
+  }
 
   CompileResult best = original;
   if (soft_budget) {

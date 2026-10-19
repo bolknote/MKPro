@@ -4,6 +4,7 @@
 #include "mkpro/core/ir.hpp"
 
 #include <cstddef>
+#include <functional>
 #include <map>
 #include <string>
 #include <vector>
@@ -32,6 +33,7 @@ struct SharedHelperContinuationCall {
   std::size_t entry_item_index = 0;
   bool indirect = false;
   bool ordinary = false;
+  bool operator==(const SharedHelperContinuationCall&) const = default;
 };
 
 struct SharedHelperContinuationOptions {
@@ -73,6 +75,7 @@ struct SharedHelperContinuationProof {
   std::vector<std::size_t> ordinary_call_item_indices;
   std::size_t divergent_call_item_index = 0;
   std::vector<std::string> reasons;
+  bool operator==(const SharedHelperContinuationProof&) const = default;
 };
 
 // Prove a purely structural candidate.  The helper must be straight-line with
@@ -85,6 +88,14 @@ SharedHelperContinuationProof
 verify_shared_helper_continuation(const std::vector<MachineItem>& items,
                                   const std::string& helper_label,
                                   const SharedHelperContinuationOptions& options = {});
+
+// Visit labels in the same sorted order as the scalar verifier. A false
+// visitor result stops immediately. Input items/options remain immutable for
+// this call; the shared artifact index and lazy relocation proof never escape.
+void visit_shared_helper_continuations(
+    const std::vector<MachineItem>& items,
+    const SharedHelperContinuationOptions& options,
+    const std::function<bool(SharedHelperContinuationProof)>& visitor);
 
 // Prove a bounded linear route into a body, including calls to closed,
 // straight-line leaf procedures. No branch, raw/manual command, formal alias,

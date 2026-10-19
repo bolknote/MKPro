@@ -1,4 +1,5 @@
 #include "mkpro/core/stable_register_value_flow.hpp"
+#include "mkpro/core/detail/cell_provenance.hpp"
 #include "mkpro/core/joint_constraint_origins.hpp"
 #include "mkpro/core/passes/semantic_region_folding.hpp"
 
@@ -432,7 +433,9 @@ std::vector<PassResult> deferred_stack_producer_erasure_candidates(
       const bool enter = producer.opcode == 0x0e;
       if (producer.kind != MachineItemKind::Op || producer.raw ||
           producer.manual_interaction || producer.procedure_boundary ||
-          !producer.roles.empty() || !producer.semantic_call_origins.empty() ||
+          (!producer.roles.empty() && (!limits.allow_fresh_literal_replacement ||
+            !std::all_of(producer.roles.begin(),producer.roles.end(),detail::is_cell_origin_provenance))) ||
+          !producer.semantic_call_origins.empty() ||
           (!enter && (producer.opcode < 0x60 || producer.opcode > 0x6e)))
         continue;
       std::size_t retained = at + 1U;
@@ -442,11 +445,15 @@ std::vector<PassResult> deferred_stack_producer_erasure_candidates(
       const auto& closer = input[retained];
       if (closer.kind != MachineItemKind::Op ||
           !((closer.opcode >= 0x60 && closer.opcode <= 0x6e) ||
-            (enter && closer.opcode >= 0x40 && closer.opcode <= 0x4e)))
+            (enter && closer.opcode >= 0x40 && closer.opcode <= 0x4e) ||
+            (limits.allow_fresh_literal_replacement && closer.opcode >= 0 && closer.opcode <= 9)))
         continue;
       if (attempts++ >= limits.maximum_proof_attempts) return result;
       if (!prove_post_layout_stack_producer_erasure(
-              input, data_flow, at, {.refine_runtime_selectors = false}))
+              input, data_flow, at, {.refine_runtime_selectors = false,
+                  .transport_closed_entry_through_control=limits.allow_fresh_literal_replacement,
+                  .use_indirect_store_entry_facts=limits.allow_fresh_literal_replacement,
+                  .allow_fresh_literal_replacement=limits.allow_fresh_literal_replacement}))
         continue;
       auto next = input;
       next.erase(next.begin() + static_cast<std::ptrdiff_t>(at));

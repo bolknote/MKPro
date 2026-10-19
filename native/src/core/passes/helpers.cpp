@@ -4651,9 +4651,8 @@ X2ValueDataflowState internal_close_x2_value_entry(const X2ValueDataflowState& i
 }
 
 X2ValueDataflowState internal_invalidate_register_dependency(
-    const X2ValueDataflowState& input, const std::string& register_name,
+    X2ValueDataflowState output, const std::string& register_name,
     bool track_register_memory) {
-  X2ValueDataflowState output = internal_clone_x2_value_dataflow_state(input);
   output.x = internal_remove_register_dependent_value_facts(output.x, register_name);
   output.x2 = internal_remove_register_dependent_value_facts(output.x2, register_name);
   if (output.y.has_value()) {
@@ -4719,10 +4718,10 @@ X2StructuralEntryState clone_x2_structural_entry_state(const X2StructuralEntrySt
 // dropMutatedSelectorX2ValueFact: invalidate the selector register's value
 // facts and drop its whole memory slot (used by the indirect-flow edges).
 X2ValueDataflowState internal_drop_mutated_selector_x2_value_fact(
-    const X2ValueDataflowState& input, const std::string& register_name,
+    X2ValueDataflowState input, const std::string& register_name,
     bool track_register_memory) {
   X2ValueDataflowState stable =
-      internal_invalidate_register_dependency(input, register_name, track_register_memory);
+      internal_invalidate_register_dependency(std::move(input), register_name, track_register_memory);
   if (!track_register_memory) {
     stable.memory = std::nullopt;
     stable.shapeMemory = std::nullopt;
@@ -4733,6 +4732,35 @@ X2ValueDataflowState internal_drop_mutated_selector_x2_value_fact(
   if (stable.shapeMemory.has_value())
     stable.shapeMemory->erase(register_name);
   return stable;
+}
+
+// The state is already closed and exclusively owned by this transfer. Keep
+// all untouched optionals, entry/VP fields and memory maps in that same object.
+X2ValueDataflowState internal_commit_x2_register_store(
+    X2ValueDataflowState output,const std::string& register_name,bool track_register_memory){
+  if(!internal_register_write_preserves_stored_value(output,register_name))
+    output=internal_invalidate_register_dependency(std::move(output),register_name,track_register_memory);
+  // These are pre-store observations. Compute them before inserting the new
+  // alias: the alias itself must not make two previously unequal sets agree.
+  const X2ValueSet stored_x=output.x;
+  const X2ValueFact fact=internal_x2_value_fact_for_register(register_name);
+  const auto next_x2=internal_add_stored_x2_value_alias(output,fact);
+  const auto store_splice=x2eval::vp_splice_shape_set_with_value_shapes(&output.x2Shape,&output.x2);
+  const X2ShapeSet* splice=store_splice ? &*store_splice : nullptr;
+  const auto entry_shape=x2eval::vp_entry_shapes_from_store_splice(splice);
+  output.x.insert(fact);output.x2=next_x2;
+  output.structuralEntry=X2StructuralEntryState{.kind=X2StructuralEntryState::Kind::None};
+  output.vpEntryMantissa=x2eval::vp_entry_mantissas_from_store_splice(splice);
+  output.vpEntryMantissaTransient=false;
+  output.vpEntrySignMantissa=x2eval::vp_entry_sign_mantissas_from_store_splice(splice);
+  output.vpEntryShape=entry_shape;
+  output.vpEntrySignShape=x2eval::vp_entry_sign_shapes_from_store_splice(splice);
+  output.vpEntryShapeTransient=entry_shape.has_value();
+  if(track_register_memory){
+    internal_store_x2_value_memory(output,register_name,stored_x);
+    internal_store_x2_shape_memory(output,register_name,stored_x,output.xShape);
+  }
+  return output;
 }
 
 X2ValueDataflowState internal_transfer_x2_value_dataflow_state(
@@ -4755,103 +4783,47 @@ X2ValueDataflowState internal_transfer_x2_value_dataflow_state(
     return internal_clone_x2_value_dataflow_state(input);
   case IrKind::Jump:
   case IrKind::Call: {
-    const X2ValueDataflowState closed = internal_close_x2_value_entry(input);
-    return target_starts_with_vp ? x2eval::with_direct_flow_vp_splice_source(closed) : closed;
+    X2ValueDataflowState closed = internal_close_x2_value_entry(input);
+    if (target_starts_with_vp) return x2eval::with_direct_flow_vp_splice_source(closed);
+    return closed; // Move the owned state instead of copying it through ?: .
   }
-  case IrKind::Store: {
-    const X2ValueDataflowState closed = internal_close_x2_value_entry(input);
-    const X2ValueDataflowState stable =
-        internal_register_write_preserves_stored_value(closed, op.register_name)
-            ? closed
-            : internal_invalidate_register_dependency(closed, op.register_name,
-                                                      track_register_memory);
-    X2ValueDataflowState output = internal_clone_x2_value_dataflow_state(stable);
-    const X2ValueFact fact = internal_x2_value_fact_for_register(op.register_name);
-    output.x.insert(fact);
-    output.x2 = internal_add_stored_x2_value_alias(stable, fact);
-    output.y = clone_optional_set(stable.y);
-    output.yShape = clone_optional_set(stable.yShape);
-    output.xShape = X2ShapeSet{stable.xShape.begin(), stable.xShape.end()};
-    output.x2Shape = X2ShapeSet{stable.x2Shape.begin(), stable.x2Shape.end()};
-    output.xDirectShape = clone_optional_set(stable.xDirectShape);
-    output.yDirectShape = clone_optional_set(stable.yDirectShape);
-    output.vpContext = x2eval::clone_x2_vp_context_state(stable.vpContext);
-    output.structuralEntry = X2StructuralEntryState{.kind = X2StructuralEntryState::Kind::None};
-    output.structuralVpContext = x2eval::clone_x2_structural_entry_state(stable.structuralVpContext);
-    const std::optional<X2ShapeSet> store_splice =
-        x2eval::vp_splice_shape_set_with_value_shapes(&stable.x2Shape, &stable.x2);
-    const X2ShapeSet* store_splice_ptr = store_splice.has_value() ? &*store_splice : nullptr;
-    const std::optional<X2ShapeSet> store_vp_entry_shape =
-        x2eval::vp_entry_shapes_from_store_splice(store_splice_ptr);
-    output.vpEntryMantissa = x2eval::vp_entry_mantissas_from_store_splice(store_splice_ptr);
-    output.vpEntryMantissaTransient = false;
-    output.vpEntrySignMantissa = x2eval::vp_entry_sign_mantissas_from_store_splice(store_splice_ptr);
-    output.vpEntryShape = store_vp_entry_shape;
-    output.vpEntrySignShape = x2eval::vp_entry_sign_shapes_from_store_splice(store_splice_ptr);
-    output.vpEntryShapeTransient = store_vp_entry_shape.has_value();
-    if (track_register_memory) {
-      internal_store_x2_value_memory(output, op.register_name, stable.x);
-      internal_store_x2_shape_memory(output, op.register_name, stable.x, stable.xShape);
-    }
-    return output;
-  }
+  case IrKind::Store:
+    return internal_commit_x2_register_store(
+        internal_close_x2_value_entry(input),op.register_name,track_register_memory);
   case IrKind::IndirectStore: {
-    const X2ValueDataflowState addressed =
+    X2ValueDataflowState addressed =
         internal_drop_mutated_selector_x2_value_fact(
             internal_close_x2_value_entry(input), op.register_name, track_register_memory);
     const std::optional<std::string> target = known_indirect_memory_target(op);
     if (!target.has_value()) {
       X2ValueDataflowState cleared =
           x2eval::with_store_vp_splice_source(addressed);
-      // An unresolved destination can invalidate any old register dependency,
-      // not merely the cached memory table.
-      for (int index = 0; index <= 14; ++index) {
+      // A complete typed may-target set invalidates only those banks. Unknown,
+      // empty or unsupported targets keep the historical full-bank kill.
+      const bool complete_targets = op.meta.indirect_memory_targets &&
+          !op.meta.indirect_memory_targets->empty() &&
+          std::all_of(op.meta.indirect_memory_targets->begin(),
+                      op.meta.indirect_memory_targets->end(),
+                      [](int index) { return index >= 0 && index <= 14; });
+      std::set<int> killed;
+      if (complete_targets)
+        killed.insert(op.meta.indirect_memory_targets->begin(), op.meta.indirect_memory_targets->end());
+      else
+        for (int index = 0; index <= 14; ++index) killed.insert(index);
+      for (const int index : killed) {
         const std::string reg = index < 10
             ? std::to_string(index)
             : std::string(1, static_cast<char>('a' + index - 10));
         cleared = internal_drop_mutated_selector_x2_value_fact(
-            cleared, reg, track_register_memory);
+            std::move(cleared), reg, track_register_memory);
       }
-      if (track_register_memory) {
+      if (track_register_memory && !complete_targets) {
         cleared.memory = X2ValueMemory{};
         cleared.shapeMemory = X2ShapeMemory{};
       }
       return cleared;
     }
-    const X2ValueDataflowState& closed = addressed;
-    const X2ValueDataflowState stable =
-        internal_register_write_preserves_stored_value(closed, *target)
-            ? closed
-            : internal_invalidate_register_dependency(closed, *target, track_register_memory);
-    X2ValueDataflowState output = internal_clone_x2_value_dataflow_state(stable);
-    const X2ValueFact fact = internal_x2_value_fact_for_register(*target);
-    output.x.insert(fact);
-    output.x2 = internal_add_stored_x2_value_alias(stable, fact);
-    output.y = clone_optional_set(stable.y);
-    output.yShape = clone_optional_set(stable.yShape);
-    output.xShape = X2ShapeSet{stable.xShape.begin(), stable.xShape.end()};
-    output.x2Shape = X2ShapeSet{stable.x2Shape.begin(), stable.x2Shape.end()};
-    output.xDirectShape = clone_optional_set(stable.xDirectShape);
-    output.yDirectShape = clone_optional_set(stable.yDirectShape);
-    output.vpContext = x2eval::clone_x2_vp_context_state(stable.vpContext);
-    output.structuralEntry = X2StructuralEntryState{.kind = X2StructuralEntryState::Kind::None};
-    output.structuralVpContext = x2eval::clone_x2_structural_entry_state(stable.structuralVpContext);
-    const std::optional<X2ShapeSet> store_splice =
-        x2eval::vp_splice_shape_set_with_value_shapes(&stable.x2Shape, &stable.x2);
-    const X2ShapeSet* store_splice_ptr = store_splice.has_value() ? &*store_splice : nullptr;
-    const std::optional<X2ShapeSet> store_vp_entry_shape =
-        x2eval::vp_entry_shapes_from_store_splice(store_splice_ptr);
-    output.vpEntryMantissa = x2eval::vp_entry_mantissas_from_store_splice(store_splice_ptr);
-    output.vpEntryMantissaTransient = false;
-    output.vpEntrySignMantissa = x2eval::vp_entry_sign_mantissas_from_store_splice(store_splice_ptr);
-    output.vpEntryShape = store_vp_entry_shape;
-    output.vpEntrySignShape = x2eval::vp_entry_sign_shapes_from_store_splice(store_splice_ptr);
-    output.vpEntryShapeTransient = store_vp_entry_shape.has_value();
-    if (track_register_memory) {
-      internal_store_x2_value_memory(output, *target, stable.x);
-      internal_store_x2_shape_memory(output, *target, stable.x, stable.xShape);
-    }
-    return output;
+    return internal_commit_x2_register_store(std::move(addressed),*target,track_register_memory);
   }
   case IrKind::Recall: {
     const X2ValueSet values =

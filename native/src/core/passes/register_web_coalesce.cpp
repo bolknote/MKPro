@@ -345,6 +345,17 @@ static PassResult process_register_webs(
         prompt.meta.manual_interaction->kind == ManualInteractionAnchorKind::PromptStop;
   };
 
+  // With complete typed observations, comments are not a physical-register
+  // contract. The entire def/use web and every later real read move together.
+  // Explicit byte roles, raw/manual uses and public-bank exits stay anchored.
+  const auto transportable_direct = [&](std::size_t site) {
+    if(!closed_artifact_precision||!recolor_only||!boundaries.proved)return false;
+    const auto& op=ops[site];const auto reg=physical(op.register_name);
+    return reg&&(op.kind==IrKind::Store||op.kind==IrKind::Recall)&&
+        op.opcode==(op.kind==IrKind::Store?0x40:0x60)+*reg&&
+        !has_rewrite_barrier(op)&&movable_roles(op.meta.roles)&&movable_roles(op.target_meta.roles);
+  };
+
   Webs webs;
   for (int reg = 0; reg < kRegisters; ++reg)
     webs.add(reg, true); // Preserve every possible setup-time entry value.
@@ -422,7 +433,7 @@ static PassResult process_register_webs(
   for (std::size_t site = 0; site < definitions.size(); ++site)
     for (const auto& [reg, node] : definitions[site])
       definition_sites.emplace(node, std::pair{site, reg});
-  std::map<std::size_t, Nodes> recall_sources, reply_sources;
+  std::map<std::size_t, Nodes> recall_sources, reply_sources, direct_sources;
   for (std::size_t state = 0; state < sites.size(); ++state) {
     const auto site = sites[state];
     const auto& op = ops[site];
@@ -431,6 +442,8 @@ static PassResult process_register_webs(
         append(recall_sources[site], incoming[state][static_cast<std::size_t>(*physical(op.register_name))]);
       else if (transportable_reply(site))
         append(reply_sources[site], incoming[state][static_cast<std::size_t>(*physical(op.register_name))]);
+      else if (transportable_direct(site))
+        append(direct_sources[site], incoming[state][static_cast<std::size_t>(*physical(op.register_name))]);
     }
   }
   std::set<GuardedDefinitionUseQuery> query_set;
@@ -451,6 +464,7 @@ static PassResult process_register_webs(
   };
   add_queries(recall_sources); // Keep the historical bounded proof portfolio intact.
   add_queries(reply_sources);
+  add_queries(direct_sources);
   if (trace && recoloring_requests) {
     std::size_t potential = 0;
     for (const auto& [use, nodes] : recall_sources)
@@ -566,7 +580,7 @@ static PassResult process_register_webs(
         (!reachable.contains(site) || !movable_roles(op.meta.roles) ||
                         !movable_roles(op.target_meta.roles)))
       return true;
-    if (movable_counter(site) || transportable_input(op) || transportable_reply(site))
+    if (movable_counter(site) || transportable_input(op) || transportable_reply(site) || transportable_direct(site))
       return false;
     return (op.kind != IrKind::Store && op.kind != IrKind::Recall) ||
            has_rewrite_barrier(op) || is_display_focus_sensitive(op);

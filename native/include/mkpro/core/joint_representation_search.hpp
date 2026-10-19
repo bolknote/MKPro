@@ -50,6 +50,13 @@ inline constexpr TransactionSearchLimits kJointRepresentationConstraintLimits{
     .maximum_expansions = 12, .maximum_candidates = 64,
     .maximum_depth = 6, .maximum_growth_cells = 4};
 
+// The caller explicitly requested the fast portfolio. Limit only exploration,
+// never proof work, growth accounting, memory semantics or publication gates.
+inline constexpr TransactionSearchLimits joint_representation_search_limits(bool fast) {
+  return fast ? TransactionSearchLimits{.maximum_expansions=2,.maximum_candidates=12,
+      .maximum_depth=2,.maximum_growth_cells=4} : kJointRepresentationConstraintLimits;
+}
+
 using JointRepresentationFinalizer =
     std::function<std::optional<LayoutSearchArtifact>(const LayoutSearchArtifact&)>;
 TransactionSearchResult<LayoutSearchArtifact> search_joint_representation_constraints(

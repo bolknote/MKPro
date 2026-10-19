@@ -638,13 +638,20 @@ bool no_external_entry_to_continuations(const std::vector<MachineItem>& items,
 
 } // namespace
 
+namespace {
+struct SharedHelperRelocationCheck {
+  bool checked = false;
+  bool supported = false;
+  std::vector<std::string> reasons;
+};
 SharedHelperContinuationProof
-verify_shared_helper_continuation(const std::vector<MachineItem>& items,
+verify_shared_helper_continuation_indexed(const std::vector<MachineItem>& items,
                                   const std::string& helper_label,
-                                  const SharedHelperContinuationOptions& options) {
+                                  const SharedHelperContinuationOptions& options,
+                                  const ArtifactIndex& index,
+                                  SharedHelperRelocationCheck& relocation) {
   SharedHelperContinuationProof proof;
   proof.helper_label = helper_label;
-  const ArtifactIndex index = index_artifact(items);
   proof.input_cells = index.cells;
 
   if (index.duplicate_labels.contains(helper_label)) {
@@ -659,9 +666,15 @@ verify_shared_helper_continuation(const std::vector<MachineItem>& items,
   }
   proof.helper_label_item_index = root_item->second;
   proof.helper_body_start_address = root_address->second;
-  if (!direct_address_artifact_is_relocatable(
-          items, index, options.address_space_model, proof.reasons))
+  if (!relocation.checked) {
+    relocation.supported = direct_address_artifact_is_relocatable(
+        items, index, options.address_space_model, relocation.reasons);
+    relocation.checked = true;
+  }
+  if (!relocation.supported) {
+    proof.reasons = relocation.reasons;
     return proof;
+  }
 
   bool found_return = false;
   for (std::size_t item_index = root_item->second + 1U; item_index < items.size(); ++item_index) {
@@ -878,6 +891,31 @@ verify_shared_helper_continuation(const std::vector<MachineItem>& items,
   return proof;
 }
 
+} // namespace
+
+SharedHelperContinuationProof verify_shared_helper_continuation(
+    const std::vector<MachineItem>& items, const std::string& helper_label,
+    const SharedHelperContinuationOptions& options) {
+  const auto index = index_artifact(items);
+  SharedHelperRelocationCheck relocation;
+  return verify_shared_helper_continuation_indexed(
+      items, helper_label, options, index, relocation);
+}
+
+void visit_shared_helper_continuations(
+    const std::vector<MachineItem>& items,
+    const SharedHelperContinuationOptions& options,
+    const std::function<bool(SharedHelperContinuationProof)>& visitor) {
+  if (!visitor) return;
+  const auto index = index_artifact(items);
+  SharedHelperRelocationCheck relocation;
+  for (const auto& [label, address] : index.label_addresses) {
+    (void)address;
+    if (!visitor(verify_shared_helper_continuation_indexed(
+            items, label, options, index, relocation))) break;
+  }
+}
+
 bool shared_helper_entry_reaches_body(
     const std::vector<MachineItem>& items, int entry_address, int body_address,
     const SharedHelperContinuationOptions& options) {
@@ -887,21 +925,13 @@ bool shared_helper_entry_reaches_body(
 SharedHelperContinuationProof
 find_shared_helper_continuation(const std::vector<MachineItem>& items,
                                 const SharedHelperContinuationOptions& options) {
-  std::set<std::string> labels;
-  for (const MachineItem& item : items) {
-    if (item.kind == MachineItemKind::Label)
-      labels.insert(item.name);
-  }
-  SharedHelperContinuationProof first_rejection;
-  for (const std::string& label : labels) {
-    SharedHelperContinuationProof candidate =
-        verify_shared_helper_continuation(items, label, options);
-    if (candidate.proved)
-      return candidate;
-    if (first_rejection.reasons.empty() && !candidate.reasons.empty())
-      first_rejection = std::move(candidate);
-  }
-  return first_rejection;
+  SharedHelperContinuationProof selected;
+  visit_shared_helper_continuations(items, options, [&](auto candidate) {
+    if (candidate.proved) { selected = std::move(candidate); return false; }
+    if (selected.reasons.empty()) selected = std::move(candidate);
+    return true;
+  });
+  return selected;
 }
 
 } // namespace mkpro::core

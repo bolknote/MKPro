@@ -5759,3 +5759,87 @@ reads or an explicit display-byte/unknown semantic role. Its guarded
 definition/use demands and all physical-bank alias/entry obligations remain
 part of the same allocation proof. A recolored recall delivers the identical
 word to the prompt; this is never a license to change the displayed value.
+
+Shared-helper discovery visits labels in the original sorted order with one
+artifact index. The global relocation check is shared lazily, only after a
+valid label reaches that check, so duplicate/absent-label diagnostics and
+early-stop behavior remain identical. Each candidate still executes its own
+full continuation, entry, X2 and return proof; no failed proof is accepted or
+search budget changed. Scalar/batch differential tests compare every proof
+field, every rejection reason and the first proved candidate.
+
+A typed indirect store with a complete may-target bank set invalidates all
+register dependencies and value/shape-memory entries in that set, plus its
+mutated selector, rather than destroying unrelated banks. No destination is
+assumed to be the actual one and no definite store value is invented for a
+may-target. Unknown/empty/unsupported sets keep the original full kill,
+including the conservative handling of an Rf-containing set. Tests pin
+retained and killed facts, source immutability and both concrete ROM targets.
+
+
+### Proof-only joint-search materialization
+
+Internal joint-layout finalizer callbacks still refresh all typed annotations,
+resolve real bytes and setup, and pass the same static proof gates, but do not
+rebuild public size/opportunity/proof reports for every unpublished artifact.
+Ranking reads actual cells, runtime CFG cost and setup, never those reports.
+The selected incumbent is materialized again with complete public reporting.
+Report parsing also rejects details lacking its mandatory literal token before
+using regex. Neither change removes search alternatives or changes timeout limits.
+The neutral/growing layout compiler+ROM test compares full and proof-only code,
+setup, validity and real size, and checks current public reporting on publication.
+
+
+### Anticipatory contextual copies and fresh-literal load elimination
+
+A neutral complete-artifact alternative may add a destination store beside an
+existing value producer, but only if the previous destination word is dead on
+every exact caller continuation and numeric entry is already closed. It then
+re-runs contextual full-word GVN on the modified graph to remove an original
+load/store copy. Both edits retain independent data and rooted CFG/return proofs.
+The joint lane composes this alternative with deletion of the remaining load,
+not with source-level rewriting or a preferred game/register assignment.
+
+The opt-in stack-producer portfolio also admits a following decimal literal.
+A grounded must proof establishes fresh-number lift before the deleted recall
+or Enter on every invocation. The equality interpreter starts at the literal
+with closed entry, tracks the changed lower stack and X2, and proves all future
+observations. Unknown/open input, exposed stack/X1/X2, aliases and exhausted
+proofs reject. Historical greedy callers retain their original enumeration.
+
+
+### Typed direct register-web transport
+
+In the complete-runtime equal-size recoloring lane, a plain direct transfer
+is not tied to its old physical home merely because its comment says display
+or screen. The validated typed interaction graph, whole def/use interference
+proof and relocated later reads are authoritative. Explicit byte-observation
+roles, raw/manual accesses, unknown roles, public terminal banks and missing
+runtime ownership remain barriers. Guard queries for these additional reads
+are appended after the historical query portfolio, not substituted for it.
+Independent compiler/ROM tests force two noninterfering producer epochs to
+share a home and pin the explicit-observation and missing-environment negatives.
+
+
+### Owned X2 store transfers
+
+Direct and proved-target indirect stores commit into their already closed,
+exclusively owned abstract state. Register invalidation and sequential bank
+kills move that object rather than repeatedly cloning its full value/shape
+memory. Pre-store X, X2 alias agreement and VP splice are captured before the
+new register alias is introduced. Untouched optional fields are retained, not
+reconstructed. This changes ownership/copy cost only, not any lattice fact,
+selector policy, publication gate, candidate budget or machine-code size.
+
+
+### Explicit fast-search policy
+
+The opt-in fast candidate mode now also governs the late joint portfolio:
+its constraint search admits at most two expansions, twelve candidates and
+two semantic steps, with the SAME four-cell root-relative debt and all
+unchanged complete-artifact proof gates. It does not regenerate the additional
+post-root ABI/checkpoint portfolio after the bounded fast result is selected.
+Ordinary compilation keeps the historical full limits and every independent
+root. No wall-clock cancellation, test timeout increase, or default-search
+size tradeoff implements this policy. The RF monotonicity regression explicitly
+requests this fast mode; it still compares independent memory/allocation roots.

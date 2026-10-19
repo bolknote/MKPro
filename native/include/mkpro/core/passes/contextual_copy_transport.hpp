@@ -60,6 +60,13 @@ std::vector<ContextualCopyTransportCandidate> contextual_finite_return_selector_
 std::vector<ContextualCopyTransportCandidate> contextual_pure_return_completion_candidates(
     const std::vector<IrOp>& ops, const PassContext& context,
     const ContextualCopyTransportOptions& limits = {});
+// Add a store at an existing producer only when its old destination word is
+// dead on every continuation, then independently eliminate later copies of
+// that value. Neutral alternatives are intentional: dead stack loads and
+// finite control/data encodings can repay them in the same layout transaction.
+std::vector<ContextualCopyTransportCandidate> contextual_anticipatory_copy_store_candidates(
+    const std::vector<IrOp>& ops,const PassContext& context,
+    const ContextualCopyTransportOptions& limits = {});
 // Bounded, fairly enumerated transitive value-origin preferences. These are
 // not equality claims; complete-web allocation and downstream data proofs are
 // mandatory, including when a producer helper transforms its argument.

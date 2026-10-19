@@ -371,18 +371,11 @@ SharedHelperDualModePreparation prepare_shared_helper_dual_mode_layout(
       .allow_entry_prologues = true,
       .exact_control = &control_flow,
   };
-  std::set<std::string> labels;
-  for (const MachineItem& item : items) {
-    if (item.kind == MachineItemKind::Label)
-      labels.insert(item.name);
-  }
   std::tuple<bool, std::size_t, std::size_t> best_rejection_score{};
-  for (const std::string& label : labels) {
-    SharedHelperContinuationProof candidate =
-        verify_shared_helper_continuation(items, label, continuation_options);
+  visit_shared_helper_continuations(items, continuation_options, [&](auto candidate) {
     if (candidate.proved) {
       result.continuation = std::move(candidate);
-      break;
+      return false;
     }
     const std::tuple score{
         candidate.calls.size() == 3U &&
@@ -392,7 +385,8 @@ SharedHelperDualModePreparation prepare_shared_helper_dual_mode_layout(
       best_rejection_score = score;
       result.continuation = std::move(candidate);
     }
-  }
+    return true;
+  });
   if (!result.continuation.proved) {
     result.reasons = result.continuation.reasons;
     return result;

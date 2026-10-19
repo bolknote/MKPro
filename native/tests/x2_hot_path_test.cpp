@@ -2,12 +2,15 @@
 #include "mkpro/core/detail/basic_opcode_ir_kind.hpp"
 #include "mkpro/core/ir.hpp"
 #include "mkpro/core/opcodes.hpp"
+#include "mkpro/core/shared_helper_continuation.hpp"
 #include "mkpro/core/passes/helpers.hpp"
+#include "mkpro/emulator/mk61.hpp"
 #include "test_support.hpp"
 
 #include <iostream>
 #include <optional>
 #include <regex>
+#include <set>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -16,6 +19,46 @@ namespace {
 using namespace mkpro;
 using namespace mkpro::core;
 using tests::require;
+
+void helper_batch_equivalence() {
+  const auto op = [](int code) { return MachineItem::op(code, opcode_by_code(code).name); };
+  for (int mode=0;mode<6;++mode) {
+    std::vector<MachineItem> items{
+        MachineItem::label("entry_a"),op(0x53),MachineItem::address(std::string{"worker"}),op(0x10),op(0x40),op(0x52),
+        MachineItem::label("entry_b"),op(0x53),MachineItem::address(std::string{"worker"}),op(0x10),op(0x40),op(0x52),
+        MachineItem::label("entry_c"),op(0x53),MachineItem::address(std::string{"worker"}),op(0x12),op(0x52),
+        MachineItem::label("worker"),op(0x22),op(0x52)};
+    if(mode==1)items.push_back(MachineItem::label("worker"));
+    if(mode==2)items[2].target=std::string{"missing_target"};
+    if(mode==3)items.push_back(op(0x87)); // Unproved unrelated indirect flow.
+    if(mode==5){items.push_back(MachineItem::label("fourth_call"));items.push_back(op(0x53));
+      items.push_back(MachineItem::address(std::string{"worker"}));items.push_back(op(0x52));}
+    SharedHelperContinuationOptions options;
+    if(mode==4)options.maximum_convergence_states=0;
+    std::set<std::string> labels;
+    for(const auto& item:items)if(item.kind==MachineItemKind::Label)labels.insert(item.name);
+    std::vector<SharedHelperContinuationProof> scalar,batch;
+    for(const auto& label:labels)scalar.push_back(verify_shared_helper_continuation(items,label,options));
+    visit_shared_helper_continuations(items,options,[&](auto proof){batch.push_back(std::move(proof));return true;});
+    require(scalar==batch,"batch helper preparation retains every scalar proof field, reason and label order");
+    SharedHelperContinuationProof expected;
+    for(const auto& proof:scalar){
+      if(proof.proved){expected=proof;break;}
+      if(expected.reasons.empty())expected=proof;
+    }
+    require(find_shared_helper_continuation(items,options)==expected,
+            "batch discovery keeps the same first successful proof or rejection");
+    if(mode==0)require(expected.proved,"batch differential fixture includes a fully proved continuation");
+    std::size_t visited=0;
+    visit_shared_helper_continuations(items,options,[&](auto proof){
+      require(proof==scalar.front(),"early visitor receives the first exact scalar result");
+      ++visited;return false;});
+    require(visited==1,"batch discovery never proves later labels after an early stop");
+    visit_shared_helper_continuations(items,options,{});
+    require(!verify_shared_helper_continuation(items,"absent_label",options).proved,
+            "the scalar API keeps its absent-label failure before global relocation");
+  }
+}
 
 void opcode_kinds() {
   for (int pass = 0; pass < 2; ++pass)
@@ -68,6 +111,52 @@ IrOp command(int opcode) {
   if (opcode_by_code(opcode).takes_address)
     image.push_back(MachineItem::address(0));
   return raise_machine_to_ir(image).front();
+}
+
+void may_target_store_precision() {
+  using namespace passes;
+  auto state=empty_x2_value_dataflow_state(true);
+  int at=0;
+  for(const int code : {5,0x49,2,0x47,3,0x48,8,0x40,0x67,4,2})
+    state=*transfer_x2_value_state_for_edge(state,command(code),X2DataflowEdgeKind::Normal,
+                                           {.track_register_memory=true},at++);
+  require(state.memory && state.memory->contains("9") && state.shapeMemory && state.shapeMemory->contains("9"),
+          "may-target fixture has a grounded unrelated bank value and shape");
+  const auto before=state;
+  for(int mode=0;mode<7;++mode){
+    auto store=command(0xb0);
+    if(mode==0)store.meta.indirect_memory_targets=std::vector<int>{7,8};
+    if(mode==1)store.meta.indirect_memory_targets=std::vector<int>{0,7};
+    if(mode==3)store.meta.indirect_memory_targets=std::vector<int>{};
+    if(mode==4)store.meta.indirect_memory_targets=std::vector<int>{7,15};
+    if(mode==5)store.meta.indirect_memory_targets=std::vector<int>{7,8,7};
+    if(mode==6)store.meta.indirect_memory_targets=std::vector<int>{-1,7};
+    const auto output=transfer_x2_value_state_for_edge(state,store,X2DataflowEdgeKind::Normal,
+                                                     {.track_register_memory=true},at);
+    require(output && state==before,"may-target transfer does not mutate its borrowed input");
+    const bool complete=mode==0 || mode==1 || mode==5;
+    require(output->memory && output->shapeMemory && output->memory->contains("9")==complete &&
+            output->shapeMemory->contains("9")==complete,
+            "only a complete supported target set retains unrelated value and shape memory");
+    require(!output->memory->contains("0") && !output->memory->contains("7"),
+            "selector mutation and every possible written bank lose their stale aliases");
+    if(complete){
+      const auto recalled=transfer_x2_value_state_for_edge(*output,command(0x69),X2DataflowEdgeKind::Normal,
+                                                          {.track_register_memory=true},at+1);
+      require(recalled && recalled->x.contains("decimal:5:normalized"),
+              "the unaffected bank remains available to later exact-word proofs");
+    }else require(output->memory->empty() && output->shapeMemory->empty(),
+                 "unknown/empty/Rf/invalid may-target sets retain the historical full kill");
+  }
+  for(const int selector : {8,9}){
+    std::vector<int> code{5,0x49,2,0x47,3,0x48,selector,0x40,0x67,4,2,0xb0,0x69,0x50};
+    emulator::MK61 calc;
+    require(calc.load_program(code).diagnostics.empty(),"may-target fact fixture fits stock ROM");
+    calc.press_sequence({"\u0412/\u041e","\u0421/\u041f"});
+    require(calc.run_until_stable(5000,8).stopped && std::stod(calc.read_register("X"))==5 &&
+            std::stod(calc.read_register("9"))==5 && std::stod(calc.read_register(selector==8?"7":"8"))==42,
+            "ROM covers both may-target destinations without changing the retained bank");
+  }
 }
 
 void borrowed_transfer() {
@@ -136,8 +225,10 @@ void borrowed_transfer() {
 
 int main() {
   try {
+    helper_batch_equivalence();
     opcode_kinds();
     decimal_syntax();
+    may_target_store_precision();
     borrowed_transfer();
     std::cout << "X2 hot path: exact syntax and borrowed transfer passed\n";
   } catch (const std::exception& error) {

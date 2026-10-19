@@ -672,6 +672,82 @@ std::vector<ContextualCopyTransportCandidate> contextual_redundant_copy_store_ca
 }
 
 
+std::vector<ContextualCopyTransportCandidate> contextual_anticipatory_copy_store_candidates(
+    const std::vector<IrOp>& ops,const PassContext& context,const ContextualCopyTransportOptions& limits){
+  std::vector<ContextualCopyTransportCandidate> result;
+  if(!limits.runtime_preloads||!limits.maximum_work||!limits.maximum_candidates||!limits.maximum_copy_sites)return result;
+  bool demand=false;
+  for(Id i=1;i<ops.size();++i)demand=demand||(direct(ops[i])&&ops[i].kind==IrKind::Store&&
+      direct(ops[i-1U])&&ops[i-1U].kind==IrKind::Recall&&ops[i].register_name!=ops[i-1U].register_name);
+  if(!demand)return result;
+  Model m(ops,context,limits);if(!m.valid)return result;
+  const auto deaths=prove_post_layout_register_deadness(ops,m.flow,limits.maximum_work);
+  const auto lift=analyze_post_layout_automatic_entry_lift_with_indirect_store_facts(m.items,m.original,limits.maximum_work);
+  if(!deaths.proved||deaths.exhausted||!lift)return result;
+  Id remaining=limits.maximum_work-std::min(limits.maximum_work,deaths.work),attempts=0;
+  const auto original_words=prove_context_words(m,*limits.runtime_preloads,remaining);
+  if(!original_words.proved||original_words.exhausted)return result;
+  remaining-=std::min(remaining,original_words.work);
+  for(Id copy=1;copy<ops.size()&&remaining&&result.size()<limits.maximum_candidates;++copy){
+    if(!direct(ops[copy])||ops[copy].kind!=IrKind::Store||!direct(ops[copy-1U])||
+        ops[copy-1U].kind!=IrKind::Recall||ops[copy].register_name==ops[copy-1U].register_name)continue;
+    const auto old_plan=redundant_copy_plan(m,original_words,copy,remaining,*limits.runtime_preloads);
+    remaining-=std::min(remaining,old_plan.work);
+    if(old_plan.exhausted)return result;
+    if(old_plan.valid)continue; // The ordinary GVN already owns this deletion.
+    for(Id producer=0;producer+1U<ops.size()&&remaining&&result.size()<limits.maximum_candidates;++producer){
+      if(producer==copy||!direct(ops[producer])||ops[producer].kind!=IrKind::Store||
+          ops[producer].register_name!=ops[copy-1U].register_name)continue;
+      const auto& destination=ops[copy].register_name;bool reached=false,safe=true;
+      for(Id state=0;state<m.instruction.size();++state)if(m.instruction[state]==producer){
+        reached=true;
+        for(const auto next:m.flow.execution_successors[state])safe=safe&&deaths.before_state[next].contains(destination);
+      }
+      for(Id state=0;state<m.original.execution_states.size();++state)
+        if(m.original.execution_states[state].item_index==m.item[producer])
+          for(const auto next:m.original.execution_successors[state])safe=safe&&lift->at(next);
+      if(!reached||!safe)continue;
+      if(attempts++>=limits.maximum_copy_sites)return result;
+      auto store=ops[copy];store.meta.roles.clear();store.meta.comment="anticipatory private copy at value producer";
+      store.meta.source_line=ops[producer].meta.source_line;store.semantic.clear();store.target_meta={};
+      auto changed=ops;changed.insert(changed.begin()+static_cast<std::ptrdiff_t>(producer+1U),std::move(store));
+      const auto image=lower_ir_to_machine(changed);const auto flow=build_post_layout_control_flow(image,m.control);
+      std::vector<std::optional<Id>> backward(image.size());Id from=0,to=0,inserted=0;
+      for(Id i=0;i<changed.size();++i){
+        const auto length=lower_ir_to_machine({changed[i]}).size();
+        if(i==producer+1U)inserted=from;
+        else{for(Id cell=0;cell<length;++cell)backward[from+cell]=to+cell;to+=length;}
+        from+=length;
+      }
+      Id continuation=producer+1U;while(continuation<ops.size()&&ops[continuation].kind==IrKind::Label)++continuation;
+      if(continuation==ops.size())continue;
+      backward[inserted]=m.item[continuation];
+      PostLayoutExecutionRelocationOptions transport;transport.erased_data_effect_items.push_back(inserted);
+      const auto cfg=prove_post_layout_execution_relocation(image,m.items,flow,m.original,backward,transport);
+      if(!cfg.proved)continue;
+      Model proposed(changed,context,limits);if(!proposed.valid)continue;
+      const auto equality=prove_context_words(proposed,*limits.runtime_preloads,remaining);
+      remaining-=std::min(remaining,equality.work);
+      if(!equality.proved||equality.exhausted)continue;
+      const auto target=copy+(producer<copy?1U:0U);
+      const auto plan=redundant_copy_plan(proposed,equality,target,remaining,*limits.runtime_preloads);
+      remaining-=std::min(remaining,plan.work);
+      if(!plan.valid||plan.exhausted)continue;
+      ContextualCopyTransportCandidate candidate;
+      candidate.transformation=rewrite(proposed,plan,candidate.materialized_stores);
+      if(candidate.transformation.applied<=0)continue;
+      candidate.transformation.optimizations.clear();
+      candidate.transformation.optimizations.push_back({"anticipatory-contextual-copy",
+          "Inserted one store beside an existing value producer only after its old destination is dead on every exact caller continuation and numeric entry is already closed. Independently proved that the later copied store is now redundant as a complete machine word or guarded non-observation, and transported every original CFG/return frame in both stages. The neutral artifact remains an alternative for stack-load elimination, finite encoding and final placement; no register/input contract or source program is changed."});
+      const auto candidate_items=lower_ir_to_machine(candidate.transformation.ops);
+      if(std::none_of(result.begin(),result.end(),[&](const auto& old){
+          const auto items=lower_ir_to_machine(old.transformation.ops);
+          return items.size()==candidate_items.size()&&std::equal(items.begin(),items.end(),candidate_items.begin(),machine_items_equal);
+        }))result.push_back(std::move(candidate));
+    }
+  }return result;
+}
+
 std::vector<RegisterWebRecoloringRequest> contextual_copy_origin_register_requests(
     const std::vector<IrOp>& ops,std::size_t maximum_requests){
   std::vector<RegisterWebRecoloringRequest> result;

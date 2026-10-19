@@ -31,7 +31,7 @@
 namespace mkpro {
 std::optional<CompileResult> materialize_proved_layout_for_testing(
     const std::string&,const CompileResult&,const CompileOptions&,
-    const std::vector<MachineItem>&,const std::vector<PreloadReport>&,bool);
+    const std::vector<MachineItem>&,const std::vector<PreloadReport>&,bool,bool=true);
 }
 namespace {
 using namespace mkpro;using namespace mkpro::core;using mkpro::tests::require;
@@ -899,6 +899,17 @@ void proved_neutral_layout_materialization(){
     const auto checkpoint=materialize_proved_layout_for_testing(source,root,options,items,root.preloads,true);
     require(checkpoint.has_value()==(growth<=4),"only proof-valid nonwinning layouts inside the original joint growth budget are materialized");
     if(!checkpoint)continue;
+    const auto proof_only=materialize_proved_layout_for_testing(
+        source,root,options,items,root.preloads,true,false);
+    require(proof_only && same_layout_search_artifact(
+        {checkpoint->items,checkpoint->preloads,{}},{proof_only->items,proof_only->preloads,{}}) &&
+        checkpoint->hex==proof_only->hex && checkpoint->listing==proof_only->listing &&
+        checkpoint->steps.size()==proof_only->steps.size() &&
+        checkpoint->implemented==proof_only->implemented &&
+        checkpoint->setup_hex==proof_only->setup_hex,
+        "internal proof-only materialization preserves code, setup, validity and real cost");
+    require(checkpoint->ir.layout_cells==static_cast<int>(checkpoint->steps.size()),
+        "published materialization always rebuilds the complete current public report");
     require(checkpoint->steps.size()==root.steps.size()+static_cast<std::size_t>(growth),
         "an intermediate retains its real step count, never a synthetic comparison length");
     PostLayoutControlFlowOptions control;
@@ -1090,6 +1101,18 @@ void reversible_dual_mode_continuation(){
 
 
 void composition_depth_scheduling(){
+  const auto regular_limits=joint_representation_search_limits(false);
+  const auto fast_limits=joint_representation_search_limits(true);
+  require(regular_limits.maximum_expansions==kJointRepresentationConstraintLimits.maximum_expansions &&
+      regular_limits.maximum_candidates==kJointRepresentationConstraintLimits.maximum_candidates &&
+      regular_limits.maximum_depth==kJointRepresentationConstraintLimits.maximum_depth,
+      "ordinary joint search keeps every historical exploration budget");
+  require(fast_limits.maximum_expansions<regular_limits.maximum_expansions &&
+      fast_limits.maximum_candidates<regular_limits.maximum_candidates &&
+      fast_limits.maximum_depth<regular_limits.maximum_depth &&
+      fast_limits.maximum_growth_cells==regular_limits.maximum_growth_cells,
+      "an explicitly fast portfolio bounds exploration only, never changes growth accounting or proof semantics");
+
   struct Node{int cells=100;int stage=0;int family=0;};
   const auto cells=[](const Node& node){return node.cells;};
   const auto equal=[](const Node& a,const Node& b){
@@ -1703,7 +1726,133 @@ void memory_cursor_web_domains(){
   }
 }
 
+void typed_direct_webs_ignore_comment_homes(){
+  for(int kind=0;kind<5;++kind){
+    MachineEmitter e;e.emit_op(5);const auto first=e.items.size();e.emit_op(0x41);e.items.back().comment="display value producer";
+    if(kind==1)e.items.back().roles.push_back("display-byte");
+    if(kind==2)e.items.back().raw=true;
+    e.emit_op(0x61);e.emit_op(0x49);e.emit_op(6);
+    const auto second=e.items.size();e.emit_op(0x42);e.items.back().comment="screen reply producer";
+    if(kind==1)e.items.back().roles.push_back("display-byte");
+    for(int n=0;n<4;++n)e.emit_op(0x67);e.emit_op(0x69);e.emit_op(0x62);e.emit_stop(StopDisposition::Terminal);
+    if(kind==3)e.items.back().roles.clear();
+    const auto ops=raise_machine_to_ir(e.items);const std::vector<PreloadReport> words{{.register_name="7",.value="11"}};
+    const std::map<std::string,int> origins;CompileOptions options;options.coalesce_copies=true;
+    std::vector<std::vector<IrOp>> candidates;
+    passes::for_each_deferred_register_web_recoloring(ops,{options},{{{first,second}}},{},origins,
+        [&](auto next){candidates.push_back(std::move(next));},kind==4?nullptr:&words,true);
+    require(!candidates.empty()==(kind==0),
+        "typed private direct webs may ignore comment-only home hints; explicit byte roles, raw/public banks and missing ownership reject");
+    if(kind!=0)continue;
+    require(candidates.front()[first].register_name==candidates.front()[second].register_name,
+        "noninterfering producer epochs receive one actual hardware home");
+    const auto run=[&](const auto& code){const auto image=resolve_machine_items(lower_ir_to_machine(code));
+      require(image.diagnostics.empty(),"typed direct allocation resolves");std::vector<int> bytes;
+      for(const auto& step:image.steps)bytes.push_back(step.opcode);emulator::MK61 calc;
+      require(calc.load_program(bytes).diagnostics.empty(),"typed direct allocation fits ROM");
+      calc.set_register("7","11");calc.press_sequence({"В/О","С/П"});
+      require(calc.run_until_stable(5000,8).stopped,"typed direct allocation reaches output");
+      std::vector<std::string> values;for(const char* reg:{"X","Y","Z","T","X1","7","9"})values.push_back(calc.read_register(reg));
+      calc.press(".");values.push_back(calc.display_text(true));return values;
+    };
+    require(run(ops)==run(candidates.front()),
+        "the whole web moves every later program read while preserving displayed values, full future stack, X1 and decimal shadow");
+  }
+}
+void anticipatory_copy_and_literal_loads(){
+  const auto make=[](bool reads_old_destination=false,bool raw=false){
+    MachineEmitter e;
+    for(const int input:{5,6}){
+      e.emit_op(0x60+input);e.emit_jump(0x53,"independent producer invocation","producer");
+      e.emit_op(0x61);e.emit_op(0x49);
+      e.emit_op(input==5?2:4);e.emit_op(input==5?3:5);e.emit_op(0x4b);
+      for(int i=0;i<4;++i)e.emit_op(0x67);
+      if(input==5){e.emit_op(0x69);e.emit_op(0x48);}
+    }
+    e.emit_op(0x68);e.emit_op(0x69);e.emit_stop(StopDisposition::Terminal);
+    e.emit_label("producer");e.emit_op(0x41);e.items.back().raw=raw;
+    if(reads_old_destination)e.emit_op(0x69);
+    e.emit_op(0x67);e.emit_op(0x52);return e.items;
+  };
+  const std::vector<PreloadReport> words{{.register_name="5",.value="2"},{.register_name="6",.value="6"},
+      {.register_name="7",.value="11"},{.register_name="9",.value="0"}};
+  CompileOptions options;options.coalesce_copies=true;options.defer_return_suffix_until_callee_hole=true;
+  PostLayoutControlFlowOptions control;
+  const auto positions=[](const auto& items){std::map<std::string,int> result;int pc=0;
+    for(const auto& item:items){if(item.kind==MachineItemKind::Label)result.emplace(item.name,pc);else ++pc;}return result;};
+  const auto early_copy=[](const auto& ops){
+    for(std::size_t i=1;i<ops.size();++i){
+      if(ops[i-1U].kind==IrKind::Store&&ops[i-1U].register_name=="1"&&ops[i].kind==IrKind::Store&&ops[i].register_name=="9")return true;
+    }return false;
+  };
+  const auto play=[&](const auto& items){const auto resolved=resolve_machine_items(items);
+    require(resolved.diagnostics.empty(),"anticipated fixture resolves");std::vector<int> bytes;
+    for(const auto& step:resolved.steps)bytes.push_back(step.opcode);emulator::MK61 calc;
+    require(calc.load_program(bytes).diagnostics.empty(),"anticipated fixture fits stock memory");
+    for(const auto& word:words)calc.set_register(word.register_name,word.value);
+    calc.press_sequence({"В/О","С/П"});
+    require(calc.run_until_stable(10000,8).stopped,"anticipated copy reaches its observable result");
+    std::vector<std::string> observed;
+    for(const char* reg:{"X","Y","Z","T","X1","0","1","2","3","4","5","6","7","8","9","a","b","c","d","e"})observed.push_back(calc.read_register(reg));
+    calc.press(".");observed.push_back(calc.read_register("X"));return observed;};
+  const auto items=make();const auto origins=positions(items);
+  const auto candidates=passes::contextual_anticipatory_copy_store_candidates(raise_machine_to_ir(items),{options},
+      {.maximum_work=400000,.maximum_candidates=8,.maximum_copy_sites=16,.control=&control,
+       .encoded_target_origins=&origins,.runtime_preloads=&words});
+  require(!candidates.empty(),"a producer and later copy compose without a fixed source/register pattern");
+  bool combined=false;
+  for(const auto& candidate:candidates){
+    require(play(items)==play(lower_ir_to_machine(candidate.transformation.ops)),
+        "early private write and independently removed store preserve every final register, full stack, X1 and decimal shadow");
+    if(!early_copy(candidate.transformation.ops))continue;
+    const auto image=lower_ir_to_machine(candidate.transformation.ops);
+    const auto after_origins=positions(image);
+    const auto erased=passes::deferred_stack_producer_erasure_candidates(candidate.transformation.ops,{options},control,after_origins,
+        {.maximum_candidates=8,.maximum_erased_cells=2,.maximum_proof_attempts=32,.allow_fresh_literal_replacement=true});
+    for(const auto& reduced:erased){
+      require(play(items)==play(lower_ir_to_machine(reduced.ops)),
+          "the composed early copy and fresh-literal deletion preserve the complete ROM observations");
+      combined=combined||cells(lower_ir_to_machine(reduced.ops))<cells(items);
+    }
+  }
+  require(combined,"the neutral lifetime alternative repays itself through general stack-load elimination");
+  for(const bool raw:{false,true}){
+    const auto blocked=make(!raw,raw);const auto blocked_origins=positions(blocked);
+    const auto rejected=passes::contextual_anticipatory_copy_store_candidates(raise_machine_to_ir(blocked),{options},
+        {.maximum_work=400000,.maximum_candidates=8,.maximum_copy_sites=16,.control=&control,
+         .encoded_target_origins=&blocked_origins,.runtime_preloads=&words});
+    require(std::none_of(rejected.begin(),rejected.end(),[&](const auto& value){return early_copy(value.transformation.ops);}),
+        "an old-word read before overwrite or raw producer forbids anticipation at that producer");
+  }
+  require(passes::contextual_anticipatory_copy_store_candidates(raise_machine_to_ir(items),{options},
+      {.maximum_work=1,.runtime_preloads=&words}).empty(),"exhaustion cannot export a partially checked early write");
+  require(passes::contextual_anticipatory_copy_store_candidates(raise_machine_to_ir(items),{options}).empty(),
+      "absent runtime ownership never authorizes anticipation");
+}
+void fresh_literal_producer_proof(){
+  for(const int kind:{0,1,2,3}){
+    MachineEmitter e;if(kind==1){e.emit_op(2);e.emit_op(0x0e);}else e.emit_op(0x68);
+    const auto producer=e.items.size();e.emit_op(0x65);
+    if(kind==3)e.items.back().raw=true;
+    e.emit_op(1);e.emit_op(2);e.emit_op(0x40);
+    if(kind==2)e.emit_op(0x14);else for(int i=0;i<4;++i)e.emit_op(0x67);
+    e.emit_stop(StopDisposition::Terminal);
+    const auto flow=build_post_layout_control_flow(e.items,{});require(flow.proved,"literal-erasure fixture has an exact CFG");
+    require(!prove_post_layout_stack_producer_erasure(e.items,flow,producer),
+        "historical clients retain their original literal replacement policy");
+    require(prove_post_layout_stack_producer_erasure(e.items,flow,producer,
+        {.refine_runtime_selectors=false,.transport_closed_entry_through_control=true,
+         .use_indirect_store_entry_facts=true,.allow_fresh_literal_replacement=true})==(kind==0),
+        "only a grounded fresh literal with unobserved complete stack/X2 permits erasure");
+    require(!prove_post_layout_stack_producer_erasure(e.items,flow,producer,
+        {.refine_runtime_selectors=false,.allow_fresh_literal_replacement=true,.maximum_work=1}),
+        "a literal mode proof must complete within its work budget");
+  }
+}
 void data_and_rom(){
+  typed_direct_webs_ignore_comment_homes();
+  anticipatory_copy_and_literal_loads();
+  fresh_literal_producer_proof();
   typed_reply_web_transport();
   memory_cursor_web_domains();
   quantized_pure_return_completions();

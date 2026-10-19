@@ -50,6 +50,10 @@ struct PostLayoutStackEntryProofOptions {
   // value/mutation. This does not prove X2 equal or weaken alias obligations.
   // Opt in only after complete-artifact pricing, not in greedy charge lowering.
   bool use_indirect_store_entry_facts = false;
+  // Independent complete-artifact lane: a grounded fresh-number lift before
+  // the erased producer lets a following decimal literal synchronize entry.
+  // All changed stack/X1/X2 values still need a universal continuation proof.
+  bool allow_fresh_literal_replacement = false;
   // A proof-work cap, never a sampling limit. Exhaustion rejects the whole query.
   std::size_t maximum_work = 100000;
 };

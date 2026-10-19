@@ -41,6 +41,7 @@ struct DeferredStackProducerLimits {
   std::size_t maximum_candidates = 6;
   std::size_t maximum_erased_cells = 2;
   std::size_t maximum_proof_attempts = 32;
+  bool allow_fresh_literal_replacement = false;
 };
 
 // Keep alternative deletion subsets, not only a greedy shortest prefix:
