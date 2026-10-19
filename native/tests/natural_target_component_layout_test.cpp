@@ -5,8 +5,10 @@
 #include "mkpro/core/indirect_addressing.hpp"
 #include "mkpro/core/late_bound_decimal_selector.hpp"
 #include "mkpro/core/layout_gap_capacity_bound.hpp"
+#include "mkpro/core/layout_search_artifact.hpp"
 #include "mkpro/core/opcodes.hpp"
 #include "mkpro/core/selector_writeback.hpp"
+#include "mkpro/core/stable_register_value_flow.hpp"
 #include "mkpro/emulator/mk61.hpp"
 
 #include "test_support.hpp"
@@ -862,6 +864,97 @@ bool reason_contains(const core::NaturalTargetComponentLayoutPlan& plan,
 
 void natural_target_component_layout_is_generic_and_proof_gated() {
   {
+    std::vector<MachineItem> items{op(0x52), op(0x61), op(0x62), op(0x50),
+        op(0x43), op(0x53), MachineItem::address(std::string{"resume_leaf"}),
+        op(0x53), MachineItem::address(std::string{"following_leaf"}), stop()};
+    items[3].stop_disposition = StopDisposition::Resumable;
+    items[3].manual_interaction = ManualInteractionAnchor{
+        .protocol_id=17, .phase=-1, .kind=ManualInteractionAnchorKind::PromptStop};
+    items[4].manual_interaction = ManualInteractionAnchor{
+        .protocol_id=17, .phase=0, .kind=ManualInteractionAnchorKind::SingleStepCommand};
+    items[5].manual_interaction = ManualInteractionAnchor{
+        .protocol_id=17, .phase=1, .kind=ManualInteractionAnchorKind::ContinuousResume};
+    while (cell_count(items) < 20) items.push_back(op(0x54));
+    items.push_back(MachineItem::label("resume_leaf"));
+    items.push_back(op(0x34)); items.push_back(op(0x52));
+    while (cell_count(items) < 30) items.push_back(op(0x54));
+    items.push_back(MachineItem::label("following_leaf"));
+    items.push_back(op(0x22)); items.push_back(op(0x52));
+    const std::vector<PreloadReport> words{
+        {.register_name="8", .value="10000018"},
+        {.register_name="9", .value="10000028"}};
+    core::PostLayoutControlFlowOptions control; control.empty_return_target = 1;
+    const auto graph = core::build_post_layout_control_flow(items, control);
+    require(graph.proved && core::prove_post_layout_input_boundaries(items, graph).proved,
+            "typed-resume allocation fixture has a complete two-phase input contract");
+    const auto contains_resume_conversion = [](const auto& candidate) {
+      return std::any_of(candidate.items.begin(), candidate.items.end(), [](const auto& item) {
+        return item.manual_interaction &&
+            item.manual_interaction->kind == ManualInteractionAnchorKind::ContinuousResume &&
+            item.opcode >= 0xa7 && item.opcode <= 0xae;
+      });
+    };
+    const auto historical = core::balanced_deferred_natural_target_selector_allocations(
+        items, words, graph, {}, control);
+    require(std::none_of(historical.begin(), historical.end(), contains_resume_conversion),
+            "the default allocation policy keeps its original manual-entry barrier");
+    core::DeferredNaturalTargetSelectorAllocationOptions enabled;
+    enabled.allow_typed_resume_conversion = true;
+    const auto candidates = core::balanced_deferred_natural_target_selector_allocations(
+        items, words, graph, {}, control, enabled);
+    const auto chosen = std::find_if(candidates.begin(), candidates.end(), [&](const auto& candidate) {
+      if (!contains_resume_conversion(candidate) || candidate.cell_delta != -2) return false;
+      const auto after = core::build_post_layout_control_flow(candidate.items, control);
+      for (const auto& [site, targets] : after.indirect_flow_targets) {
+        const auto reg = candidate.items[site].opcode & 15;
+        const auto word = std::find_if(words.begin(), words.end(), [&](const auto& value) {
+          return value.register_name == std::string(1, "0123456789abcde"[reg]);
+        });
+        if (word == words.end() || targets.size() != 1U) return false;
+        const auto decoded = core::evaluate_indirect_address(word->register_name, word->value,
+            core::IndirectOperationKind::Flow);
+        if (!decoded || decoded->actual_flow_target != targets.front().address) return false;
+      }
+      return after.proved && core::prove_post_layout_input_boundaries(candidate.items, after).proved;
+    });
+    require(chosen != candidates.end(),
+            "joint resume/call assignment saves both operands and closes its exact address equations");
+    const auto run = [&](const auto& image, const std::string& x, const std::string& y) {
+      const auto resolved = resolve_machine_items(image);
+      require(resolved.diagnostics.empty(), "typed-resume image resolves");
+      std::vector<int> codes; for (const auto& step : resolved.steps) codes.push_back(step.opcode);
+      emulator::MK61 calc;
+      require(calc.load_program(codes).diagnostics.empty(), "typed-resume image fits stock ROM");
+      for (int reg=0; reg<15; ++reg)
+        calc.set_register(std::string(1,"0123456789abcde"[reg]),std::to_string(reg+2));
+      for (const auto& word : words) calc.set_register(word.register_name,word.value);
+      calc.press_sequence({"В/О","С/П"});
+      require(calc.run_until_stable(5000,8).stopped, "typed-resume prompt stops");
+      std::vector<std::string> out{calc.read_register("X"),calc.read_register("Y")};
+      calc.input_number(x).press("ПП");
+      out.push_back(calc.read_register("3"));
+      calc.input_number(y).press("С/П");
+      require(calc.run_until_stable(5000,8).stopped, "typed-resume calls return to the same terminal observation");
+      for (const char* reg : {"X","Y","Z","T","X1"}) out.push_back(calc.read_register(reg));
+      for (int reg=0;reg<15;++reg) out.push_back(calc.read_register(std::string(1,"0123456789abcde"[reg])));
+      calc.press("."); out.push_back(calc.display_text(true));
+      return out;
+    };
+    for (const std::string y : {"-3.5","0","2.75","9.125"})
+      require(run(items,"7.25",y) == run(chosen->items,"7.25",y),
+              "ROM preserves prompt, single step, resume, all registers, stack, X1 and hidden entry");
+    auto malformed = items; malformed[5].manual_interaction->protocol_id = 18;
+    const auto malformed_graph = core::build_post_layout_control_flow(malformed,control);
+    const auto rejected = core::balanced_deferred_natural_target_selector_allocations(
+        malformed,words,malformed_graph,{},control,enabled);
+    require(std::none_of(rejected.begin(),rejected.end(),contains_resume_conversion),
+            "inconsistent manual protocols never authorize a shorter resume call");
+    enabled.maximum_assignments = 0;
+    require(core::balanced_deferred_natural_target_selector_allocations(
+        items,words,graph,{},control,enabled).empty(),
+            "exhausted selector allocation cannot export a partial resume certificate");
+  }
+  {
     // Exhaustively compare the optimistic independent-gap bound with the
     // true disjoint assignment problem, including trailing unused components.
     const auto exact_padding = [](const std::vector<int>& lengths,
@@ -941,7 +1034,41 @@ void natural_target_component_layout_is_generic_and_proof_gated() {
       const auto input_flow = flow(input);
       const auto cached = core::optimize_natural_target_component_layout(
           input.items, input.preloads, input_flow, options);
+      options.eager_symbolic_flow_analysis = true;
+      options.flow_proof_cache = core::make_natural_target_flow_proof_cache(16);
+      const auto eager = core::optimize_natural_target_component_layout(
+          input.items, input.preloads, input_flow, options);
+      const auto warm = core::optimize_natural_target_component_layout(
+          input.items, input.preloads, input_flow, options);
+      const auto stats = core::natural_target_flow_proof_cache_stats(options.flow_proof_cache);
+      require(stats.hits > 0 && stats.insertions > 0 && stats.resident_entries <= 16 &&
+                  stats.effect_hits > 0 && stats.effect_evaluations > 0,
+              "only complete exact-trace X2 fixed points are reused between layouts");
+      const auto exact_artifact = [](const auto& left, const auto& right) {
+        return core::same_layout_search_artifact(
+            {left.items, left.preloads, {}}, {right.items, right.preloads, {}}) &&
+            left.removed_cells == right.removed_cells &&
+            left.plan.stack_and_x2_equivalent == right.plan.stack_and_x2_equivalent &&
+            left.plan.call_return_equivalent == right.plan.call_return_equivalent;
+      };
+      require(exact_artifact(cached, eager) && exact_artifact(eager, warm),
+              "cold, completed-cache and lazy proofs publish the identical typed artifact");
+      auto annotated = input.items;
+      annotated.front().comment = "opaque proof identity";
+      const auto annotated_flow = core::build_post_layout_control_flow(annotated);
+      const auto changed_identity = core::optimize_natural_target_component_layout(
+          annotated, input.preloads, annotated_flow, options);
+      const auto after = core::natural_target_flow_proof_cache_stats(options.flow_proof_cache);
+      require(after.insertions > stats.insertions && after.resident_entries <= 16,
+              "equal bytes with different typed metadata cannot borrow a completed proof");
+      options.flow_proof_cache.reset();
+      const auto independent = core::optimize_natural_target_component_layout(
+          annotated, input.preloads, annotated_flow, options);
+      require(exact_artifact(changed_identity, independent),
+              "cache eviction and identity misses preserve the independent full proof");
+      options.eager_symbolic_flow_analysis = false;
       options.memoize_layout_geometry = false;
+      options.memoize_flow_effects = false;
       const auto uncached = core::optimize_natural_target_component_layout(
           input.items, input.preloads, input_flow, options);
       require(cached.plan.proved && uncached.plan.proved &&

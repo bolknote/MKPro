@@ -1652,7 +1652,8 @@ TransactionSearchResult<LayoutSearchArtifact> search_joint_representation_constr
           : deferred_natural_target_selector_allocations;
       const auto allocations = allocate(
           source.artifact.items, source.artifact.preloads, source_flow, encoded,
-          control_options, {.maximum_assignments = 128, .maximum_candidates = cap,
+          control_options, {.allow_typed_resume_conversion = coupled_geometry,
+                            .maximum_assignments = 128, .maximum_candidates = cap,
                             .maximum_growth_cells = limits.maximum_growth_cells});
       if (allocations.empty()) continue;
       ++output.expanded;

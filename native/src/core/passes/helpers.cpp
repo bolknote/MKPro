@@ -1,4 +1,5 @@
 #include "mkpro/core/passes/helpers.hpp"
+#include "mkpro/core/detail/decimal_mantissa_syntax.hpp"
 
 #include "mkpro/core/formal_address.hpp"
 #include "mkpro/core/indirect_addressing.hpp"
@@ -2600,21 +2601,16 @@ int decimal_mantissa_digit_count(const std::string& raw) {
 }
 
 std::optional<std::string> normalize_decimal_mantissa_entry(const std::string& raw) {
-  static const std::regex pattern(R"(^(-?)([0-9]{1,8})(?:\.([0-9]*))?$)");
-  std::smatch match;
-  if (!std::regex_match(raw, match, pattern))
+  if (!detail::is_plain_decimal_mantissa(raw))
     return std::nullopt;
-  if (decimal_mantissa_digit_count(raw) > 8)
-    return std::nullopt;
-  const std::string sign = match[1].str();
-  const std::string integer = match[2].str();
-  if (!match[3].matched || match[3].str().empty())
-    return normalize_plain_decimal(sign + integer);
-  return normalize_plain_decimal(sign + integer + "." + match[3].str());
+  // Entry syntax permits a trailing point; the general decimal parser does
+  // not. Preserve the old mantissa normalizer rather than losing 0. facts.
+  return normalize_plain_decimal(
+      raw.ends_with('.') ? raw.substr(0, raw.size() - 1U) : raw);
 }
 
 bool decimal_mantissa_shape_raw_is_valid(const std::string& raw) {
-  return normalize_decimal_mantissa_entry(canonical_shape_raw(raw)).has_value();
+  return detail::is_plain_decimal_mantissa(canonical_shape_raw(raw));
 }
 
 bool decimal_exponent_mantissa_raw_is_valid(const std::string& raw) {
@@ -17633,6 +17629,27 @@ X2ValueDataflowState clone_x2_value_dataflow_state(const X2ValueDataflowState& i
 }
 
 X2ValueDataflowState join_x2_value_dataflow_states(
+    const X2ValueDataflowState* current, const X2ValueDataflowState& incoming,
+    bool track_register_memory) {
+  return x2eval::tx_join_x2_value_dataflow_states(current, incoming, track_register_memory);
+}
+
+bool same_x2_value_dataflow_state(const X2ValueDataflowState& left,
+                                 const X2ValueDataflowState& right) {
+  return x2eval::tx_same_x2_value_dataflow_state(&left, &right);
+}
+
+bool same_x2_value_dataflow_state(const std::optional<X2ValueDataflowState>& left,
+                                 const X2ValueDataflowState& right) {
+  return left && same_x2_value_dataflow_state(*left, right);
+}
+
+bool same_x2_value_dataflow_state(const X2ValueDataflowState& left,
+                                 const std::optional<X2ValueDataflowState>& right) {
+  return right && same_x2_value_dataflow_state(left, *right);
+}
+
+X2ValueDataflowState join_x2_value_dataflow_states(
     const std::optional<X2ValueDataflowState>& current, const X2ValueDataflowState& incoming,
     bool track_register_memory) {
   return x2eval::tx_join_x2_value_dataflow_states(current.has_value() ? &*current : nullptr, incoming,
@@ -17742,14 +17759,21 @@ compute_x2_value_states(const std::vector<IrOp>& ops, const X2ValueStatesOptions
 }
 
 std::optional<X2ValueDataflowState>
+transfer_x2_value_state_for_edge(const X2ValueDataflowState& input, const IrOp& op,
+                                X2DataflowEdgeKind edge, const X2TransferStateOptions& options,
+                                std::optional<int> producer_index) {
+  return internal_transfer_x2_value_dataflow_state(input, op, edge, options.track_register_memory,
+                                                  producer_index, options.target_starts_with_vp);
+}
+
+std::optional<X2ValueDataflowState>
 transfer_x2_value_state_for_edge(const std::optional<X2ValueDataflowState>& input, const IrOp& op,
                                 X2DataflowEdgeKind edge, const X2TransferStateOptions& options,
                                 std::optional<int> producer_index) {
   if (!input.has_value()) {
     return std::nullopt;
   }
-  return internal_transfer_x2_value_dataflow_state(*input, op, edge, options.track_register_memory,
-                                                  producer_index, options.target_starts_with_vp);
+  return transfer_x2_value_state_for_edge(*input, op, edge, options, producer_index);
 }
 
 std::optional<X2ValueDataflowState>

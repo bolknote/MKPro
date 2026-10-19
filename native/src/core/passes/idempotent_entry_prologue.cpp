@@ -33,6 +33,7 @@ struct Shape {
   std::string helper, normalizer;
   bool memory_argument = false;
   bool compact_memory_entry = false;
+  bool resident_first_source = false;
   Index first_normalizer() const {
     return first - (memory_argument ? 5U : 4U);
   }
@@ -47,6 +48,12 @@ struct Shape {
   }
   Index second_x() const {
     return second - (compact_memory_entry ? 3U : memory_argument ? 2U : 1U);
+  }
+  Index aligned_x() const {
+    return resident_first_source ? second - 4U : second_x();
+  }
+  Index second_region_begin() const {
+    return resident_first_source ? second - 4U : second_y();
   }
 };
 std::vector<Shape> shapes(const std::vector<IrOp>& ops) {
@@ -93,6 +100,14 @@ std::vector<Shape> shapes(const std::vector<IrOp>& ops) {
         }
     }
   }
+  // Preserve historical shapes; the source-resident ABI is an independent
+  // alternative with its own source-web equality and complete memory proof.
+  const auto established = result;
+  for (auto shape : established)
+    if (shape.compact_memory_entry) {
+      shape.resident_first_source = true;
+      result.push_back(std::move(shape));
+    }
   return result;
 }
 struct Leaf {
@@ -429,6 +444,11 @@ void original_prefix(terms::Evaluation& e, const std::vector<IrOp>& ops, const S
     e.execute(ops[shape.first_x()]);
     e.call(n.body);
   } else {
+    if (shape.resident_first_source) {
+      e.execute(ops[shape.second - 4U]);
+      e.execute(ops[shape.second - 3U]);
+      e.execute(ops[shape.second - 2U]);
+    }
     e.execute(ops[shape.second_y()]);
     if (!shape.compact_memory_entry)
       e.execute(ops[shape.second_x()]);
@@ -438,7 +458,9 @@ void original_prefix(terms::Evaluation& e, const std::vector<IrOp>& ops, const S
   evaluate_helper(e, h, finite_total, true);
 }
 void new_prefix(terms::Evaluation& e, const std::vector<IrOp>& ops, const Shape& shape,
-                const Leaf& n, const Leaf& h, bool finite_total = false) {
+                const Leaf& n, const Leaf& h, bool finite_total = false, bool first = true) {
+  if (!first && shape.resident_first_source)
+    e.execute(ops[shape.second - 2U]);
   e.synchronize_call();
   e.call(n.body);
   e.execute(ops[shape.first_y()]);
@@ -454,7 +476,7 @@ std::vector<RegisterWebRecoloringRequest>
 idempotent_entry_prologue_register_requests(const std::vector<IrOp>& ops) {
   std::vector<RegisterWebRecoloringRequest> result;
   for (const auto& shape : shapes(ops)) {
-    const RegisterWebRecoloringRequest base{{shape.first_x(), shape.second_x()}};
+    const RegisterWebRecoloringRequest base{{shape.first_x(), shape.aligned_x()}};
     result.push_back(base);
     const auto h = leaf(ops, shape.helper);
     if (!h || h->body.empty() || (!shape.memory_argument && h->body.front().kind != IrKind::Store))
@@ -465,9 +487,24 @@ idempotent_entry_prologue_register_requests(const std::vector<IrOp>& ops) {
           ops[i - 1U].register_name == parameter.register_name &&
           ops[i].register_name != ops[i - 1U].register_name) {
         auto combined = base;
-        combined.push_back({shape.second_x(), i});
+        combined.push_back({shape.aligned_x(), i});
         result.push_back(std::move(combined));
       }
+  }
+  // Reply/input/source equalities name lifetimes, not equal values.
+  std::size_t reply_requests = 0;
+  for (const auto& shape : shapes(ops)) {
+    if (!shape.resident_first_source || reply_requests >= 8U) continue;
+    const auto input = shape.first_normalizer() - 1U;
+    if (input < 2U || !ops[input].meta.manual_interaction ||
+        ops[input - 1U].kind != IrKind::Stop || !ops[input - 1U].meta.manual_interaction ||
+        ops[input - 1U].meta.manual_interaction->kind != ManualInteractionAnchorKind::PromptStop ||
+        ops[input - 1U].meta.manual_interaction->protocol_id !=
+            ops[input].meta.manual_interaction->protocol_id ||
+        ops[input - 2U].kind != IrKind::Recall) continue;
+    result.push_back({{shape.first_x(), shape.aligned_x()},
+                      {shape.first_x(), input - 2U}});
+    ++reply_requests;
   }
   return result;
 }
@@ -521,9 +558,12 @@ std::vector<PassResult> deferred_idempotent_entry_prologue_candidates(
   if (prepared.applied <= 0)
     return result;
   for (const auto& shape : candidates) {
-    if (ops[shape.first_x()].register_name != ops[shape.second_x()].register_name)
+    if (ops[shape.first_x()].register_name != ops[shape.aligned_x()].register_name)
       continue;
     const auto n = leaf(ops, shape.normalizer), h = leaf(ops, shape.helper);
+    if (shape.resident_first_source &&
+        ops[shape.second - 4U].register_name == ops[shape.second - 2U].register_name)
+      continue; // Independent finite images cannot be invented for aliases.
     if (!n || !h || !ordinary_total_leaf(*n) || h->body.empty() ||
         (!shape.memory_argument && h->body.front().kind != IrKind::Store) ||
         (shape.memory_argument && std::any_of(h->body.begin(), h->body.end(), [](const auto& op) {
@@ -617,12 +657,16 @@ std::vector<PassResult> deferred_idempotent_entry_prologue_candidates(
           equivalent = false;
           break;
         }
-        before.state.stack[0] = *vy;
+        if (shape.resident_first_source)
+          before.state.registers.at(static_cast<Index>(
+              register_index(ops[shape.second - 2U].register_name))) = *vy;
+        else
+          before.state.stack[0] = *vy;
         before.state.registers.at(
             static_cast<Index>(register_index(ops[shape.first_x()].register_name))) = *vx;
         after = before;
         original_prefix(before, ops, shape, *n, *h, false, shape.compact_memory_entry);
-        new_prefix(after, ops, shape, *n, *h, shape.compact_memory_entry);
+        new_prefix(after, ops, shape, *n, *h, shape.compact_memory_entry, false);
         equivalent = before.valid && after.valid && before.observations == after.observations &&
                      before.state.registers == after.state.registers &&
                      before.state.literal == after.state.literal;
@@ -645,7 +689,7 @@ std::vector<PassResult> deferred_idempotent_entry_prologue_candidates(
       // A moved/rewritten operation cannot serve as its own convergence witness.
       for (Index i = shape.first_normalizer(); i <= shape.first; ++i)
         future[machine[i]].raw = true;
-      for (Index i = shape.second_y(); i <= shape.second; ++i)
+      for (Index i = shape.second_region_begin(); i <= shape.second; ++i)
         future[machine[i]].raw = true;
       future[machine[h->begin]].raw = true;
       future[machine[*divergent]].raw = true;
@@ -662,8 +706,9 @@ std::vector<PassResult> deferred_idempotent_entry_prologue_candidates(
       body += '_';
     std::vector<IrOp> output;
     std::set<Index> erased;
-    for (Index i = shape.second_y(); i < shape.second; ++i)
-      erased.insert(i);
+    for (Index i = shape.second_region_begin(); i < shape.second; ++i)
+      if (!shape.resident_first_source || i != shape.second - 2U)
+        erased.insert(i);
     if (!shape.memory_argument)
       erased.insert(h->begin);
     for (Index i = shape.first_normalizer(); i < shape.first; ++i)
@@ -717,6 +762,8 @@ std::vector<PassResult> deferred_idempotent_entry_prologue_candidates(
               "stack/X1/X2 differences unobservable on every exact continuation. Supported stored "
               "and "
               "one-X parameter ABIs, retaining all memory effects; checked all entry routes, "
+              "with an independently proved resident-source ABI able to omit the "
+              "first-argument copy and the second-argument store; "
               "unchanged selector writeback, "
               "final call/return depth and input protocol. Physical selector and side-entry "
               "placement remain mandatory."}}});

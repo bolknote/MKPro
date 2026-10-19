@@ -964,6 +964,28 @@ void prologue_reopens_argument_lifetimes(){
     std::vector<std::string> out;for(const char* r:{"X","Y","Z","T","X1"})out.push_back(calc.read_register(r));return out;
   };
   require(play(e.items)==play(lower_ir_to_machine(after.ops)),"ROM preserves the complete public continuation after entry/lifetime feedback");
+  const auto requests = passes::idempotent_entry_prologue_register_requests(code);
+  bool source_demand = false;
+  for (const auto& request : requests)
+    for (const auto& [left, right] : request)
+      if (code[left].kind == IrKind::Recall && code[left].register_name == "1" &&
+          code[right].kind == IrKind::Recall && code[right].register_name == "0")
+        source_demand = true;
+  require(source_demand, "resident-source factoring demands the incoming source web, not its overwritten destination");
+  std::optional<std::vector<MachineItem>> resident;
+  passes::for_each_deferred_register_web_recoloring(
+      code, {options}, requests, control, origins(e.items), [&](const auto& colored) {
+        for (const auto& candidate : passes::deferred_idempotent_entry_prologue_candidates(
+                 colored, words, control, origins(e.items))) {
+          auto items = lower_ir_to_machine(candidate.ops);
+          if (cells(items) <= cells(e.items) - 3 &&
+              (!resident || cells(items) < cells(*resident))) resident = std::move(items);
+        }
+      }, &words, true);
+  require(resident.has_value(), "whole source-copy removal composes recoloring and entry ABI for at least three cells");
+  require(play(e.items) == play(*resident),
+          "ROM retains the two-phase UI and complete later stack observation after resident-source entry factoring");
+
   auto frozen_formal = shared.front().ops;
   bool froze_call = false;
   for (auto& op : frozen_formal) {
@@ -1579,7 +1601,111 @@ void quantized_pure_return_completions(){
   }
 }
 
+void typed_reply_web_transport(){
+  for(int kind=0;kind<5;++kind){
+    MachineEmitter e;e.emit_op(7);e.emit_op(0x48);e.emit_op(0x68);
+    e.items.back().comment="display reply";
+    if(kind==1)e.items.back().roles.push_back("display-byte");
+    e.emit_stop(StopDisposition::Resumable);
+    if(kind!=2)e.items.back().manual_interaction=ManualInteractionAnchor{
+        .protocol_id=31,.phase=-1,.kind=ManualInteractionAnchorKind::PromptStop};
+    e.emit_op(0x43);e.items.back().manual_interaction=ManualInteractionAnchor{
+        .protocol_id=31,.phase=0,.kind=ManualInteractionAnchorKind::SingleStepCommand};
+    e.emit_jump(0x53,"resume normalization","reply_normalize");
+    e.items[e.items.size()-2U].manual_interaction=ManualInteractionAnchor{
+        .protocol_id=31,.phase=1,.kind=ManualInteractionAnchorKind::ContinuousResume};
+    e.emit_op(1);e.emit_op(5);e.emit_op(0x40);e.emit_op(0x80);
+    e.items.back().indirect_flow_targets=std::vector<IrTarget>{std::string{"reply_done"}};
+    e.emit_stop(StopDisposition::Terminal);e.emit_op(0x54);e.emit_op(0x54);
+    e.emit_label("reply_done");e.emit_op(kind==3?0x68:0x63);e.emit_stop(StopDisposition::Terminal);
+    if(kind==4)e.items.back().roles.clear();
+    e.emit_label("reply_normalize");e.emit_op(0x34);e.emit_op(0x52);
+    const auto ops=raise_machine_to_ir(e.items);
+    std::size_t reply=ops.size(),fixed=ops.size();
+    for(std::size_t i=0;i<ops.size();++i){
+      if(ops[i].kind==IrKind::Recall&&ops[i].meta.comment==std::optional<std::string>{"display reply"})reply=i;
+      if(ops[i].kind==IrKind::Store&&ops[i].register_name=="0")fixed=i;
+    }
+    CompileOptions o;o.coalesce_copies=true;PostLayoutControlFlowOptions control;
+    const std::vector<PreloadReport> words;
+    const std::map<std::string,int> origins{{"reply_done",14},{"reply_normalize",16}};
+    std::vector<std::vector<IrOp>> candidates;
+    passes::for_each_deferred_register_web_recoloring(ops,{o},{{{reply,fixed}}},control,origins,
+        [&](auto candidate){candidates.push_back(std::move(candidate));},&words,true);
+    require(!candidates.empty()==(kind==0),
+        "only a dead typed reply web may override a comment hint; byte roles, untyped entry, later reads and public banks stay fixed");
+    if(kind!=0)continue;
+    require(candidates.front()[reply].register_name=="0",
+        "the typed reply recall follows its producer into the shared physical home");
+    const auto run=[&](const auto& code){
+      const auto image=resolve_machine_items(lower_ir_to_machine(code));
+      require(image.diagnostics.empty(),"typed reply allocation resolves");
+      std::vector<int> bytes;for(const auto&s:image.steps)bytes.push_back(s.opcode);
+      emulator::MK61 calc;require(calc.load_program(bytes).diagnostics.empty(),"typed reply fixture fits ROM");
+      calc.press_sequence({"В/О","С/П"});
+      require(calc.run_until_stable(5000,8).stopped,"typed reply prompt retained");
+      std::vector<std::string> out{calc.read_register("X"),calc.read_register("Y")};
+      calc.input_number("4.75").press("ПП");calc.input_number("2.5").press("С/П");
+      require(calc.run_until_stable(5000,8).stopped,"typed reply continuation terminates");
+      for(const char*r:{"X","Y","Z","T","X1","0","3"})out.push_back(calc.read_register(r));
+      calc.press(".");out.push_back(calc.display_text(true));return out;
+    };
+    require(run(ops)==run(candidates.front()),
+        "ROM preserves the displayed reply, two input phases and every subsequent program/stack observation");
+  }
+}
+
+void memory_cursor_web_domains(){
+  for(int kind=0;kind<6;++kind){
+    const int source=kind==3?4:kind==5?1:0;
+    const int target_cursor=kind==5?0:3;
+    MachineEmitter e;e.emit_op(source==4?6:8);e.emit_op(0x40+source);
+    e.emit_op(0xd0+source);
+    if(kind!=2)e.items.back().indirect_memory_targets=kind==1?
+        std::vector<int>{0,7}:std::vector<int>{7};
+    e.emit_op(0x4a);e.emit_op(1);e.emit_op(1);e.emit_op(0x40+target_cursor);
+    e.emit_op(0x80+target_cursor);e.items.back().indirect_flow_targets=std::vector<IrTarget>{std::string{"cursor_done"}};
+    e.emit_stop(StopDisposition::Terminal);e.emit_op(0x54);
+    e.emit_label("cursor_done");e.emit_op(0x6a);e.emit_stop(StopDisposition::Terminal);
+    if(kind!=4)e.items.back().roles.push_back(kTypedDisplayObservationRole);
+    else e.items.back().roles.clear(); // The emitter supplies this private-display role by default.
+    const auto ops=raise_machine_to_ir(e.items);
+    std::size_t cursor=ops.size(),destination=ops.size();
+    for(std::size_t i=0;i<ops.size();++i){
+      if(ops[i].kind==IrKind::IndirectRecall)cursor=i;
+      if(ops[i].kind==IrKind::Store&&ops[i].register_name==std::string(1,"0123456789abcde"[target_cursor]))destination=i;
+    }
+    require(cursor<ops.size()&&destination<ops.size(),"cursor fixture owns distinct exact lifetime operands");
+    const std::vector<PreloadReport> words{{.register_name="7",.value="42"}};
+    const std::map<std::string,int> origins{{"cursor_done",10}};
+    CompileOptions o;o.coalesce_copies=true;PostLayoutControlFlowOptions control;
+    std::vector<std::vector<IrOp>> proposals;
+    passes::for_each_deferred_register_web_recoloring(ops,{o},{{{cursor,destination}}},control,origins,
+        [&](auto candidate){proposals.push_back(std::move(candidate));},&words,true);
+    require(!proposals.empty()==(kind==0),
+        "only a private complete non-self-aliasing predecrement cursor may share a later fixed epoch without entering R0 from R1..R3");
+    if(kind!=0)continue;
+    const auto& changed=proposals.front();
+    require(changed[cursor].opcode==0xd3&&changed[cursor].register_name=="3"&&
+        changed[cursor].meta.indirect_memory_targets==ops[cursor].meta.indirect_memory_targets,
+        "the selector opcode moves but its indexed physical bank targets do not");
+    const auto run=[&](const auto& code){
+      const auto image=resolve_machine_items(lower_ir_to_machine(code));
+      require(image.diagnostics.empty(),"cursor allocation resolves");
+      std::vector<int> bytes;for(const auto&s:image.steps)bytes.push_back(s.opcode);
+      emulator::MK61 calc;require(calc.load_program(bytes).diagnostics.empty(),"cursor fixture fits stock ROM");
+      calc.set_register("7","42");calc.press_sequence({"В/О","С/П"});
+      require(calc.run_until_stable(5000,8).stopped,"memory cursor and later control epoch both terminate");
+      std::vector<std::string> out;for(const char*reg:{"X","Y","Z","T","X1","7","a"})out.push_back(calc.read_register(reg));
+      calc.press(".");out.push_back(calc.display_text(true));return out;
+    };
+    require(run(ops)==run(changed),"ROM preserves every future observation, stack, X1 and hidden entry after cursor recoloring");
+  }
+}
+
 void data_and_rom(){
+  typed_reply_web_transport();
+  memory_cursor_web_domains();
   quantized_pure_return_completions();
   finite_return_selector_orbits();
   predicate_qualified_store_identity();

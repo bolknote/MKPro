@@ -5661,3 +5661,101 @@ A delivered ordinary finite carrier whose only writes are independently checked 
 ### Quantized pure return completion
 
 An ignored return may share the final `В/О` of an existing pure helper. The compiler derives ordinary per-context input bounds, uses an initial integer quantizer to obtain a complete finite image, and exhaustively proves the remaining arithmetic total without unknown operand/last-X/X2 reads. It separately proves all changed stack/X1/X2 values unobservable and both numeric-entry boundaries closed. The helper is moved, not copied; incoming branch labels still skip to its retained final return, while physical fallthrough alone executes the extra pure body. Exact rooted control transport accounts for the additional execution without inventing a frame or altering a saved continuation. Every original data/address equation remains pending until joint placement. Unknown domains, traps, memory effects, observed results, noncanonical/external paths and exhausted proofs fail closed.
+
+## Exact X2 analysis hot path
+
+Existing abstract states are borrowed by reference rather than copied into a
+transient optional before each transfer. Optional-input callers retain the
+same absent-state behavior and use the same transfer engine. Comparison and
+nullable joins borrow their operands as well, without temporary optional
+state copies. Both the present and absent join cases preserve the original
+register-memory projection policy. Exact structural
+equality includes all entry, VP, shape, memory and transient fields; it is
+separate from the existing semantic fixed-point equality.
+
+Plain decimal mantissa entry uses a bounded ASCII scanner with the same
+optional minus, required integer digits, optional point and eight-digit limit
+as the previous regex. It does not normalize raw syntax, trim whitespace or
+admit exponent/BCD forms. Exhaustive short-string and boundary regressions
+compare its domain with the previous grammar. Borrowed/optional transfer
+matrices compare every abstract field for all edge and entry policies.
+No proof, candidate, fixed-point or layout budget changes.
+
+Completed X2 flow proofs may be reused within one absolute-layout transaction.
+The bounded, synchronized cache keys every typed instruction field, the exact
+return-context trace and the external-entry command set; it does not key only
+bytes, labels or numeric equality. Only a completed fixed point is retained,
+without shared mutable proof state. Canonicalization to a different trace
+rebuilds incoming edges and invalidates the old fixed point. Eviction and a
+disabled cache recompute the same proof, never prune a search edge. Tests
+compare cold, warm, uncached and metadata-distinct artifacts exactly.
+
+The same exact context memoizes completed flow-effect comparisons, including
+negative results, their first failing command and X2 reconvergence counts.
+Its key preserves ordered source/target command identities, original and
+replacement opcode families, selector register names/indices and released
+registers. Placement addresses are absent because the proof never reads
+them; final geometry, CFG and runtime selectors are still proved separately.
+A trace change invalidates both caches. A disabled effect memo recomputes the
+original comparison; differential tests require the identical typed artifact.
+
+### Source-resident entry prologues
+
+For an entry that restores two stored operands, a register-web equality must
+refer to the first operand's incoming source, not the destination overwritten
+by its copy. The source-resident ABI preserves the older alternatives, but
+can omit the whole first recall/store plus the second store when the shared
+prologue independently reconstructs the same memory values. Exact finite
+images prove both added normalizations total and identity; symbolic execution
+compares all registers and error observations. Distinct source epochs and
+interior-entry closure are mandatory. Any changed stack/X1/X2 must be proved
+unobservable on every later continuation, excluding the rewritten prefix
+from its own convergence witnesses. A ROM regression composes web recoloring
+and this ABI without changing the typed two-input protocol.
+
+Single-opcode IR classification is lazily memoized per thread from the
+original raiser, not duplicated in a handwritten dispatch table. Repeated
+helper/continuation analysis avoids allocating an IR vector for every opcode
+visit. Exhaustive cold/warm tests compare all 256 default-profile commands.
+
+### Typed resume selector allocation
+
+The coupled family allocator may convert a direct call at a validated
+ContinuousResume boundary to the same indirect call identity. This is an
+explicit separate option; older allocation lanes retain their original
+policy. It never moves/deletes the preceding SingleStepCommand or the prompt.
+The existing opcode-effect/X2 proof, exact external-entry and return trace,
+selector-writeback proof and final input-boundary proof are all mandatory.
+The chosen selector retains an encoded-address equation until layout, rather
+than forcing the new entry to occupy its provisional position.
+
+### Mutating memory-cursor webs
+
+An explicitly requested complete-artifact recoloring may move a predecrement
+memory selector independently of the indexed bank epochs. Only typed
+IndirectRecall/IndirectStore operands in R0..R3 are eligible, with a complete
+nonempty bank target set confined to R4..Re. Every bank epoch remains fixed.
+The selector domain is intersected with R1..R3, or R0..R3 for a source R0
+whose authoritative memory targets exclude R3 (therefore exclude its special
+positive-fraction decode). No R1..R3 value is moved into that R0 exception.
+Raw/manual/frozen selectors, possible cursor-bank self aliases and unknown
+targets remain fixed. Exact reaching definitions, interference, list coloring,
+input boundaries and selector-consistent return contexts still authorize the
+whole allocation. Reply/input/source equalities are independent demands, not
+assertions that their values coincide.
+
+Explicit register-web equality requests may use the existing deterministic,
+bounded list-color backtracking after a failed greedy witness (4096 work
+units). This composes multiple domain-restricted hardware moves rather than
+requiring each one to improve an independent local assignment. Ordinary
+copy deletion keeps its historical greedy-only policy. No failed/partial
+coloring is emitted; the complete interference and fixed-color equations
+are independently checked before the candidate reaches data/layout closure.
+
+A direct reply recall immediately before a validated typed PromptStop may
+move with its definition web. The explicit input/output contract supersedes
+legacy comment-word hints such as "display"; it does not relax raw/manual
+reads or an explicit display-byte/unknown semantic role. Its guarded
+definition/use demands and all physical-bank alias/entry obligations remain
+part of the same allocation proof. A recolored recall delivers the identical
+word to the prompt; this is never a license to change the displayed value.

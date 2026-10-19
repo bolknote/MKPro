@@ -1,3 +1,4 @@
+#include "mkpro/core/detail/basic_opcode_ir_kind.hpp"
 #include "mkpro/core/cyclic_end_return.hpp"
 
 #include "mkpro/core/opcodes.hpp"
@@ -49,9 +50,7 @@ ArtifactIndex index_artifact(const std::vector<MachineItem>& items) {
 }
 
 IrKind basic_kind_for_opcode(int opcode) {
-  const std::vector<IrOp> raised =
-      raise_machine_to_ir({MachineItem::op(opcode, opcode_by_code(opcode).name)});
-  return raised.empty() ? IrKind::Plain : raised.front().kind;
+  return detail::basic_opcode_ir_kind(opcode);
 }
 
 bool is_indirect_flow_kind(IrKind kind) {

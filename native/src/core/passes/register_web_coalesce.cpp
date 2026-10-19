@@ -333,6 +333,17 @@ static PassResult process_register_webs(
     sites.push_back(found->second);
   }
   const std::set<std::size_t> reachable(sites.begin(), sites.end());
+  const auto boundaries = encoded_origins
+      ? prove_post_layout_input_boundaries(machine, flow) : PostLayoutInputBoundaryProof{};
+  const auto transportable_reply = [&](std::size_t site) {
+    if (!closed_artifact_precision || !boundaries.proved || site + 1U >= ops.size()) return false;
+    const auto& read = ops[site];
+    const auto& prompt = ops[site + 1U];
+    return read.kind == IrKind::Recall && !has_rewrite_barrier(read) &&
+        movable_roles(read.meta.roles) && movable_roles(read.target_meta.roles) &&
+        prompt.kind == IrKind::Stop && prompt.meta.manual_interaction &&
+        prompt.meta.manual_interaction->kind == ManualInteractionAnchorKind::PromptStop;
+  };
 
   Webs webs;
   for (int reg = 0; reg < kRegisters; ++reg)
@@ -411,16 +422,20 @@ static PassResult process_register_webs(
   for (std::size_t site = 0; site < definitions.size(); ++site)
     for (const auto& [reg, node] : definitions[site])
       definition_sites.emplace(node, std::pair{site, reg});
-  std::map<std::size_t, Nodes> recall_sources;
+  std::map<std::size_t, Nodes> recall_sources, reply_sources;
   for (std::size_t state = 0; state < sites.size(); ++state) {
     const auto site = sites[state];
     const auto& op = ops[site];
-    if (op.kind == IrKind::Recall && !has_rewrite_barrier(op) &&
-        !is_display_focus_sensitive(op))
-      append(recall_sources[site], incoming[state][static_cast<std::size_t>(*physical(op.register_name))]);
+    if (op.kind == IrKind::Recall && !has_rewrite_barrier(op)) {
+      if (!is_display_focus_sensitive(op))
+        append(recall_sources[site], incoming[state][static_cast<std::size_t>(*physical(op.register_name))]);
+      else if (transportable_reply(site))
+        append(reply_sources[site], incoming[state][static_cast<std::size_t>(*physical(op.register_name))]);
+    }
   }
   std::set<GuardedDefinitionUseQuery> query_set;
-  for (const auto& [use, nodes] : recall_sources) {
+  const auto add_queries = [&](const auto& demands) {
+  for (const auto& [use, nodes] : demands) {
     if (nodes.size() < 2U)
       continue;
     for (const Node node : nodes) {
@@ -433,6 +448,9 @@ static PassResult process_register_webs(
         query_set.insert({site, use, name});
     }
   }
+  };
+  add_queries(recall_sources); // Keep the historical bounded proof portfolio intact.
+  add_queries(reply_sources);
   if (trace && recoloring_requests) {
     std::size_t potential = 0;
     for (const auto& [use, nodes] : recall_sources)
@@ -508,14 +526,28 @@ static PassResult process_register_webs(
       webs.same_register(nodes);
     }
 
+  const auto movable_memory_cursor = [&](std::size_t site) {
+    const auto& op = ops[site];
+    const auto reg = physical(op.register_name);
+    if (!closed_artifact_precision || !recolor_only || !reg || *reg > 3 ||
+        (op.kind != IrKind::IndirectRecall && op.kind != IrKind::IndirectStore) ||
+        op.opcode != (op.kind == IrKind::IndirectRecall ? 0xd0 : 0xb0) + *reg ||
+        has_rewrite_barrier(op) || is_display_focus_sensitive(op) ||
+        !movable_roles(op.meta.roles) || !movable_roles(op.target_meta.roles) ||
+        !op.meta.indirect_memory_targets || op.meta.indirect_memory_targets->empty())
+      return false;
+    // Indexed banks stay physical and separate from every cursor home. R0's
+    // exceptional positive-fraction decode reads R3, excluded by this fact.
+    return std::all_of(op.meta.indirect_memory_targets->begin(),
+        op.meta.indirect_memory_targets->end(), [](int target) { return target >= 4 && target < 15; });
+  };
   const auto movable_counter = [&](std::size_t site) {
     const auto& op = ops[site];
     return counter_register(op).has_value() && !has_rewrite_barrier(op) &&
            !is_display_focus_sensitive(op) && op.meta.roles.empty() &&
            op.target_meta.roles.empty();
   };
-  const auto boundaries = encoded_origins
-      ? prove_post_layout_input_boundaries(machine, flow) : PostLayoutInputBoundaryProof{};
+
   const auto transportable_input = [&](const IrOp& op) {
     const auto reg = physical(op.register_name);
     if (!boundaries.proved || op.kind != IrKind::Store || !reg ||
@@ -534,7 +566,7 @@ static PassResult process_register_webs(
         (!reachable.contains(site) || !movable_roles(op.meta.roles) ||
                         !movable_roles(op.target_meta.roles)))
       return true;
-    if (movable_counter(site) || transportable_input(op))
+    if (movable_counter(site) || transportable_input(op) || transportable_reply(site))
       return false;
     return (op.kind != IrKind::Store && op.kind != IrKind::Recall) ||
            has_rewrite_barrier(op) || is_display_focus_sensitive(op);
@@ -553,14 +585,32 @@ static PassResult process_register_webs(
         webs.allowed[webs.root(node)] = {0, 1, 2, 3};
       }
     }
+    const bool memory_cursor = movable_memory_cursor(site);
+    const int cursor = memory_cursor ? *physical(ops[site].register_name) : -1;
+    if (memory_cursor) {
+      const auto constrain = [&](Node node) {
+        auto& allowed = webs.allowed[webs.root(node)];
+        // Never move an R1..R3 positive fraction into R0's exception.
+        const int first = cursor == 0 ? 0 : 1;
+        for (auto color = allowed.begin(); color != allowed.end();)
+          if (*color < first || *color > 3) color = allowed.erase(color);
+          else ++color;
+      };
+      if (const auto found = uses[site].find(cursor); found != uses[site].end())
+        for (const auto node : found->second) constrain(node);
+      if (const auto found = definitions[site].find(cursor); found != definitions[site].end())
+        constrain(found->second);
+    }
     if (!anchored(site))
       continue;
     for (const auto& [reg, nodes] : uses[site]) {
+      if (memory_cursor && reg == cursor) continue;
       (void)reg;
       for (const Node node : nodes)
         webs.fixed[webs.root(node)] = true;
     }
     for (const auto& [reg, node] : definitions[site]) {
+      if (memory_cursor && reg == cursor) continue;
       (void)reg;
       webs.fixed[webs.root(node)] = true;
     }
@@ -714,7 +764,10 @@ static PassResult process_register_webs(
     RegisterInterferenceGraph graph;
     PrecoloredRegisterAllocationOptions allocation;
     allocation.color_count = kRegisters;
-    allocation.greedy_only = true;
+    // Ordinary copy cleanup keeps its historical cheap policy. Explicit
+    // multi-web equalities may need several hardware-domain moves together;
+    // try the existing bounded checked list-color search after greedy fails.
+    allocation.greedy_only = !recolor_only;
     allocation.maximum_recoloring_work = 4096;
     for (Node node = 0; node < webs.parents.size(); ++node) {
       if (webs.root(node) != node)
@@ -848,6 +901,19 @@ static PassResult process_register_webs(
           op.register_name = std::string(1, "0123456789abcde"[color]);
           op.opcode = (op.kind == IrKind::Store ? 0x40 : 0x60) + color;
           op.meta.mnemonic = opcode_by_code(op.opcode).name;
+        }
+      }
+      if (movable_memory_cursor(site)) {
+        const int original = *physical(op.register_name);
+        const auto& sources = uses[site].at(original);
+        if (!sources.empty()) {
+          const int color = webs.colors[webs.root(*sources.begin())];
+          if (color != original) {
+            op.register_name = std::string(1, "0123456789abcde"[color]);
+            op.opcode = (op.kind == IrKind::IndirectRecall ? 0xd0 : 0xb0) + color;
+            op.meta.mnemonic = opcode_by_code(op.opcode).name;
+            ++relocated_counters;
+          }
         }
       }
       if (const auto original = counter_register(op)) {
@@ -1034,12 +1100,12 @@ static PassResult process_register_webs(
         "Removed " + std::to_string(joint_merges) +
         " additional copy store(s) using " + std::to_string(recolored_assignments) +
         " web assignment change(s) from a joint, precolored interference graph. "
-        "Deterministic greedy witnesses preserve setup, hardware and constant-pool anchors; "
+        "Deterministic checked coloring witnesses preserve setup, hardware and constant-pool anchors; "
         "failed coloring keeps the incumbent without exhaustive search."});
   if (relocated_counters > 0)
     optimizations.push_back({"register-web-counter-role-coalescing",
         "Retargeted " + std::to_string(relocated_counters) +
-        " FL counter instruction(s) within R0..R3 while removing copy stores. "
+        " FL/memory-cursor instruction(s) within their proved R0..R3 domains. "
         "Web domains preserve live source values, entry/setup ownership, shared "
         "operands and manual/hardware anchors without spills or Rf."});
   return {.ops = std::move(result), .applied = static_cast<int>(removed.size()),

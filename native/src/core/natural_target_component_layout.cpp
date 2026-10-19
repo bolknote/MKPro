@@ -5,6 +5,7 @@
 #include "mkpro/core/indirect_read_observability.hpp"
 #include "mkpro/core/late_bound_decimal_selector.hpp"
 #include "mkpro/core/layout_gap_capacity_bound.hpp"
+#include "mkpro/core/layout_search_artifact.hpp"
 #include "mkpro/core/layout_deadline_packing.hpp"
 #include "mkpro/core/opcodes.hpp"
 #include "mkpro/core/passes/helpers.hpp"
@@ -20,6 +21,7 @@
 #include <limits>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <numeric>
 #include <optional>
 #include <queue>
@@ -32,6 +34,28 @@
 #include <vector>
 
 namespace mkpro::core {
+
+struct NaturalTargetFlowProofCache {
+  std::mutex mutex;
+  std::deque<std::shared_ptr<const void>> completed;
+  NaturalTargetFlowProofCacheStats stats;
+};
+
+std::shared_ptr<NaturalTargetFlowProofCache> make_natural_target_flow_proof_cache(
+    std::size_t capacity) {
+  auto result = std::make_shared<NaturalTargetFlowProofCache>();
+  result->stats.capacity = capacity;
+  return result;
+}
+
+NaturalTargetFlowProofCacheStats natural_target_flow_proof_cache_stats(
+    const std::shared_ptr<NaturalTargetFlowProofCache>& cache) {
+  if (!cache) return {};
+  const std::lock_guard lock(cache->mutex);
+  auto stats = cache->stats;
+  stats.resident_entries = cache->completed.size();
+  return stats;
+}
 
 namespace {
 
@@ -3774,7 +3798,29 @@ bool indirect_memory_facts_equivalent(
   return rebound == original.indirect_memory_targets;
 }
 
+struct FlowEffectProofKey {
+  std::vector<std::pair<std::string, int>> anchors;
+  std::vector<std::tuple<std::size_t, std::size_t, std::string, int>> flows;
+  std::vector<std::pair<std::size_t, int>> displaced;
+  std::vector<int> released;
+  auto operator<=>(const FlowEffectProofKey&) const = default;
+};
+struct FlowEffectProofResult {
+  bool equivalent = false;
+  std::string reason;
+  std::optional<std::size_t> failure_command;
+  int x2_reconvergence_flows = 0;
+};
+struct FlowEffectProofMemo {
+  std::mutex mutex;
+  std::map<FlowEffectProofKey, FlowEffectProofResult> completed;
+};
+
 struct ConvertedFlowEffectProofContext {
+  std::shared_ptr<NaturalTargetFlowProofCache> cache;
+  std::shared_ptr<const LayoutSearchArtifact> source;
+  TraceGraph source_trace;
+  std::shared_ptr<FlowEffectProofMemo> effect_memo;
   std::map<TraceState, std::vector<std::pair<TraceState, TraceEdgeKind>>>
       incoming_edges;
   std::set<std::size_t> external_entry_commands;
@@ -3783,11 +3829,75 @@ struct ConvertedFlowEffectProofContext {
   bool symbolic_x2_ready = false;
 };
 
+bool same_completed_flow_proof_input(
+    const ConvertedFlowEffectProofContext& left,
+    const ConvertedFlowEffectProofContext& right) {
+  return left.source && right.source &&
+         left.source_trace == right.source_trace &&
+         left.external_entry_commands == right.external_entry_commands &&
+         same_layout_search_artifact(*left.source, *right.source);
+}
+
+bool restore_completed_flow_proof(ConvertedFlowEffectProofContext& context) {
+  if (!context.cache) return false;
+  const auto cache = context.cache;
+  const std::lock_guard lock(cache->mutex);
+  for (const auto& erased : cache->completed) {
+    const auto saved =
+        std::static_pointer_cast<const ConvertedFlowEffectProofContext>(erased);
+    if (!same_completed_flow_proof_input(context, *saved)) continue;
+    context = *saved;
+    context.cache = cache;
+    ++cache->stats.hits;
+    return true;
+  }
+  ++cache->stats.misses;
+  return false;
+}
+
+void retain_completed_flow_proof(const ConvertedFlowEffectProofContext& context) {
+  if (!context.cache || !context.symbolic_x2_ready) return;
+  const auto cache = context.cache;
+  const std::lock_guard lock(cache->mutex);
+  if (cache->stats.capacity == 0) return;
+  for (const auto& erased : cache->completed) {
+    const auto saved =
+        std::static_pointer_cast<const ConvertedFlowEffectProofContext>(erased);
+    if (same_completed_flow_proof_input(context, *saved)) return;
+  }
+  auto saved = std::make_shared<ConvertedFlowEffectProofContext>(context);
+  saved->cache.reset(); // No cache -> proof -> cache ownership cycle.
+  if (cache->completed.size() == cache->stats.capacity)
+    cache->completed.pop_front();
+  cache->completed.push_back(std::move(saved));
+  ++cache->stats.insertions;
+}
+
+void bind_flow_proof_trace(
+    const TraceGraph& trace, ConvertedFlowEffectProofContext& context) {
+  if (context.source_trace == trace) return;
+  context.source_trace = trace;
+  context.incoming_edges.clear();
+  context.symbolic_x2_entries.clear();
+  context.symbolic_x2_ready = false;
+  if (context.effect_memo) context.effect_memo = std::make_shared<FlowEffectProofMemo>();
+  for (const auto& [source, edges] : trace)
+    for (const TraceEdge& edge : edges)
+      context.incoming_edges[edge.target].push_back({source, edge.kind});
+}
+
 ConvertedFlowEffectProofContext build_converted_flow_effect_proof_context(
     const std::vector<MachineItem>& original_items,
     const AuthoritativePostLayoutControlFlow& control_flow,
-    const TraceGraph& trace) {
+    const TraceGraph& trace,
+    std::shared_ptr<NaturalTargetFlowProofCache> cache = {},
+    bool memoize_effects = true) {
   ConvertedFlowEffectProofContext result;
+  result.cache = std::move(cache);
+  if (memoize_effects) result.effect_memo = std::make_shared<FlowEffectProofMemo>();
+  result.source = std::make_shared<const LayoutSearchArtifact>(
+      LayoutSearchArtifact{original_items, {}, {}});
+  result.source_trace = trace;
   for (const auto& [source, edges] : trace) {
     for (const TraceEdge& edge : edges)
       result.incoming_edges[edge.target].push_back({source, edge.kind});
@@ -3815,7 +3925,8 @@ ConvertedFlowEffectProofContext build_converted_flow_effect_proof_context(
 
 void ensure_symbolic_flow_entries(
     const TraceGraph& trace, ConvertedFlowEffectProofContext& result) {
-  if (result.symbolic_x2_ready) return;
+  bind_flow_proof_trace(trace, result);
+  if (result.symbolic_x2_ready || restore_completed_flow_proof(result)) return;
   result.symbolic_x2_ready = true;
   // Unconditional PP/BP substitutions have identical stack/X2 transfers.
   // Build the unchanged must-analysis only when a conditional proof actually
@@ -3874,9 +3985,7 @@ void ensure_symbolic_flow_entries(
         continue; // Idempotent join; avoid copying all register/shape sets.
       const passes::X2ValueDataflowState joined =
           passes::join_x2_value_dataflow_states(
-              existing == result.symbolic_x2_entries.end()
-                  ? std::optional<passes::X2ValueDataflowState>{}
-                  : std::optional<passes::X2ValueDataflowState>{existing->second},
+              existing == result.symbolic_x2_entries.end() ? nullptr : &existing->second,
               *output, true);
       if (existing != result.symbolic_x2_entries.end() &&
           passes::same_x2_value_dataflow_state(existing->second, joined)) {
@@ -3886,9 +3995,10 @@ void ensure_symbolic_flow_entries(
       enqueue(edge.target);
     }
   }
+  retain_completed_flow_proof(result);
 }
 
-bool converted_flow_effects_equivalent(
+bool converted_flow_effects_equivalent_uncached(
     const std::vector<MachineItem>& original_items,
     const std::vector<NaturalTargetAnchorCandidate>& anchors,
     const std::vector<NaturalTargetFlowRewrite>& flows,
@@ -3898,6 +4008,9 @@ bool converted_flow_effects_equivalent(
     std::string* failure_reason = nullptr,
     std::size_t* failure_command = nullptr,
     int* x2_reconvergence_flows = nullptr) {
+  // Canonical transparent-jump traces can differ from the original input.
+  // Neither incoming edges nor completed X2 facts cross that identity change.
+  bind_flow_proof_trace(trace, proof_context);
   if (x2_reconvergence_flows != nullptr)
     *x2_reconvergence_flows = 0;
   const auto fail = [&](std::string reason) {
@@ -4493,6 +4606,68 @@ bool converted_flow_effects_equivalent(
       ++*x2_reconvergence_flows;
   }
   return true;
+}
+
+bool converted_flow_effects_equivalent(
+    const std::vector<MachineItem>& original_items,
+    const std::vector<NaturalTargetAnchorCandidate>& anchors,
+    const std::vector<NaturalTargetFlowRewrite>& flows,
+    const std::vector<DisplacedIndirectFlowRewrite>& displaced_flows,
+    const TraceGraph& trace, ConvertedFlowEffectProofContext& proof_context,
+    const std::vector<int>& released_registers,
+    std::string* failure_reason = nullptr,
+    std::size_t* failure_command = nullptr,
+    int* x2_reconvergence_flows = nullptr) {
+  bind_flow_proof_trace(trace, proof_context);
+  if (!proof_context.effect_memo)
+    return converted_flow_effects_equivalent_uncached(
+        original_items, anchors, flows, displaced_flows, trace, proof_context,
+        released_registers, failure_reason, failure_command, x2_reconvergence_flows);
+  // Restore only the exact immutable input/trace context. Physical anchor
+  // addresses, layout order and operand origins are not read by this proof;
+  // selector identity, command identity/order and every replacement opcode are.
+  if (!proof_context.symbolic_x2_ready && proof_context.cache)
+    (void)restore_completed_flow_proof(proof_context);
+  FlowEffectProofKey key;
+  for (const auto& anchor : anchors)
+    key.anchors.emplace_back(anchor.selector.register_name, anchor.selector.register_index);
+  for (const auto& flow : flows)
+    key.flows.emplace_back(flow.original_command_item, flow.original_target_item,
+                           flow.selector_register, flow.original_opcode);
+  for (const auto& displaced : displaced_flows)
+    key.displaced.emplace_back(displaced.command_origin, displaced.direct_opcode);
+  key.released = released_registers;
+  const auto publish = [&](const FlowEffectProofResult& result) {
+    if (!result.equivalent && failure_reason) *failure_reason = result.reason;
+    if (result.failure_command && failure_command) *failure_command = *result.failure_command;
+    if (x2_reconvergence_flows) *x2_reconvergence_flows = result.x2_reconvergence_flows;
+    return result.equivalent;
+  };
+  std::optional<FlowEffectProofResult> cached;
+  {
+    const std::lock_guard lock(proof_context.effect_memo->mutex);
+    const auto found = proof_context.effect_memo->completed.find(key);
+    if (found != proof_context.effect_memo->completed.end()) cached = found->second;
+  }
+  if (proof_context.cache) {
+    const std::lock_guard lock(proof_context.cache->mutex);
+    if (cached) ++proof_context.cache->stats.effect_hits;
+    else ++proof_context.cache->stats.effect_evaluations;
+  }
+  if (cached) return publish(*cached);
+  FlowEffectProofResult result;
+  std::size_t failed = std::numeric_limits<std::size_t>::max();
+  result.equivalent = converted_flow_effects_equivalent_uncached(
+      original_items, anchors, flows, displaced_flows, trace, proof_context,
+      released_registers, &result.reason, &failed, &result.x2_reconvergence_flows);
+  if (failed != std::numeric_limits<std::size_t>::max()) result.failure_command = failed;
+  {
+    const std::lock_guard lock(proof_context.effect_memo->mutex);
+    if (proof_context.effect_memo->completed.size() >= 128U)
+      proof_context.effect_memo->completed.erase(proof_context.effect_memo->completed.begin());
+    proof_context.effect_memo->completed.emplace(std::move(key), result);
+  }
+  return publish(result);
 }
 
 std::optional<std::vector<NaturalTargetRuntimeSelectorProof>> prove_runtime_selectors(
@@ -5882,7 +6057,8 @@ deferred_selector_allocation_impl(
   if (!references) return result;
   const auto direct = shortenable_direct_flows(*references, items);
 
-  const bool typed_resume_transport = existing_families_only &&
+  const bool typed_resume_transport =
+      (existing_families_only || options.allow_typed_resume_conversion) &&
       prove_post_layout_input_boundaries(items,control_flow).proved;
   const auto protected_input=[&](const MachineItem& command){
     return command.manual_interaction && !(typed_resume_transport &&
@@ -5973,7 +6149,7 @@ deferred_selector_allocation_impl(
     }
   std::map<std::size_t, DirectFlowSite> direct_by_command;
   for (const auto& site : direct) {
-    if (items[site.command].manual_interaction || items[site.command].borrowed_entry_phase_selector)
+    if (protected_input(items[site.command]) || items[site.command].borrowed_entry_phase_selector)
       continue;
     const auto group = add_group(site.target);
     if (!group) continue;
@@ -6830,7 +7006,8 @@ NaturalTargetComponentLayoutResult optimize_natural_target_component_layout(
   }
   ConvertedFlowEffectProofContext flow_effect_proof_context =
       build_converted_flow_effect_proof_context(logical_items, *logical_flow,
-                                                *original_trace);
+                                                *original_trace, options.flow_proof_cache,
+                                                options.memoize_flow_effects);
   if (options.eager_symbolic_flow_analysis)
     ensure_symbolic_flow_entries(*original_trace, flow_effect_proof_context);
 

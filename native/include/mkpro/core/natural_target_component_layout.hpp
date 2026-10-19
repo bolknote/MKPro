@@ -7,6 +7,7 @@
 
 #include <cstddef>
 #include <map>
+#include <memory>
 #include <optional>
 #include <string>
 #include <vector>
@@ -53,12 +54,33 @@ struct NaturalTargetDeferredSelectorReconciliation {
       const NaturalTargetDeferredSelectorReconciliation&) const = default;
 };
 
+// Completed must-analysis only, scoped to one compiler layout transaction.
+// It is not a search cache: eviction or disabling it cannot change candidates.
+struct NaturalTargetFlowProofCache;
+struct NaturalTargetFlowProofCacheStats {
+  std::size_t hits = 0;
+  std::size_t misses = 0;
+  std::size_t insertions = 0;
+  std::size_t effect_hits = 0;
+  std::size_t effect_evaluations = 0;
+  std::size_t resident_entries = 0;
+  std::size_t capacity = 0;
+};
+std::shared_ptr<NaturalTargetFlowProofCache> make_natural_target_flow_proof_cache(
+    std::size_t capacity = 16);
+NaturalTargetFlowProofCacheStats natural_target_flow_proof_cache_stats(
+    const std::shared_ptr<NaturalTargetFlowProofCache>& cache);
+
 struct NaturalTargetComponentLayoutOptions {
+  std::shared_ptr<NaturalTargetFlowProofCache> flow_proof_cache;
   AddressSpaceModel address_space_model = AddressSpaceModel::Standard;
   std::size_t maximum_subset_states = 20000;
   // Pure geometry cache, scoped to this invocation. Disabling it is useful
   // for differential tests; it never changes candidate/proof search limits.
   bool memoize_layout_geometry = true;
+  // Pure effect proofs ignore physical placement. Keep their complete result
+  // per exact trace and ordered opcode/selector rewrite, including failures.
+  bool memoize_flow_effects = true;
   // Differential testing: eager and demand-driven X2 proofs have identical
   // facts, candidate budgets and acceptance. Production computes on demand.
   bool eager_symbolic_flow_analysis = false;
@@ -360,6 +382,9 @@ struct DeferredNaturalTargetSelectorAllocation {
 };
 
 struct DeferredNaturalTargetSelectorAllocationOptions {
+  // Exact two-phase input proof may transport a ContinuousResume call to
+  // the same indirect call identity. Single-step and prompt anchors remain fixed.
+  bool allow_typed_resume_conversion = false;
   std::size_t maximum_assignments = 128;
   std::size_t maximum_candidates = 24;
   int maximum_growth_cells = 4;

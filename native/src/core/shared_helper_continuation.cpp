@@ -1,3 +1,4 @@
+#include "mkpro/core/detail/basic_opcode_ir_kind.hpp"
 #include "mkpro/core/shared_helper_continuation.hpp"
 #include "mkpro/core/post_layout_control_flow.hpp"
 
@@ -71,9 +72,7 @@ std::optional<std::size_t> next_cell_item(const std::vector<MachineItem>& items,
 }
 
 IrKind basic_kind_for_opcode(int opcode) {
-  const std::vector<IrOp> raised =
-      raise_machine_to_ir({MachineItem::op(opcode, opcode_by_code(opcode).name)});
-  return raised.empty() ? IrKind::Plain : raised.front().kind;
+  return detail::basic_opcode_ir_kind(opcode);
 }
 
 bool is_indirect_flow_kind(IrKind kind) {

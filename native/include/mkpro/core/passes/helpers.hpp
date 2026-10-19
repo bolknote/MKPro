@@ -87,6 +87,8 @@ struct X2EntryState {
   RegisterValueSet raw;
   RegisterValueSet mantissa;
   RegisterValueSet exponent;
+
+  bool operator==(const X2EntryState&) const = default;
 };
 
 struct X2VpContextState {
@@ -94,6 +96,8 @@ struct X2VpContextState {
   Kind kind = Kind::None;
   RegisterValueSet mantissa;
   RegisterValueSet exponent;
+
+  bool operator==(const X2VpContextState&) const = default;
 };
 
 struct X2StructuralEntryState {
@@ -101,6 +105,8 @@ struct X2StructuralEntryState {
   Kind kind = Kind::None;
   X2ShapeSet mantissa;
   RegisterValueSet exponent;
+
+  bool operator==(const X2StructuralEntryState&) const = default;
 };
 
 struct X2ValueDataflowState {
@@ -124,6 +130,8 @@ struct X2ValueDataflowState {
   bool vpEntryShapeTransient = false;
   std::optional<X2ValueMemory> memory;
   std::optional<X2ShapeMemory> shapeMemory;
+
+  bool operator==(const X2ValueDataflowState&) const = default;
 };
 
 struct X2ValueStatesOptions {
@@ -381,6 +389,13 @@ X2ValueDataflowState clone_x2_value_dataflow_state(const X2ValueDataflowState& i
 std::vector<std::optional<X2ValueDataflowState>>
 compute_x2_value_states(const std::vector<IrOp>& ops,
                         const X2ValueStatesOptions& options = {});
+// Borrow an already present state without constructing/copying an optional.
+// All transfer semantics are shared with the optional-input overload.
+std::optional<X2ValueDataflowState>
+transfer_x2_value_state_for_edge(const X2ValueDataflowState& input, const IrOp& op,
+                                X2DataflowEdgeKind edge,
+                                const X2TransferStateOptions& options = {},
+                                std::optional<int> producer_index = std::nullopt);
 std::optional<X2ValueDataflowState>
 transfer_x2_value_state_for_edge(const std::optional<X2ValueDataflowState>& input, const IrOp& op,
                                 X2DataflowEdgeKind edge,
@@ -397,6 +412,17 @@ transfer_x2_value_state_through_known_transparent_return_call(
     const DirectReturnAnalysisContext& context,
     const X2TransferStateOptions& options = {},
     std::optional<int> producer_index = std::nullopt);
+// Nullable borrowed state for hot joins; nullptr is the same bottom state
+// as an absent optional, including the register-memory projection policy.
+X2ValueDataflowState join_x2_value_dataflow_states(
+    const X2ValueDataflowState* current, const X2ValueDataflowState& incoming,
+    bool track_register_memory = false);
+bool same_x2_value_dataflow_state(const X2ValueDataflowState& left,
+                                 const X2ValueDataflowState& right);
+bool same_x2_value_dataflow_state(const std::optional<X2ValueDataflowState>& left,
+                                 const X2ValueDataflowState& right);
+bool same_x2_value_dataflow_state(const X2ValueDataflowState& left,
+                                 const std::optional<X2ValueDataflowState>& right);
 X2ValueDataflowState join_x2_value_dataflow_states(
     const std::optional<X2ValueDataflowState>& current, const X2ValueDataflowState& incoming,
     bool track_register_memory = false);

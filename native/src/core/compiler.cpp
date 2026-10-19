@@ -75498,6 +75498,7 @@ apply_absolute_dark_layout_to_selected_result(const std::string& source,
                                                const CompileOptions& options) {
   using LayoutArtifact = core::LayoutSearchArtifact;
   using LayoutEdge = core::ProvedSearchTransition<LayoutArtifact>;
+  const auto flow_proof_cache = core::make_natural_target_flow_proof_cache();
   const core::TransactionSearchLimits search_limits;
   const int original_cells = core::machine_cell_count(selected.items);
   int growth_origin_cells = original_cells;
@@ -75549,6 +75550,7 @@ apply_absolute_dark_layout_to_selected_result(const std::string& source,
       if (!bounded.has_value())
         continue;
       core::NaturalTargetComponentLayoutOptions layout_options;
+    layout_options.flow_proof_cache = flow_proof_cache;
       layout_options.address_space_model = model;
       layout_options.maximum_subset_states = 512;
       layout_options.maximum_anchor_combinations = 32;
@@ -75614,6 +75616,7 @@ apply_absolute_dark_layout_to_selected_result(const std::string& source,
     if (!bounded)
       return children;
     core::NaturalTargetComponentLayoutOptions layout_options;
+    layout_options.flow_proof_cache = flow_proof_cache;
     layout_options.address_space_model = model;
     layout_options.maximum_subset_states = 512;
     layout_options.maximum_anchor_combinations = 32;
@@ -75723,6 +75726,7 @@ apply_absolute_dark_layout_to_selected_result(const std::string& source,
     const auto bounded = core::late_bound_decimal_selector_target_labels(*normalized);
     if (control.proved && bounded) {
       core::NaturalTargetComponentLayoutOptions layout_options;
+    layout_options.flow_proof_cache = flow_proof_cache;
       layout_options.address_space_model = model;
       layout_options.maximum_subset_states = 512;
       layout_options.maximum_anchor_combinations = 32;
@@ -75777,6 +75781,7 @@ apply_absolute_dark_layout_to_selected_result(const std::string& source,
     flow_options.empty_return_target = 1;
     const auto control = core::build_post_layout_control_flow(*allocation_items, flow_options);
     core::NaturalTargetComponentLayoutOptions layout_options;
+    layout_options.flow_proof_cache = flow_proof_cache;
     layout_options.address_space_model = model;
     layout_options.maximum_subset_states = 512;
     layout_options.maximum_anchor_combinations = 32;
