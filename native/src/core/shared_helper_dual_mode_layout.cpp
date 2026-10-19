@@ -369,6 +369,7 @@ SharedHelperDualModePreparation prepare_shared_helper_dual_mode_layout(
       .address_space_model = model,
       .proved_indirect_flow_targets = proved_target_addresses(control_flow),
       .allow_entry_prologues = true,
+      .exact_control = &control_flow,
   };
   std::set<std::string> labels;
   for (const MachineItem& item : items) {
@@ -1386,6 +1387,158 @@ std::optional<std::vector<int>> shared_helper_dual_mode_projected_widths(
     return std::nullopt;
   }
   return widths;
+}
+
+
+SharedHelperDualModeReopening reopen_shared_helper_dual_mode_layout(
+    const std::vector<MachineItem>& items,
+    const PostLayoutControlFlowOptions& control_options) {
+  SharedHelperDualModeReopening result;
+  const auto reject = [&](std::string reason) {
+    result.reasons.push_back(std::move(reason));
+    return result;
+  };
+  if (control_options.address_space_model != AddressSpaceModel::Standard)
+    return reject("the inverse side-space law is currently certified for stock MK-61 only");
+  const auto exact = build_post_layout_control_flow(items, control_options);
+  if (!exact.proved || has_executable_address_words(items))
+    return reject("reopening requires a complete typed execution graph");
+  const auto index = index_artifact(items);
+  if (index.label_addresses.size() != static_cast<std::size_t>(std::count_if(items.begin(), items.end(),
+      [](const auto& item) { return item.kind == MachineItemKind::Label; })))
+    return reject("reopening cannot merge duplicate labels");
+  std::set<std::string> markers;
+  const std::string suffix = ":shared-join";
+  for (const auto& item : items) for (const auto& role : item.roles)
+    if (role.starts_with("shared-helper-dual-mode-") && role.ends_with(suffix))
+      markers.insert(role.substr(0, role.size() - suffix.size()));
+  if (markers.size() != 1U)
+    return reject("reopening needs one complete compiler-owned tail family");
+  const auto& marker = *markers.begin();
+  const auto root = unique_role_item(items, marker + ":helper-root");
+  const auto join = unique_role_item(items, marker + ":shared-join");
+  const auto store = unique_role_item(items, marker + ":shared-store");
+  const auto trailing = unique_role_item(items, marker + ":shared-trailing-store");
+  const auto ret = unique_role_item(items, marker + ":helper-return");
+  const auto divergent = unique_role_item(items, marker + ":divergent-call");
+  const auto ordinary0 = unique_role_item(items, marker + ":ordinary-0:call");
+  const auto ordinary1 = unique_role_item(items, marker + ":ordinary-1:call");
+  if (!root || !join || !store || !ret || !divergent || !ordinary0 || !ordinary1 ||
+      *ordinary0 == *ordinary1 || *divergent == *ordinary0 || *divergent == *ordinary1)
+    return reject("tail family command identities are absent or ambiguous");
+  std::vector<std::size_t> tail{*join, *store};
+  if (trailing) tail.push_back(*trailing);
+  if (index.addresses[*join] != kOfficialTailStart || *root >= *join ||
+      index.addresses[*ret] != kOfficialTailStart + static_cast<int>(tail.size()) ||
+      !index.cells.contains(0) || !is_return_opcode(items[index.cells.at(0)].opcode) ||
+      items[*ret].kind != MachineItemKind::Op || !is_return_opcode(items[*ret].opcode))
+    return reject("shared tail is not on the exact hardware discontinuity");
+  for (std::size_t n = 0; n < tail.size(); ++n)
+    if (items[tail[n]].kind != MachineItemKind::Op ||
+        index.addresses[tail[n]] != kOfficialTailStart + static_cast<int>(n) ||
+        (n > 0 && !is_direct_store_opcode(items[tail[n]].opcode)))
+      return reject("shared tail is not a contiguous join/store sequence");
+  const int join_opcode = items[*join].opcode;
+  if (join_opcode != 0x10 && join_opcode != 0x12 && join_opcode != 0x36 &&
+      join_opcode != 0x37 && join_opcode != 0x38 && join_opcode != 0x39)
+    return reject("shared operation has no established commutative continuation law");
+  for (std::size_t at = *root; at < *join; ++at)
+    if (items[at].kind != MachineItemKind::Label &&
+        (items[at].kind != MachineItemKind::Op || !is_straight_body_opcode(items[at].opcode)))
+      return reject("side-space body is no longer straight-line");
+  if (items[*divergent].kind != MachineItemKind::Op || items[*divergent].opcode != 0x53)
+    return reject("divergent entry is not an explicit side-space call");
+  const auto operand = next_cell_item(items, *divergent);
+  if (!operand || items[*operand].kind != MachineItemKind::Address || !items[*operand].formal_opcode)
+    return reject("divergent call has no exact formal entry");
+  const auto side = formal_address_info(*items[*operand].formal_opcode, control_options.address_space_model);
+  if (!is_side_alias(side) || side.actual != index.addresses[*root] ||
+      index.addresses[*join] - index.addresses[*root] <= 0)
+    return reject("formal side counter no longer names the complete shared body");
+  for (std::size_t at = 0; at < items.size(); ++at) {
+    const auto& item = items[at];
+    if (item.raw || item.logical_register_name || item.indirect_flow_formal_targets ||
+        (item.formal_opcode && at != *operand))
+      return reject("raw or independently frozen address geometry cannot be reopened");
+    if (item.kind == MachineItemKind::Address &&
+        (!std::holds_alternative<std::string>(item.target) ||
+         !index.label_addresses.contains(std::get<std::string>(item.target))))
+      return reject("every direct target must retain a unique command identity");
+    if (item.indirect_flow_targets) for (const auto& target : *item.indirect_flow_targets)
+      if (!std::holds_alternative<std::string>(target) ||
+          !index.label_addresses.contains(std::get<std::string>(target)))
+        return reject("every indirect destination must retain a unique command identity");
+  }
+  if (index.label_addresses.at(std::get<std::string>(items[*operand].target)) != index.addresses[*root])
+    return reject("side operand label and hardware projection disagree");
+  for (const auto& entry : exact.external_entries)
+    if (index.addresses[entry.entry.item_index] >= kOfficialTailStart &&
+        index.addresses[entry.entry.item_index] <= index.addresses[*ret])
+      return reject("shared tail has an independent external entry");
+  std::map<std::size_t,std::size_t> after_call;
+  for (const auto call : {*ordinary0, *ordinary1}) {
+    if (items[call].kind != MachineItemKind::Op)
+      return reject("ordinary call identity is not executable");
+    std::size_t last = call;
+    if (items[call].opcode == 0x53) {
+      const auto address = next_cell_item(items, call);
+      if (!address || items[*address].kind != MachineItemKind::Address)
+        return reject("ordinary direct call has no adjacent operand");
+      last = *address;
+    } else if (!is_indirect_call_opcode(items[call].opcode)) {
+      return reject("ordinary entry changed its call protocol");
+    }
+    if (!after_call.emplace(last,call).second)
+      return reject("ordinary call continuations overlap");
+  }
+  const auto strip_reopened_provenance = [&](MachineItem item) {
+    std::erase_if(item.roles, [&](const auto& role) {
+      return role_is(role, marker + ":");
+    });
+    return item;
+  };
+  std::set<std::size_t> removed(tail.begin(), tail.end());
+  std::map<std::size_t,std::size_t> relocated;
+  std::vector<MachineItem> expanded;
+  for (std::size_t at = 0; at < items.size(); ++at) {
+    if (removed.contains(at)) continue;
+    auto item = strip_reopened_provenance(items[at]);
+    if (at == *operand) item.formal_opcode.reset();
+    relocated.emplace(at,expanded.size());
+    expanded.push_back(std::move(item));
+    if (after_call.contains(at)) for (const auto part : tail)
+      expanded.push_back(strip_reopened_provenance(items[part]));
+  }
+  const auto expanded_flow = build_post_layout_control_flow(expanded, control_options);
+  if (!expanded_flow.proved ||
+      expanded_flow.maximum_observed_return_depth != exact.maximum_observed_return_depth)
+    return reject("reopened call/return graph is not closed");
+  SharedHelperContinuationOptions continuation_options;
+  continuation_options.address_space_model = control_options.address_space_model;
+  continuation_options.proved_indirect_flow_targets = proved_target_addresses(expanded_flow);
+  continuation_options.allow_entry_prologues = true;
+  continuation_options.exact_control = &expanded_flow;
+  const auto labels = index.labels_by_address.find(index.addresses[*root]);
+  if (labels == index.labels_by_address.end() || labels->second.empty())
+    return reject("shared body has no stable entry label");
+  const auto law = verify_shared_helper_continuation(expanded, labels->second.front(), continuation_options);
+  const std::set<std::size_t> ordinary_calls{
+      relocated.at(*ordinary0), relocated.at(*ordinary1)};
+  if (!law.proved || law.join_opcode != join_opcode || law.store_opcode != items[*store].opcode ||
+      law.divergent_call_item_index != relocated.at(*divergent) ||
+      law.helper_return_item_index != relocated.at(*ret) ||
+      std::set<std::size_t>(law.ordinary_call_item_indices.begin(),law.ordinary_call_item_indices.end()) != ordinary_calls)
+    return reject("the inverse continuation/X2 law is not proved for every caller" +
+        (law.reasons.empty() ? std::string{} : ": " + law.reasons.front()));
+  if (cell_count(expanded) != cell_count(items) + static_cast<int>(tail.size()))
+    return reject("reopening did not charge the complete duplicated continuation");
+  result.items = std::move(expanded);
+  result.continuation = law;
+  result.added_cells = static_cast<int>(tail.size());
+  result.applied = 1;
+  result.optimizations.push_back({"reopened-dual-mode-continuation",
+      "Reopened a compiler-owned side-space tail only after rechecking exact hardware geometry, all three call identities, the inverse commutative continuation/X2 law and complete return depth. Charged every duplicated cell; retained encoded selector origins as placement obligations. The unchanged folded artifact remains an independent incumbent."});
+  return result;
 }
 
 SharedHelperDualModeLayoutResult finalize_shared_helper_dual_mode_layout(

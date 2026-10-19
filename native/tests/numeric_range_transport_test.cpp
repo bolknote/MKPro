@@ -62,6 +62,62 @@ double numeric(std::string value) {
   return mantissa;
 }
 
+
+void or_payload_counter_contracts(){
+  for(int r=0;r<4;++r)for(const int family:{0xb0,0xd0}){
+    std::vector<MachineItem> items;
+    append(items,{0x6d,0x6e,0x38,0x40+r});
+    std::vector<std::size_t> requested;
+    for(int target_register=7;target_register>=4;--target_register){
+      append(items,{family+r});
+      items.back().indirect_memory_targets=std::vector<int>{target_register};
+      append(items,{0x60+r});
+      requested.push_back(items.size());
+      append(items,{0x54});
+    }
+    stop(items,StopDisposition::Terminal);
+    const auto proof=ranges(items,requested,{});
+    require(!proof.exhausted,"OR selector class must converge with unknown operands");
+    const auto original_flow=build_post_layout_control_flow(items);
+    for(std::size_t s=0;s<original_flow.execution_states.size();++s)
+      if(items[original_flow.execution_states[s].item_index].opcode==0x60+r)
+        require(!proof.canonical_memory_load_states.contains(s),
+            "a normalized recalled counter does not certify canonical counter memory");
+    for(std::size_t i=0;i<requested.size();++i){
+      const auto value=7-static_cast<int>(i);
+      require(proof.x_before.contains(requested[i]) &&
+          proof.x_before.at(requested[i])==OrdinaryNumericRange{value,value,true},
+          "OR payload truncation must feed all subsequent exact predecrement counter values");
+    }
+    emulator::MK61 calc;
+    require(calc.load_program(bytecode(items)).diagnostics.empty(),"OR counter ROM fixture fits");
+    calc.set_register("d","7.7777777");calc.set_register("e","8.8888888");
+    calc.press_sequence({"В/О","С/П"});
+    require(calc.run_until_stable(5000,8).stopped &&
+        calc.read_register(std::string(1,"0123"[r]))=="00000004," &&
+        numeric(calc.read_register("X"))==4,
+        "a payload containing F digits still truncates to 7,6,5,4 in the stock ROM");
+    auto other=items;other[2].opcode=0x37;other[2].mnemonic="K AND";
+    require(ranges(other,requested,{}).x_before.empty(),
+        "the OR-specific certificate must not be inferred from another bitwise opcode");
+    auto opaque=items;opaque[2].raw=true;
+    require(ranges(opaque,requested,{}).x_before.empty(),
+        "opaque producers cannot seed the OR input class");
+    if(family==0xb0){
+      auto aliased=items;aliased[4].indirect_memory_targets=std::vector<int>{r,7};
+      require(ranges(aliased,requested,{}).x_before.empty(),
+          "a possible self-store must join the payload with writeback, not certify seven");
+    }
+    const auto flow=build_post_layout_control_flow(items);
+    const auto lift=analyze_post_layout_automatic_entry_lift(items,flow);
+    const std::vector<PreloadReport> words;
+    require(lift.has_value() &&
+        prove_post_layout_numeric_ranges(items,flow,*lift,requested,&words,1,
+            NumericRangeInputPolicy::ValidatedRegisterTransport).x_before.empty(),
+        "an exhausted class proof never exports a partial counter fact");
+  }
+}
+
 void scientific_and_fractional_contracts() {
   for (const auto* word : {"4.1200076E-1", "0.41200076", "1e-99", "+1E-1"})
     require(bound_ordinary_decimal(word) == OrdinaryNumericRange{0, 1, false},
@@ -373,6 +429,7 @@ void selector_edges_and_weak_stores() {
 
 int main() {
   try {
+    or_payload_counter_contracts();
     scientific_and_fractional_contracts();
     fl_rom_and_range_contracts();
     input_context_contracts();

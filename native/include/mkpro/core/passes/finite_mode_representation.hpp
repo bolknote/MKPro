@@ -9,7 +9,10 @@ namespace mkpro::core::passes {
 
 // Select the stored representation of a finite, internal mode from its uses.
 // Definitions may receive finite literal inputs through exact call/return
-// contexts. A shared encoding is selected jointly with separately synthesized
+// contexts. Independently certified K sign producers may also seed finite
+// images: every exact invocation retains its own row, and the decoder cost
+// competes with all consumers. Unknown/raw inputs and side entries reject.
+// A shared encoding is selected jointly with separately synthesized
 // arithmetic consumer decoders and stable indirect-address constraints.
 // Predicate-only reads may join finite and ordinary dynamic epochs when every
 // finite row keeps its truth value and both numeric continuations prove safe.
@@ -45,11 +48,25 @@ struct FiniteModeCandidateOptions {
   const std::map<std::string, int>* assumed_target_addresses = nullptr;
   // Neutral producer/consumer composition belongs to the independent joint lane.
   bool normalize_unit_arguments = false;
+  // Complete-artifact lane only: encode a proved Main preload and its closed
+  // finite transitions. Existing callers retain their independent search.
+  bool encode_preloaded_state = false;
+  // Independently priced late-artifact precision, not a greedy IR assumption.
+  bool precise_entry_facts = false;
+};
+
+struct FiniteModePreloadReplacement {
+  PreloadReport before;
+  PreloadReport after;
 };
 
 struct DeferredFiniteModeRepresentation {
   PassResult transformation;
   std::map<std::string, int> required_target_addresses;
+  // Exact ownership snapshots. Only the complete-artifact caller can apply
+  // these after matching every original preload field; ordinary IR passes
+  // cannot silently replace an already-owned initialization.
+  std::vector<FiniteModePreloadReplacement> preload_replacements;
 };
 
 // The relational data/stack proof is complete, but placement is deliberately

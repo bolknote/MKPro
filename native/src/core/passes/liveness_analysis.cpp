@@ -130,6 +130,7 @@ void add_clique(RegisterInterferenceGraph& graph, const RegisterValueSet& regist
 struct GuardedLifetimeProof {
   std::set<std::pair<std::string, std::string>> disjoint_pairs;
   std::set<GuardedDefinitionUseQuery> excluded_uses;
+  std::set<GuardedOldWordQuery> dead_words;
   std::size_t work = 0;
   bool exhausted = false;
 };
@@ -142,11 +143,13 @@ GuardedLifetimeProof guarded_register_lifetimes(
     const std::vector<std::size_t>& roots, const LivenessOptions& options,
     const std::vector<GuardedDefinitionUseQuery>& queries = {},
     std::size_t maximum_work = 400000U,
-    const std::map<std::size_t,int>* exact_signs = nullptr) {
+    const std::map<std::size_t,int>* exact_signs = nullptr,
+    const std::map<std::size_t,std::string>* stable_sign_carriers = nullptr,
+    const std::vector<GuardedOldWordQuery>& old_queries = {}) {
   using Id = std::size_t;
   using Pair = std::pair<std::string, std::string>;
   GuardedLifetimeProof proved;
-  if ((options.equal_entry_value_classes.size() < 2U && queries.empty()) || instructions.empty() ||
+  if ((options.equal_entry_value_classes.size() < 2U && queries.empty() && old_queries.empty()) || instructions.empty() ||
       std::any_of(effects.begin(), effects.end(), [](const RegisterEffects& effect) {
         return effect.uses_all_registers || effect.may_define_any_register;
       }))
@@ -234,7 +237,17 @@ GuardedLifetimeProof guarded_register_lifetimes(
                        equality ? taken : *fallthrough, input.register_name});
     guards.insert(input.register_name);
   }
-  if (windows.empty()) {
+  // A demanded old-word proof can also rely on an ordinary loaded guard.
+  // Track only its actual direct recall followed by a closed zero/sign test;
+  // unknown values remain unknown. Max-select retention below stays separate.
+  for(Id state=0;state<instructions.size();++state){
+    const auto& input=op_at(state);
+    if(input.kind!=IrKind::Recall || input.register_name.empty() || input.meta.manual_interaction)continue;
+    const auto branch=unique_next(state);
+    if(branch && !op_at(*branch).meta.manual_interaction && condition_code(op_at(*branch))>=0)
+      guards.insert(input.register_name);
+  }
+  if (windows.empty() && guards.empty() && old_queries.empty()) {
     if (std::getenv("MKPRO_NATIVE_TRACE_GUARDED_LIFETIMES") != nullptr)
       std::cerr << "[guarded-register-lifetime] no select window, ops=" << ops.size() << '\n';
     return proved;
@@ -267,7 +280,7 @@ GuardedLifetimeProof guarded_register_lifetimes(
         pairs.emplace_back(left->first, right->first);
     }
   }
-  if (pairs.empty() && queries.empty())
+  if (pairs.empty() && queries.empty() && old_queries.empty())
     return proved;
 
   enum class Entry { Unknown, Closed, Digits };
@@ -288,7 +301,8 @@ GuardedLifetimeProof guarded_register_lifetimes(
       return std::nullopt;
     return number;
   };
-  const auto transfer = [&](Facts state, Id id, bool retain_selector, bool global_path) {
+  const auto transfer = [&](Facts state, Id id, bool retain_selector, bool global_path,
+                            const RegisterValueSet* sliced_payload = nullptr) {
     const IrOp& op = op_at(id);
     const RegisterEffects& effect = effects.at(instructions.at(id));
     const auto old_memory = state.memory;
@@ -340,7 +354,10 @@ GuardedLifetimeProof guarded_register_lifetimes(
         // The numeric value is known, but sign entry is not a proof that a
         // following digit starts a new mantissa rather than continuing input.
         state.entry = Entry::Unknown;
-      } else if (op.opcode == 0x32 && global_path && exact_signs && exact_signs->contains(id)) {
+      } else if (op.opcode == 0x32 && exact_signs && exact_signs->contains(id) &&
+          (global_path || (sliced_payload && stable_sign_carriers && stable_sign_carriers->contains(id) &&
+              !sliced_payload->contains(stable_sign_carriers->at(id)) &&
+              !guards.contains(stable_sign_carriers->at(id))))) {
         state.x=exact_signs->at(id);
         state.entry=Entry::Closed;
       } else if (op.opcode == 0x0d) {
@@ -359,6 +376,20 @@ GuardedLifetimeProof guarded_register_lifetimes(
       // Calls/returns preserve X, but an open keyboard entry is not assumed
       // to survive a flow instruction. A closed entry cannot become open.
       state.entry = Entry::Unknown;
+    }
+    // Exact finite values have the same physical dependency discipline as
+    // projected signs. They may restore X after a closed carrier read/update,
+    // never after a definition erased by this demand slice or its own guard.
+    if(exact_signs && exact_signs->contains(id) &&
+        (op.kind==IrKind::Recall || op.kind==IrKind::Store ||
+         (op.kind==IrKind::Plain && op.opcode==0x0b)) &&
+        (global_path || (sliced_payload && stable_sign_carriers && stable_sign_carriers->contains(id) &&
+            !sliced_payload->contains(stable_sign_carriers->at(id)) &&
+            !guards.contains(stable_sign_carriers->at(id))))){
+      state.x=exact_signs->at(id);
+      // A value fact is not an entry-mode certificate. In particular, the
+      // sign-edit key must not manufacture a fresh-literal boundary.
+      if(op.kind==IrKind::Recall || op.kind==IrKind::Store)state.entry=Entry::Closed;
     }
     return state;
   };
@@ -385,7 +416,9 @@ GuardedLifetimeProof guarded_register_lifetimes(
   bool& exhausted = proved.exhausted;
   const auto propagate = [&](const std::vector<Seed>& seeds, const std::vector<bool>* relevant,
                              const RegisterValueSet* payload, const std::set<Id>& retain,
-                             std::optional<Id> observed_use = std::nullopt)
+                             std::optional<Id> observed_use = std::nullopt,
+                             std::optional<Id> observed_context = std::nullopt,
+                             bool observe_terminal_bank = false)
       -> std::optional<StateTable> {
     StateTable states(instructions.size());
     std::deque<Id> work;
@@ -430,8 +463,15 @@ GuardedLifetimeProof guarded_register_lifetimes(
       const auto& effect = effects.at(instructions.at(id));
       if (payload != nullptr) {
         const std::string& name = *payload->begin();
-        if (effect.uses.contains(name) &&
-            (!observed_use.has_value() || instructions.at(id) == *observed_use)) {
+        if (observed_use.has_value()
+                ? (instructions.at(id) == *observed_use &&
+                   (!observed_context || id == *observed_context))
+                : (effect.uses.contains(name) ||
+                   (observe_terminal_bank && successors.at(id).empty() &&
+                    !(op_at(id).kind == IrKind::Stop &&
+                      op_at(id).meta.stop_disposition == StopDisposition::Terminal &&
+                      std::find(op_at(id).meta.roles.begin(), op_at(id).meta.roles.end(),
+                                kTypedDisplayObservationRole) != op_at(id).meta.roles.end())))) {
           if (std::getenv("MKPRO_NATIVE_TRACE_GUARDED_LIFETIME_DETAILS") != nullptr) {
             std::cerr << "[guarded-register-lifetime] old read " << name << " at "
                       << instructions.at(id) << " facts:";
@@ -444,7 +484,7 @@ GuardedLifetimeProof guarded_register_lifetimes(
         if (effect.must_defs.contains(name))
           continue;
       }
-      const Facts after = transfer(*states.at(id), id, retain.contains(id), payload == nullptr);
+      const Facts after = transfer(*states.at(id), id, retain.contains(id), payload == nullptr, payload);
       for (const Id to : successors.at(id))
         if (permits(id, to, *states.at(id)))
           merge(to, after);
@@ -487,18 +527,21 @@ GuardedLifetimeProof guarded_register_lifetimes(
     std::vector<bool> relevant;
     std::set<Id> retain;
   };
-  using SliceKey = std::pair<std::string, std::optional<Id>>;
+  using SliceKey = std::tuple<std::string, std::optional<Id>, std::optional<Id>>;
   std::map<SliceKey, Slice> slices;
   const auto get_slice = [&](const std::string& payload,
-                             std::optional<Id> observed_use = std::nullopt) -> const Slice& {
-    const SliceKey key{payload, observed_use};
+                             std::optional<Id> observed_use = std::nullopt,
+                             std::optional<Id> observed_context = std::nullopt) -> const Slice& {
+    const SliceKey key{payload, observed_use, observed_context};
     if (const auto found = slices.find(key); found != slices.end())
       return found->second;
     Slice slice{std::vector<bool>(instructions.size(), false), {}};
     std::deque<Id> work;
     for (Id id = 0; id < instructions.size(); ++id)
-      if (effects.at(instructions.at(id)).uses.contains(payload) &&
-          (!observed_use.has_value() || instructions.at(id) == *observed_use)) {
+      if (observed_use.has_value()
+              ? (instructions.at(id) == *observed_use &&
+                 (!observed_context || id == *observed_context))
+              : effects.at(instructions.at(id)).uses.contains(payload)) {
         slice.relevant.at(id) = true;
         work.push_back(id);
       }
@@ -549,14 +592,18 @@ GuardedLifetimeProof guarded_register_lifetimes(
     if (query.definition >= ops.size() || query.use >= ops.size() ||
         query.register_name.empty() ||
         !effects.at(query.definition).must_defs.contains(query.register_name) ||
-        !effects.at(query.use).uses.contains(query.register_name) ||
-        ops.at(query.definition).meta.manual_interaction.has_value() ||
-        ops.at(query.use).meta.manual_interaction.has_value())
+        std::find(instructions.begin(), instructions.end(), query.use) == instructions.end() ||
+        (query.definition_state && (*query.definition_state >= instructions.size() ||
+            instructions[*query.definition_state] != query.definition)) ||
+        (query.use_state && (*query.use_state >= instructions.size() ||
+            instructions[*query.use_state] != query.use)) ||
+        ops.at(query.definition).meta.manual_interaction.has_value())
       continue;
-    const Slice& slice = get_slice(query.register_name, query.use);
+    const Slice& slice = get_slice(query.register_name, query.use, query.use_state);
     std::vector<Seed> starts;
     for (Id id = 0; id < instructions.size(); ++id) {
-      if (instructions.at(id) != query.definition || !global->at(id).has_value())
+      if (instructions.at(id) != query.definition ||
+          (query.definition_state && id != *query.definition_state) || !global->at(id).has_value())
         continue;
       const Facts after = transfer(*global->at(id), id, false, true);
       for (const Id to : successors.at(id))
@@ -565,8 +612,54 @@ GuardedLifetimeProof guarded_register_lifetimes(
     }
     const RegisterValueSet payload{query.register_name};
     if (!starts.empty() &&
-        propagate(starts, &slice.relevant, &payload, slice.retain, query.use).has_value())
+        propagate(starts, &slice.relevant, &payload, slice.retain, query.use, query.use_state).has_value())
       proved.excluded_uses.insert(query);
+  }
+  for (const GuardedOldWordQuery& query : old_queries) {
+    if (exhausted) break;
+    if (query.after_instruction >= ops.size() || query.register_name.size()!=1U ||
+        std::string{"0123456789abcde"}.find(query.register_name.front())==std::string::npos ||
+        effects.at(query.after_instruction).must_defs.contains(query.register_name) ||
+        effects.at(query.after_instruction).may_defs.contains(query.register_name) ||
+        (query.execution_state && (*query.execution_state >= instructions.size() ||
+            instructions[*query.execution_state] != query.after_instruction)))
+      continue;
+    const Slice& slice = get_slice(query.register_name);
+    std::vector<Seed> starts;
+    for (Id id = 0; id < instructions.size(); ++id) {
+      if (instructions[id] != query.after_instruction ||
+          (query.execution_state && id != *query.execution_state) || !global->at(id)) continue;
+      const Facts after = transfer(*global->at(id), id, false, true);
+      for (const Id to : successors.at(id))
+        if (permits(id, to, *global->at(id))) starts.emplace_back(to, after);
+    }
+    const RegisterValueSet payload{query.register_name};
+    // The reverse slice includes reads. Public terminal observations must be
+    // included separately; otherwise an empty relevance set would hide them.
+    std::vector<bool> relevant = slice.relevant;
+    std::deque<Id> terminal;
+    for (Id id = 0; id < instructions.size(); ++id)
+      if (successors[id].empty() &&
+          !(op_at(id).kind == IrKind::Stop &&
+            op_at(id).meta.stop_disposition == StopDisposition::Terminal &&
+            std::find(op_at(id).meta.roles.begin(), op_at(id).meta.roles.end(),
+                      kTypedDisplayObservationRole) != op_at(id).meta.roles.end())) {
+        relevant[id] = true; terminal.push_back(id);
+      }
+    while (!terminal.empty()) {
+      const Id id = terminal.front(); terminal.pop_front();
+      for (const Id from : predecessors[id])
+        if (!relevant[from] && !effects.at(instructions[from]).must_defs.contains(query.register_name)) {
+          relevant[from] = true; terminal.push_back(from);
+        }
+    }
+    std::set<Id> retain;
+    for (const SelectWindow& window : windows)
+      if (relevant[window.branch] && !relevant[window.zero] && relevant[window.nonzero])
+        retain.insert(window.store);
+    if (!starts.empty() && propagate(starts, &relevant, &payload, retain,
+                                    std::nullopt, std::nullopt, true))
+      proved.dead_words.insert(query);
   }
   if (std::getenv("MKPRO_NATIVE_TRACE_GUARDED_LIFETIMES") != nullptr) {
     std::cerr << "[guarded-register-lifetime] states=" << instructions.size()
@@ -799,13 +892,16 @@ std::optional<LivenessInfo> matched_call_liveness(const std::vector<IrOp>& ops,
 
 } // namespace
 
-GuardedDefinitionUseProof analyze_unreachable_definition_uses(
+static GuardedDefinitionUseProof analyze_guarded_lifetime_queries(
     const std::vector<IrOp>& ops, const core::AuthoritativePostLayoutControlFlow& flow,
     const std::vector<GuardedDefinitionUseQuery>& queries, LivenessOptions options,
-    std::size_t maximum_work) {
-  if (queries.empty() || queries.size() > 64U || !flow.proved ||
+    std::size_t maximum_work, const std::vector<GuardedOldWordQuery>& old_queries,
+    GuardedOldWordProof* old_result) {
+  if ((queries.empty() && old_queries.empty()) || queries.size() + old_queries.size() > 64U || !flow.proved ||
       flow.execution_states.empty() ||
       flow.execution_states.size() != flow.execution_successors.size())
+    return {};
+  if (!old_queries.empty() && !prove_post_layout_input_boundaries(lower_ir_to_machine(ops),flow).proved)
     return {};
   std::vector<RegisterEffects> effects;
   std::map<int, std::size_t> instruction_at;
@@ -835,13 +931,7 @@ GuardedDefinitionUseProof analyze_unreachable_definition_uses(
     // Include every externally admissible return context. Resumed/manual
     // entries have only invariant setup facts, never a presumed old X value.
     for (const auto& entry : flow.external_entries) {
-      if (entry.entry.address != state.address ||
-          entry.return_stack.size() != state.return_stack.size())
-        continue;
-      bool same = true;
-      for (std::size_t frame = 0; frame < state.return_stack.size(); ++frame)
-        same = same && entry.return_stack[frame].address == state.return_stack[frame];
-      if (same && id != 0U) {
+      if (core::post_layout_execution_matches_external_entry(state, entry) && id != 0U) {
         roots.push_back(id);
         break;
       }
@@ -849,6 +939,7 @@ GuardedDefinitionUseProof analyze_unreachable_definition_uses(
   }
   options.closed_program_entry = false;
   std::map<std::size_t,int> sign_facts;
+  std::map<std::size_t,std::string> stable_sign_carriers;
   std::size_t sign_work=0;
   std::vector<std::size_t> sign_queries;
   for(std::size_t s=0;s<instructions.size();++s)
@@ -867,11 +958,53 @@ GuardedDefinitionUseProof analyze_unreachable_definition_uses(
       sign_facts=std::move(signs.signs);
     }
   }
+  if(options.discover_toggle_projection_signs) {
+    std::vector<std::size_t> demanded;
+    for(std::size_t s=0;s<instructions.size();++s)
+      if(!sign_facts.contains(s) &&
+          (ops[instructions[s]].kind==IrKind::Recall || ops[instructions[s]].kind==IrKind::Store ||
+           (ops[instructions[s]].kind==IrKind::Plain &&
+            (ops[instructions[s]].opcode==0x32 || ops[instructions[s]].opcode==0x0b))))
+        demanded.push_back(s);
+    std::vector<PreloadReport> words;
+    for(const auto& [reg,word]:options.equal_entry_value_classes)
+      if(word.starts_with("literal:"))words.push_back({.register_name=reg,.value=word.substr(8)});
+    const auto finite=core::prove_post_layout_toggle_sign_inputs(lower_ir_to_machine(ops),flow,demanded,words,
+        maximum_work-std::min(maximum_work,sign_work));
+    sign_work+=finite.work;if(finite.exhausted)return {{},sign_work,true};
+    sign_facts.insert(finite.signs.begin(),finite.signs.end());
+    stable_sign_carriers=finite.carriers;
+    sign_facts.insert(finite.values.begin(),finite.values.end());
+    stable_sign_carriers.insert(finite.value_carriers.begin(),finite.value_carriers.end());
+    if(std::getenv("MKPRO_NATIVE_TRACE_REGISTER_WEBS"))
+      std::cerr<<"[register-web-demand] finite-signs="<<finite.signs.size()<<'\n';
+  }
   auto proof = guarded_register_lifetimes(ops, effects, instructions, flow.execution_successors,
-      predecessors, roots, options, queries, maximum_work-std::min(maximum_work,sign_work), &sign_facts);
+      predecessors, roots, options, queries, maximum_work-std::min(maximum_work,sign_work),
+      &sign_facts, &stable_sign_carriers, old_queries);
+  if (old_result && !proof.exhausted) old_result->dead_words = std::move(proof.dead_words);
   return {proof.exhausted ? std::set<GuardedDefinitionUseQuery>{}
                           : std::move(proof.excluded_uses),
           proof.work+sign_work, proof.exhausted};
+}
+
+GuardedDefinitionUseProof analyze_unreachable_definition_uses(
+    const std::vector<IrOp>& ops, const core::AuthoritativePostLayoutControlFlow& flow,
+    const std::vector<GuardedDefinitionUseQuery>& queries, LivenessOptions options,
+    std::size_t maximum_work) {
+  return analyze_guarded_lifetime_queries(ops,flow,queries,std::move(options),maximum_work,{},nullptr);
+}
+
+GuardedOldWordProof analyze_dead_old_words(
+    const std::vector<IrOp>& ops, const core::AuthoritativePostLayoutControlFlow& flow,
+    const std::vector<GuardedOldWordQuery>& queries, LivenessOptions options,
+    std::size_t maximum_work) {
+  GuardedOldWordProof result;
+  const auto proof = analyze_guarded_lifetime_queries(
+      ops,flow,{},std::move(options),maximum_work,queries,&result);
+  result.work = proof.work; result.exhausted = proof.exhausted;
+  if (result.exhausted) result.dead_words.clear();
+  return result;
 }
 
 std::set<GuardedDefinitionUseQuery> prove_unreachable_definition_uses(

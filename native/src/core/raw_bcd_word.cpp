@@ -33,6 +33,13 @@ std::optional<RawSingleHexWord> decode_raw_single_hex_word(std::string_view word
       digit, exponent, negative};
 }
 
+std::optional<RawRightDecimalScale> evaluate_raw_right_decimal_scale(
+    std::string_view right_word) {
+  const auto word = decode_raw_single_hex_word(right_word);
+  if (!word) return std::nullopt;
+  return RawRightDecimalScale{word->exponent + 1, word->negative, word->canonical_word};
+}
+
 std::optional<RawPower10Product> evaluate_raw_right_power10_product(
     int left_exponent, std::string_view right_word) {
   const auto word = decode_raw_single_hex_word(right_word);

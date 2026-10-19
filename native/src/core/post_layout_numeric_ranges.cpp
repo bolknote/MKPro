@@ -382,6 +382,7 @@ struct Literal {
   OrdinaryNumericRange value;
   Quantum quantum;
   MantissaShape mantissa;
+  bool canonical_small_integer = false;
 };
 
 } // namespace
@@ -480,11 +481,10 @@ GuardedRecallRanges guarded_recall_ranges(
         return item.kind == MachineItemKind::Op && item.opcode == 0x36 && !item.raw;
       }))
     return result;
-  if (std::any_of(items.begin(), items.end(), [](const auto& item) {
-        return item.raw || (item.kind == MachineItemKind::Op &&
-            !transports_untouched_registers(item.opcode) &&
-            item.opcode != 0x50 && item.opcode != 0x29);
-      }))
+  // A known indirect write to another register is not an opaque whole-bank
+  // clobber. Inspect exact effects on each backward path below; raw commands
+  // still have no admissible guarded value contract.
+  if (std::any_of(items.begin(), items.end(), [](const auto& item) { return item.raw; }))
     return result;
   const auto boundaries = prove_post_layout_input_boundaries(items, flow);
   if (!boundaries.proved)
@@ -522,7 +522,48 @@ GuardedRecallRanges guarded_recall_ranges(
       predecessors[next].push_back(state);
     }
   }
+  passes::LivenessOptions options;
+  options.discover_toggle_projection_signs = preloads != nullptr;
+  if (preloads)
+    for (const auto& preload : *preloads)
+      if (!preload.setup_expression && !preload.setup_target_name && !preload.setup_expression_text)
+        options.equal_entry_value_classes.emplace(preload.register_name, "literal:" + preload.value);
+  // A cut proves that the word present AFTER an instruction cannot reach any
+  // real read before an overwrite. It may therefore close a backward reaching
+  // query even when its unconstrained CFG path would otherwise meet Main.
+  // This is not permission to erase a CFG edge or a hypothetical observation.
+  std::set<std::string> mutable_reads;
+  for (const auto use : reads) {
+    const auto& op = ops.at(sites.at(use));
+    if (op.kind != IrKind::Recall || op.meta.manual_interaction) continue;
+    if (std::any_of(effects.begin(), effects.end(), [&](const auto& effect) {
+          return effect.must_defs.contains(op.register_name);
+        })) mutable_reads.insert(op.register_name);
+  }
+  std::vector<passes::GuardedOldWordQuery> cut_queries;
+  for (std::size_t site = 0; site < ops.size() && cut_queries.size() < 128U; ++site) {
+    if (ops[site].kind != IrKind::Store || ops[site].meta.raw) continue;
+    for (const auto& name : mutable_reads) {
+      if (cut_queries.size() == 128U) break;
+      if (!effects[site].must_defs.contains(name)) cut_queries.push_back({site, name});
+    }
+  }
+  passes::GuardedOldWordProof cuts;
+  // The guarded solver accepts at most 64 demands per invocation. Keep its
+  // contract and share one work budget across independent completed batches.
+  for (std::size_t begin = 0; begin < cut_queries.size(); begin += 64U) {
+    const auto end = std::min(cut_queries.size(), begin + 64U);
+    const std::vector<passes::GuardedOldWordQuery> batch(
+        cut_queries.begin() + static_cast<std::ptrdiff_t>(begin),
+        cut_queries.begin() + static_cast<std::ptrdiff_t>(end));
+    const auto completed = passes::analyze_dead_old_words(
+        ops, flow, batch, options, maximum_work - result.work);
+    result.work += completed.work;
+    if (completed.exhausted || result.work >= maximum_work) return result;
+    cuts.dead_words.insert(completed.dead_words.begin(), completed.dead_words.end());
+  }
   std::map<std::size_t, std::vector<std::size_t>> candidates;
+  std::set<std::size_t> cut_closed;
   std::set<passes::GuardedDefinitionUseQuery> queries;
   for (const auto use : reads) {
     const auto& op = ops.at(sites.at(use));
@@ -530,7 +571,7 @@ GuardedRecallRanges guarded_recall_ranges(
       continue;
     std::vector<std::size_t> pending{use};
     std::set<std::size_t> seen, definitions;
-    bool complete = true;
+    bool complete = true, used_cut = false;
     while (!pending.empty() && complete) {
       const auto state = pending.back();
       pending.pop_back();
@@ -545,6 +586,10 @@ GuardedRecallRanges guarded_recall_ranges(
         break;
       }
       for (const auto from : predecessors[state]) {
+        if (cuts.dead_words.contains({sites[from], op.register_name})) {
+          used_cut = true;
+          continue;
+        }
         const auto& effect = effects[sites[from]];
         if (ops[sites[from]].meta.raw || effect.may_define_any_register ||
             effect.may_defs.contains(op.register_name)) {
@@ -557,7 +602,7 @@ GuardedRecallRanges guarded_recall_ranges(
           pending.push_back(from);
       }
     }
-    if (!complete || definitions.empty())
+    if (!complete || (definitions.empty() && !used_cut))
       continue;
     auto proposed = queries;
     for (const auto definition : definitions)
@@ -566,21 +611,16 @@ GuardedRecallRanges guarded_recall_ranges(
       continue;
     queries = std::move(proposed);
     candidates.emplace(use, std::vector<std::size_t>(definitions.begin(), definitions.end()));
+    if (used_cut) cut_closed.insert(use);
   }
-  passes::LivenessOptions options;
-  if (preloads)
-    for (const auto& preload : *preloads)
-      if (!preload.setup_expression && !preload.setup_target_name)
-        options.equal_entry_value_classes.emplace(
-            preload.register_name, "literal:" + preload.value);
   const auto proof = passes::analyze_unreachable_definition_uses(
       ops, flow, {queries.begin(), queries.end()}, options, maximum_work - result.work);
   result.work += proof.work;
-  if (proof.exhausted || proof.excluded_uses.empty())
+  if (proof.exhausted || (proof.excluded_uses.empty() && cut_closed.empty()))
     return result;
   for (const auto& [use, definitions] : candidates) {
     std::vector<std::size_t> kept;
-    bool removed = false, supported = true;
+    bool removed = cut_closed.contains(use), supported = true;
     for (const auto definition : definitions) {
       if (proof.excluded_uses.contains(
               {sites[definition], sites[use], ops[sites[use]].register_name})) {
@@ -676,6 +716,8 @@ static PostLayoutNumericRangeProof prove_numeric_ranges_on_graph(
         predecessors[next].push_back(i);
     }
   }
+  const auto admitted_entries = resolve_post_layout_external_entry_contexts(flow);
+  if (!admitted_entries) return result;
   std::map<std::size_t, bool> external;
   for (const auto& entry : flow.external_entries) {
     const bool main = entry.kind == ExternalEntryKind::Main;
@@ -734,7 +776,8 @@ static PostLayoutNumericRangeProof prove_numeric_ranges_on_graph(
       ++i;
     }
     if (const auto range = bound_ordinary_decimal(value))
-      literals.emplace(i - 1U, Literal{begin, *range, quantized_literal(value), literal_mantissa(value)});
+      literals.emplace(i - 1U, Literal{begin, *range, quantized_literal(value), literal_mantissa(value),
+          value.size()==1U && value[0]>='1' && value[0]<='9'});
   }
   // A direct recall certifies the next fresh literal's lift independently
   // of its numeric value. Direct BP chains preserve that certificate, but
@@ -803,6 +846,10 @@ static PostLayoutNumericRangeProof prove_numeric_ranges_on_graph(
     // Numeric equality alone does not certify indirect BCD write-back.
     bool integer_selector_word = false;
     MantissaShape mantissa{};
+    bool canonical_small_integer = false;
+    // The ROM-checked positive 8.<seven arbitrary BCD nibbles> K OR
+    // result class. It is not an ordinary-decimal interval.
+    bool normalized_or_payload = false;
     bool operator==(const Fact&) const = default;
   };
   const Fact unknown{true, std::nullopt, std::nullopt};
@@ -827,6 +874,7 @@ static PostLayoutNumericRangeProof prove_numeric_ranges_on_graph(
   const auto decimal = [&](std::string_view text) {
     auto fact = constant(bound_ordinary_decimal(text), quantized_literal(text));
     fact.mantissa = literal_mantissa(text);
+    fact.canonical_small_integer = text.size()==1U && text[0]>='1' && text[0]<='9';
     if (fact.integer_selector_word) {
       const auto decoded = evaluate_indirect_address("0", text, IndirectOperationKind::Memory);
       const auto updated = decoded && decoded->result_value
@@ -842,17 +890,28 @@ static PostLayoutNumericRangeProof prove_numeric_ranges_on_graph(
     if (!b.grounded) return a;
     auto joined = constant(join(a.range, b.range), join_quantized(a.quantum, b.quantum));
     joined.integer_selector_word = a.integer_selector_word && b.integer_selector_word;
+    joined.canonical_small_integer = a.canonical_small_integer && b.canonical_small_integer;
+    joined.normalized_or_payload = a.normalized_or_payload && b.normalized_or_payload;
     joined.mantissa = join_mantissa(a.mantissa, b.mantissa);
     return joined;
   };
+  const auto recalled_word = [](Fact fact) {
+    // Direct/indirect recall normalizes every ordinary positive one-digit
+    // integer, even an eight-digit counter word. Memory itself stays raw.
+    fact.canonical_small_integer = fact.grounded && fact.range && fact.range->integral &&
+        fact.range->lower>=1 && fact.range->upper<=9;
+    return fact;
+  };
   const auto is_top = [&](const Fact& fact) {
-    return fact.grounded && !fact.range && fact.mantissa == unknown.mantissa;
+    return fact.grounded && !fact.range && !fact.normalized_or_payload &&
+        fact.mantissa == unknown.mantissa;
   };
   const auto bitwise = [&](int code, const Fact& y, const Fact& x) {
     if (!y.grounded || !x.grounded) return Fact{};
     const auto shape = bitwise_mantissa(code, y.mantissa, x.mantissa);
     auto fact = constant(std::nullopt, decimal_bitwise_enclosure(shape));
     fact.mantissa = shape;
+    fact.normalized_or_payload = code==0x38;
     return fact;
   };
   std::optional<std::map<std::size_t,int>> packed_signs;
@@ -871,6 +930,7 @@ static PostLayoutNumericRangeProof prove_numeric_ranges_on_graph(
     return std::nullopt;
   };
   std::map<Key, Fact> cache;
+  std::map<std::size_t,bool> canonical_memory_loads;
   std::map<Key, std::set<Key>> dependents;
   std::map<Key, std::size_t> changes;
   std::set<Key> widened;
@@ -905,10 +965,27 @@ static PostLayoutNumericRangeProof prove_numeric_ranges_on_graph(
     if (code == 0x4f || code == 0x6f ||
         (family >= 0x70 && family <= 0xe0 && reg == 15))
       return unknown;
+    std::optional<Fact> recalled_memory;
+    if(family==0x60 && slot==0){
+      if(recalled_states)recalled_states->insert(state);
+      if(guarded && guarded->definitions.contains(state)){
+        Fact selected;
+        for(const auto definition:guarded->definitions.at(state))
+          selected=merge(selected,before(definition,0));
+        recalled_memory=std::move(selected);
+      }else recalled_memory=input(4+reg);
+      // Record the converged raw source fact separately. The normalized X
+      // result below is not evidence that memory already had that shape.
+      canonical_memory_loads[state]=recalled_memory->grounded &&
+          recalled_memory->canonical_small_integer;
+    }
     // Keep exact entry results on their incoming edge, before different
     // literal results meet at one successor and lose exact-word equality.
-    if (stable.proved && slot == 0 && stable.x_after_state.at(state))
-      return decimal(*stable.x_after_state[state]);
+    if (stable.proved && slot == 0 && stable.x_after_state.at(state)) {
+      auto fact=decimal(*stable.x_after_state[state]);
+      if(code==0x38){fact.normalized_or_payload=true;fact.mantissa.normalized_eight=true;}
+      return family==0x60 || family==0xd0 ? recalled_word(fact) : fact;
+    }
     if (slot >= 4) {
       const int wanted = slot - 4;
       if (family == 0x40 && reg == wanted)
@@ -921,13 +998,21 @@ static PostLayoutNumericRangeProof prove_numeric_ranges_on_graph(
         const auto counter = input(slot);
         if (!counter.grounded)
           return {};
-        if (!counter.integer_selector_word || !counter.range || !counter.range->integral ||
-            counter.range->lower < 1 || counter.range->upper >= limit)
-          return unknown;
-        const auto mutation = indirect_selector_mutation(reg);
-        const int delta = mutation == IndirectSelectorMutation::PreDecrement ? -1 : 1;
-        const auto updated = constant(bounded(counter.range->lower + delta,
-                                             counter.range->upper + delta, true));
+        Fact updated;
+        if(reg<4 && counter.normalized_or_payload){
+          // The same ROM class used by indirect-selector-seed-reuse: a
+          // predecrementing memory selector truncates every OR payload
+          // (including hexadecimal digits) and writes denormalized 7.
+          updated=constant(bounded(7,7,true));
+        }else{
+          if (!counter.integer_selector_word || !counter.range || !counter.range->integral ||
+              counter.range->lower < 1 || counter.range->upper >= limit)
+            return unknown;
+          const auto mutation = indirect_selector_mutation(reg);
+          const int delta = mutation == IndirectSelectorMutation::PreDecrement ? -1 : 1;
+          updated=constant(bounded(counter.range->lower + delta,
+                                   counter.range->upper + delta, true));
+        }
         if (family == 0xb0) {
           const auto targets = flow.indirect_memory_targets.find(at);
           if (targets == flow.indirect_memory_targets.end() || targets->second.empty())
@@ -966,6 +1051,8 @@ static PostLayoutNumericRangeProof prove_numeric_ranges_on_graph(
             return unknown;
           }
         }
+        // Decrement writes an eight-digit denormalized counter word. A
+        // numeric one-digit interval is not a canonical-word certificate.
         return labelled ? outgoing : unknown;
       }
       if (family == 0xb0) {
@@ -1002,25 +1089,12 @@ static PostLayoutNumericRangeProof prove_numeric_ranges_on_graph(
         if (slot != 0) return before(start, slot - 1);
         auto fact = constant(Range{literal->second.value}, literal->second.quantum);
         fact.mantissa = literal->second.mantissa;
+        fact.canonical_small_integer = literal->second.canonical_small_integer;
         return fact;
       }
     }
-    if (family == 0x60) {
-      if (slot == 0) {
-        if (recalled_states)
-          recalled_states->insert(state);
-        if (guarded) {
-          const auto found = guarded->definitions.find(state);
-          if (found != guarded->definitions.end()) {
-            Fact selected;
-            for (const auto definition : found->second)
-              selected = merge(selected, before(definition, 0));
-            return selected;
-          }
-        }
-      }
-      return slot == 0 ? input(4 + reg) : input(slot - 1);
-    }
+    if (family == 0x60)
+      return slot==0?recalled_word(*recalled_memory):input(slot-1);
     if (family == 0xd0) {
       if (slot != 0)
         return input(slot - 1);
@@ -1034,7 +1108,7 @@ static PostLayoutNumericRangeProof prove_numeric_ranges_on_graph(
         const auto value = input(4 + target);
         range = merge(range, value);
       }
-      return range;
+      return recalled_word(range);
     }
     if (family == 0x40 || family == 0xb0 || code == 0x51 || code == 0x52 ||
         code == 0x53 || code == 0x54 || opcode_by_code(code).takes_address ||
@@ -1122,11 +1196,9 @@ static PostLayoutNumericRangeProof prove_numeric_ranges_on_graph(
     const auto [state, slot] = key;
     const auto at = flow.execution_states[state].item_index;
     Fact value;
-    const auto root = external.find(at);
-    const bool is_main = transport ? main_states[state]
-        : root != external.end() && root->second;
+    const bool is_main = transport ? main_states[state] : admitted_entries->main[state];
     const bool input_boundary = transport && boundaries.input_boundary_states[state];
-    if (is_main || (!transport && root != external.end()) || (input_boundary && slot < 4)) {
+    if (is_main || (!transport && admitted_entries->external[state]) || (input_boundary && slot < 4)) {
       value = unknown;
       if (is_main && preloads && slot >= 4 &&
           flow.execution_states[state].return_stack.empty()) {
@@ -1178,6 +1250,7 @@ static PostLayoutNumericRangeProof prove_numeric_ranges_on_graph(
       value.range.reset();
       value.quantum.reset();
       value.integer_selector_word = false;
+      value.canonical_small_integer = false;
       // The digit-set domain is finite. Keep its independently proved facts
       // when widening a growing numeric interval; it needs no loop bound.
       if (widened_queries) widened.insert(key);
@@ -1200,10 +1273,22 @@ static PostLayoutNumericRangeProof prove_numeric_ranges_on_graph(
         for (const auto state : found->second)
           if (widened.contains(Key{state, 0})) widened_queries->insert(item);
   }
+  if(!result.exhausted && guarded && guarded->reachable.size()==count)
+    for(std::size_t state=0;state<count;++state)
+      if(!guarded->reachable[state])result.unreachable_states.insert(state);
+  if(!result.exhausted)for(const auto& [state,canonical]:canonical_memory_loads)
+    if(canonical)result.canonical_memory_load_states.insert(state);
   for (const auto item : requested_items) {
     const auto found = contexts.find(item);
     if (found == contexts.end())
       continue;
+    for (const auto state : found->second) {
+      const auto& fact = cache.at(Key{state,0});
+      if (fact.grounded && fact.range) {
+        result.x_before_state.emplace(state,*fact.range);
+        if(fact.canonical_small_integer)result.canonical_small_integer_states.insert(state);
+      }
+    }
     Range range;
     bool first = true;
     for (const auto state : found->second) {
@@ -1218,6 +1303,10 @@ static PostLayoutNumericRangeProof prove_numeric_ranges_on_graph(
       result.x_before.emplace(item, *range);
     if (result.exhausted) {
       result.x_before.clear();
+      result.x_before_state.clear();
+      result.canonical_small_integer_states.clear();
+      result.canonical_memory_load_states.clear();
+      result.unreachable_states.clear();
       break;
     }
   }
@@ -1259,7 +1348,19 @@ PostLayoutNumericRangeProof prove_post_layout_numeric_ranges(
       result.work += refined.work;
       // Optional refinement cannot erase already converged ordinary facts.
       // Both proofs are must bounds; their intersection is the stronger fact.
-      if (!refined.exhausted)
+      if (!refined.exhausted) {
+        result.unreachable_states.insert(refined.unreachable_states.begin(),refined.unreachable_states.end());
+        result.canonical_memory_load_states.insert(refined.canonical_memory_load_states.begin(),
+            refined.canonical_memory_load_states.end());
+        result.canonical_small_integer_states.insert(refined.canonical_small_integer_states.begin(),
+            refined.canonical_small_integer_states.end());
+        for (const auto& [state,value] : refined.x_before_state) {
+          const auto old=result.x_before_state.find(state);
+          if(old==result.x_before_state.end()) result.x_before_state.emplace(state,value);
+          else if(const auto intersection=bounded(std::max(value.lower,old->second.lower),
+              std::min(value.upper,old->second.upper),value.integral || old->second.integral))
+            old->second=*intersection;
+        }
         for (const auto& [item, value] : refined.x_before) {
           const auto old = result.x_before.find(item);
           if (old == result.x_before.end()) {
@@ -1271,6 +1372,7 @@ PostLayoutNumericRangeProof prove_post_layout_numeric_ranges(
             old->second = *intersection;
           }
         }
+      }
     }
   }
   if (result.exhausted || !can_refine)

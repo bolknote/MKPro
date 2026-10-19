@@ -309,27 +309,35 @@ void decimal_entry_proof_requires_known_phase() {
   items.back().stop_disposition = StopDisposition::Terminal;
   const core::StackValueEqualityState equal_x{{true, false, false, false}, false, true};
   const auto prove = [&](const std::vector<MachineItem>& program,
-                         core::StackValueEqualityState state) {
+                         core::StackValueEqualityState state, bool transport = false) {
     return core::prove_post_layout_stack_entry_equality(
-        program, core::build_post_layout_control_flow(program), 0, state);
+        program, core::build_post_layout_control_flow(program), 0, state,
+        {.transport_closed_entry_through_control = transport});
   };
   require(prove(items, equal_x),
           "recall closes entry, so only the first digit lifts the equal X into T");
   auto unequal_x1 = equal_x;
   unequal_x1.x1_equal = false;
   require(!prove(items, unequal_x1), "numeric entry must not erase a live physical X1");
-  auto unknown = items;
-  unknown.insert(unknown.begin() + 2,
-                 {MachineItem::op(0x51, "jump"), MachineItem::address("digits"),
-                  MachineItem::label("digits")});
-  require(!prove(unknown, equal_x), "an unproved branch boundary must keep entry mode unknown");
+  auto jumped = items;
+  jumped.insert(jumped.begin() + 2,
+                {MachineItem::op(0x51, "jump"), MachineItem::address("digits"),
+                 MachineItem::label("digits")});
+  require(!prove(jumped, equal_x), "ordinary greedy entry proof retains its conservative flow policy");
+  require(prove(jumped, equal_x, true), "a complete-context proof transports closed entry through BP");
+  auto unknown = jumped;
+  unknown.insert(unknown.end() - 3, MachineItem::op(0x0e, "enter at branch target"));
+  require(!prove(unknown, {{false, false, false, false}, false, true}, true),
+          "Enter at the branch destination cannot inherit an enabled digit lift");
   auto entered = items;
   entered.insert(entered.begin() + 2, MachineItem::op(0x0e, "enter"));
   require(!prove(entered, {{false, false, false, false}, false, true}),
           "Enter suppresses the next digit's lift and must not invent convergence");
-  const auto observe = [](bool enter, const std::string& x, const std::string& rest) {
+  const auto observe = [](bool enter, const std::string& x, const std::string& rest,
+                          bool jump = false) {
     emulator::MK61 calc;
     std::vector<int> code{0x61, 0x62};
+    if (jump) code.insert(code.end(), {0x51, 4});
     if (enter) code.push_back(0x0e);
     code.insert(code.end(), {1, 0, 0x50});
     calc.load_program(code);
@@ -348,6 +356,10 @@ void decimal_entry_proof_requires_known_phase() {
           "ROM must confirm a single fresh-entry lift after direct recall");
   require(observe(true, "7", "13") != observe(true, "8", "-92"),
           "ROM must preserve differing T when Enter suppresses the digit's lift");
+  require(observe(false, "7", "13", true) == observe(false, "7", "-92"),
+          "ROM confirms closed-entry transport through direct BP");
+  require(observe(true, "7", "13", true) != observe(true, "8", "-92", true),
+          "Enter at a BP destination still preserves the old T difference");
 }
 
 } // namespace

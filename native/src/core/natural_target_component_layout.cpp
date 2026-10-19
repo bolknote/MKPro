@@ -3821,17 +3821,22 @@ void ensure_symbolic_flow_entries(
   // Build the unchanged must-analysis only when a conditional proof actually
   // needs symbolic entries; share its fixed point across all layout trials.
   std::deque<TraceState> pending;
+  std::set<TraceState> queued;
+  const auto enqueue = [&](const TraceState& next_state) {
+    if (queued.insert(next_state).second) pending.push_back(next_state);
+  };
   for (const auto& [state, edges] : trace) {
     (void)edges;
     if (!result.external_entry_commands.contains(state.command))
       continue;
     result.symbolic_x2_entries.emplace(
         state, passes::empty_x2_value_dataflow_state(true));
-    pending.push_back(state);
+    enqueue(state);
   }
   while (!pending.empty()) {
     const TraceState state = std::move(pending.front());
     pending.pop_front();
+    queued.erase(state);
     const auto input = result.symbolic_x2_entries.find(state);
     const auto command = result.raised_command_by_item.find(state.command);
     const auto outgoing = trace.find(state);
@@ -3839,21 +3844,34 @@ void ensure_symbolic_flow_entries(
         command == result.raised_command_by_item.end() || outgoing == trace.end()) {
       continue;
     }
+    const auto edge_kind_for = [](const TraceEdge& edge) {
+      return edge.kind == TraceEdgeKind::Fallthrough
+          ? passes::X2DataflowEdgeKind::Fallthrough
+          : edge.kind == TraceEdgeKind::Taken ? passes::X2DataflowEdgeKind::Jump
+                                              : passes::X2DataflowEdgeKind::Normal;
+    };
+    // Transfer depends on the input, command and edge kind, never the target.
+    // Evaluate before any successor join: a self-edge must not change the
+    // popped input halfway through propagation to its other successors.
+    std::array<bool,3> computed{};
+    std::array<std::optional<passes::X2ValueDataflowState>,3> outputs;
+    for (const auto& edge : outgoing->second) {
+      const auto kind = edge_kind_for(edge);
+      const auto slot = static_cast<std::size_t>(kind);
+      if (computed[slot]) continue;
+      outputs[slot] = passes::transfer_x2_value_state_for_edge(
+          input->second, command->second, kind,
+          passes::X2TransferStateOptions{.track_register_memory = true},
+          static_cast<int>(state.command));
+      computed[slot] = true;
+    }
     for (const TraceEdge& edge : outgoing->second) {
-      const passes::X2DataflowEdgeKind edge_kind =
-          edge.kind == TraceEdgeKind::Fallthrough
-              ? passes::X2DataflowEdgeKind::Fallthrough
-          : edge.kind == TraceEdgeKind::Taken
-              ? passes::X2DataflowEdgeKind::Jump
-              : passes::X2DataflowEdgeKind::Normal;
-      const std::optional<passes::X2ValueDataflowState> output =
-          passes::transfer_x2_value_state_for_edge(
-              input->second, command->second, edge_kind,
-              passes::X2TransferStateOptions{.track_register_memory = true},
-              static_cast<int>(state.command));
-      if (!output.has_value())
-        continue;
+      const auto& output = outputs[static_cast<std::size_t>(edge_kind_for(edge))];
+      if (!output) continue;
       const auto existing = result.symbolic_x2_entries.find(edge.target);
+      if (existing != result.symbolic_x2_entries.end() &&
+          passes::same_x2_value_dataflow_state(existing->second,*output))
+        continue; // Idempotent join; avoid copying all register/shape sets.
       const passes::X2ValueDataflowState joined =
           passes::join_x2_value_dataflow_states(
               existing == result.symbolic_x2_entries.end()
@@ -3865,7 +3883,7 @@ void ensure_symbolic_flow_entries(
         continue;
       }
       result.symbolic_x2_entries[edge.target] = joined;
-      pending.push_back(edge.target);
+      enqueue(edge.target);
     }
   }
 }
@@ -5839,7 +5857,8 @@ deferred_selector_allocation_impl(
     const AuthoritativePostLayoutControlFlow& control_flow,
     const std::map<std::string, int>& encoded_selector_targets,
     const PostLayoutControlFlowOptions& control_options,
-    const DeferredNaturalTargetSelectorAllocationOptions& options,bool diverse) {
+    const DeferredNaturalTargetSelectorAllocationOptions& options,bool diverse,
+    bool existing_families_only = false) {
   std::vector<DeferredNaturalTargetSelectorAllocation> result;
   const auto model = control_options.address_space_model;
   if (!control_flow.proved || control_flow.address_space_model != model ||
@@ -5863,6 +5882,12 @@ deferred_selector_allocation_impl(
   if (!references) return result;
   const auto direct = shortenable_direct_flows(*references, items);
 
+  const bool typed_resume_transport = existing_families_only &&
+      prove_post_layout_input_boundaries(items,control_flow).proved;
+  const auto protected_input=[&](const MachineItem& command){
+    return command.manual_interaction && !(typed_resume_transport &&
+        command.manual_interaction->kind==ManualInteractionAnchorKind::ContinuousResume);
+  };
   struct Carrier {
     int reg = -1;
     std::size_t preload = 0;
@@ -5897,7 +5922,7 @@ deferred_selector_allocation_impl(
       const auto& command = items[source];
       if (!target || (carrier.old_target && carrier.old_target != target) ||
           origin == encoded_selector_targets.end() || origin->second != carrier.encoded ||
-          command.manual_interaction || command.borrowed_entry_phase_selector ||
+          protected_input(command) || command.borrowed_entry_phase_selector ||
           is_proved_dynamic_selector_consumer(command) ||
           !command.indirect_flow_targets || command.indirect_flow_targets->empty() ||
           !std::all_of(command.indirect_flow_targets->begin(),
@@ -6019,7 +6044,7 @@ deferred_selector_allocation_impl(
     chosen[at] = -1;
   };
   enumerate(enumerate, 0, true);
-  enumerate(enumerate, 0, false);
+  if(!existing_families_only)enumerate(enumerate, 0, false);
   std::stable_sort(assignments.begin(), assignments.end(),
       [](const auto& a, const auto& b) { return a.delta < b.delta; });
 
@@ -6141,7 +6166,8 @@ deferred_selector_allocation_impl(
     }
     if (!valid) continue;
     const auto final_flow = build_post_layout_control_flow(candidate.items, control_options);
-    if (!final_flow.proved) continue;
+    if (!final_flow.proved || (typed_resume_transport &&
+        !prove_post_layout_input_boundaries(candidate.items,final_flow).proved)) continue;
     for (const auto& [source, change] : replacements) {
       const auto final_source = new_by_origin.at(source);
       if (is_indirect_flow(change.first)) {
@@ -6184,6 +6210,14 @@ balanced_deferred_natural_target_selector_allocations(
     const PostLayoutControlFlowOptions& control_options,
     const DeferredNaturalTargetSelectorAllocationOptions& options) {return deferred_selector_allocation_impl(items,preloads,control_flow,encoded_selector_targets,control_options,options,true);}
 
+
+std::vector<DeferredNaturalTargetSelectorAllocation>
+permuted_deferred_natural_target_selector_allocations(
+    const std::vector<MachineItem>& items,const std::vector<PreloadReport>& preloads,
+    const AuthoritativePostLayoutControlFlow& flow,const std::map<std::string,int>& encoded,
+    const PostLayoutControlFlowOptions& control,const DeferredNaturalTargetSelectorAllocationOptions& options) {
+  return deferred_selector_allocation_impl(items,preloads,flow,encoded,control,options,false,true);
+}
 
 std::optional<std::string> rebind_proved_natural_fractional_selector_preload(
     const std::vector<MachineItem>& items, const PreloadReport& preload,

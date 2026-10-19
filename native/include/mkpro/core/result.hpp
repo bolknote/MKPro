@@ -521,6 +521,10 @@ struct CompileOptions {
   // Ignore soft physical preferences and request a greedy witness only;
   // fixed hardware constraints and regenerated-assignment proofs still apply.
   bool compact_logical_register_allocation = false;
+  // Internal collection-only ABI repair: old assignments are preferences in a
+  // fresh graph, never inherited sharing certificates. Regeneration still
+  // uses ordinary hard assignments and the complete interference verifier.
+  bool repair_logical_register_assignment_preferences = false;
   // Same-width hardware constant rematerialization; compare only final layouts.
   bool zero_underflow_constant_rematerialization = false;
   // Independent complete-search root, not an explicit lowering variant.

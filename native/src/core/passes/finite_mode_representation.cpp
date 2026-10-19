@@ -4,6 +4,7 @@
 #include "mkpro/core/callee_hole_boundary_normalization.hpp"
 #include "mkpro/core/constant_synthesis.hpp"
 #include "mkpro/core/multirole_word_synthesis.hpp"
+#include "mkpro/core/raw_bcd_word.hpp"
 #include "mkpro/core/passes/semantic_region_folding.hpp"
 #include "mkpro/core/passes/liveness_analysis.hpp"
 #include "mkpro/core/indirect_addressing.hpp"
@@ -305,6 +306,11 @@ struct Macro {
   std::vector<int> finite_transition_rows;
   bool unit_store = false;
   bool unit_literal_elision = false;
+  bool finite_producer = false;
+  std::map<std::size_t, int> finite_producer_rows;
+  // Restore only the transition result in X; the stored carrier stays encoded.
+  std::vector<int> post_store_projection;
+  bool transition_x_decoded = false;
 };
 
 enum class ExitRecoveryKind {
@@ -319,6 +325,7 @@ struct ExitRecovery {
 
 struct Plan {
   int reg = 0;
+  std::optional<FiniteModePreloadReplacement> preload_replacement;
   int saved_cells = 0;
   std::size_t value_count = 0;
   std::map<std::size_t, Macro> macros;
@@ -369,14 +376,13 @@ std::optional<ModeUses> analyze_mode_uses(
   for (std::size_t i = 0; i < ops.size(); ++i)
     ir_at.emplace(machine[i], i);
   const std::size_t unknown = ops.size();
-  std::set<std::size_t> external;
-  for (const auto& entry : flow.external_entries)
-    external.insert(entry.entry.item_index);
+  const auto entries = resolve_post_layout_external_entry_contexts(flow);
+  if (!entries) return std::nullopt;
   std::vector<std::set<std::size_t>> reaching(flow.execution_states.size());
   std::vector<bool> queued(flow.execution_states.size(), false);
   std::deque<std::size_t> work;
   for (std::size_t i = 0; i < flow.execution_states.size(); ++i) {
-    if (external.contains(flow.execution_states[i].item_index)) {
+    if (entries->external[i]) {
       reaching[i].insert(unknown);
       queued[i] = true;
       work.push_back(i);
@@ -1176,8 +1182,94 @@ std::optional<bool> ordinary_predicate(int opcode, const std::string& word) {
 // def/use component reached from one finite literal seed, including transition
 // outputs and every incoming definition at a merged read. Dynamic definitions
 // in another component are not a reason to reject this one.
+struct FiniteProducerInput {
+  std::size_t begin = 0;
+  std::map<std::size_t, std::string> value_by_state;
+  std::set<std::string> values;
+};
+
+// Close the finite image of a computed producer on matched execution contexts.
+// A demand role is not a value assumption. Unsupported raw inputs fail closed.
+std::map<std::size_t, FiniteProducerInput> finite_producer_inputs(
+    const std::vector<IrOp>& ops, int reg,
+    const AuthoritativePostLayoutControlFlow& flow,
+    const std::vector<std::size_t>& machine,
+    const std::vector<bool>& entry_lift,
+    const std::vector<PreloadReport>* preloads) {
+  std::vector<std::size_t> stores;
+  for (std::size_t store = 1; store < ops.size(); ++store) {
+    if (ops[store].kind != IrKind::Store || ops[store].opcode != 0x40 + reg ||
+        !ordinary(ops[store]))
+      continue;
+    auto producer = ops[store - 1U];
+    std::erase(producer.meta.roles, std::string(kUnitProjectionDemandRole));
+    if (producer.kind == IrKind::Plain && producer.opcode == 0x32 && ordinary(producer))
+      stores.push_back(store);
+  }
+  if (stores.empty())
+    return {};
+
+  std::vector<std::vector<std::size_t>> predecessors(flow.execution_states.size());
+  std::map<std::size_t, std::vector<std::size_t>> contexts;
+  for (std::size_t state = 0; state < flow.execution_successors.size(); ++state) {
+    contexts[flow.execution_states[state].item_index].push_back(state);
+    for (const auto next : flow.execution_successors[state])
+      predecessors[next].push_back(state);
+  }
+  std::set<std::size_t> external;
+  for (const auto& entry : flow.external_entries)
+    external.insert(entry.entry.item_index);
+
+  std::map<std::size_t, std::vector<std::size_t>> producer_states;
+  std::vector<std::size_t> queries;
+  for (const auto store : stores) {
+    if (external.contains(machine[store]) || !contexts.contains(machine[store]) ||
+        !contexts.contains(machine[store - 1U]))
+      continue;
+    const auto& incoming = contexts.at(machine[store]);
+    const bool exclusive = std::all_of(incoming.begin(), incoming.end(), [&](auto state) {
+      return !predecessors[state].empty() &&
+          std::all_of(predecessors[state].begin(), predecessors[state].end(), [&](auto prior) {
+            return flow.execution_states[prior].item_index == machine[store - 1U];
+          });
+    });
+    if (!exclusive)
+      continue;
+    const auto& states = contexts.at(machine[store - 1U]);
+    producer_states.emplace(store, states);
+    queries.insert(queries.end(), states.begin(), states.end());
+  }
+  if (queries.empty())
+    return {};
+  const auto signs = prove_post_layout_packed_sign_inputs(
+      lower_ir_to_machine(ops), flow, entry_lift, queries, preloads, kMaximumProofStates);
+  if (signs.exhausted)
+    return {};
+
+  std::map<std::size_t, FiniteProducerInput> result;
+  for (const auto& [store, states] : producer_states) {
+    FiniteProducerInput input;
+    input.begin = store - 1U;
+    bool complete = true;
+    for (const auto state : states) {
+      const auto found = signs.signs.find(state);
+      if (found == signs.signs.end() || (found->second != -1 && found->second != 1)) {
+        complete = false;
+        break;
+      }
+      const auto value = std::to_string(found->second);
+      input.value_by_state.emplace(state, value);
+      input.values.insert(value);
+    }
+    if (complete)
+      result.emplace(store, std::move(input));
+  }
+  return result;
+}
+
 struct FiniteCarrierWeb {
   std::map<std::size_t, Literal> literals;
+  std::map<std::size_t, FiniteProducerInput> producers;
   std::set<std::size_t> seeds;
   std::map<std::size_t, StateTransition> updates;
   std::set<std::size_t> reads;
@@ -1189,11 +1281,18 @@ struct FiniteCarrierWeb {
 std::vector<FiniteCarrierWeb> finite_carrier_webs(
     const std::vector<IrOp>& ops, int reg,
     const AuthoritativePostLayoutControlFlow& flow,
-    const std::vector<std::size_t>& machine) {
+    const std::vector<std::size_t>& machine,
+    const std::vector<bool>& entry_lift,
+    const std::vector<PreloadReport>* preloads) {
   const auto uses = analyze_mode_uses(ops, reg, flow, machine, true);
   if (!uses)
     return {};
   const auto inputs = literal_inputs(ops, flow, machine, *uses);
+  const auto producers = finite_producer_inputs(
+      ops, reg, flow, machine, entry_lift, preloads);
+  std::set<std::size_t> seeds;
+  for(const auto& [store, unused]:inputs) { (void)unused; seeds.insert(store); }
+  for(const auto& [store, unused]:producers) { (void)unused; seeds.insert(store); }
   std::map<std::size_t, StateTransition> transitions;
   std::map<std::size_t, std::size_t> transition_reads;
   for (std::size_t i = 0; i < ops.size(); ++i) {
@@ -1220,8 +1319,7 @@ std::vector<FiniteCarrierWeb> finite_carrier_webs(
       normalizers.emplace(i, i + 2U);
   std::vector<FiniteCarrierWeb> result;
   std::set<std::size_t> visited;
-  for (const auto& [seed, unused_literals] : inputs) {
-    (void)unused_literals;
+  for (const auto seed : seeds) {
     if (visited.contains(seed))
       continue;
     FiniteCarrierWeb web;
@@ -1236,7 +1334,7 @@ std::vector<FiniteCarrierWeb> finite_carrier_webs(
       visited.insert(store);
       const auto consumers = uses->definition_reads.find(store);
       if (store >= ops.size() || !ordinary(ops[store]) ||
-          (!inputs.contains(store) && !transitions.contains(store)) ||
+          (!inputs.contains(store) && !producers.contains(store) && !transitions.contains(store)) ||
           consumers == uses->definition_reads.end()) {
         complete = false;
         continue;
@@ -1269,7 +1367,10 @@ std::vector<FiniteCarrierWeb> finite_carrier_webs(
         web.updates.emplace(update->second.read, update->second);
       } else {
         web.seeds.insert(store);
-        for (const auto& literal : inputs.at(store)) {
+        if (const auto input=producers.find(store); input!=producers.end()) {
+          web.producers.emplace(input->second.begin,input->second);
+          web.values.insert(input->second.values.begin(),input->second.values.end());
+        } else for (const auto& literal : inputs.at(store)) {
           web.literals.emplace(literal.begin, literal);
           web.values.insert(literal.value);
         }
@@ -1388,7 +1489,7 @@ std::vector<Plan> discover_inline_coefficient_carriers(
     return {};
   std::vector<Plan> plans;
   const auto free_seed = free_carrier_seed(ops, flow, options.runtime_preloads);
-  const auto webs = finite_carrier_webs(ops, reg, flow, machine);
+  const auto webs = finite_carrier_webs(ops, reg, flow, machine, automatic_entry_lift, options.runtime_preloads);
   std::vector<std::size_t> reduction_items;
   for (const auto& web : webs)
     for (const auto& [read, unused_store] : web.normalizers) {
@@ -1405,7 +1506,8 @@ std::vector<Plan> discover_inline_coefficient_carriers(
   if (std::getenv("MKPRO_NATIVE_TRACE_FINITE_MODE_REPRESENTATION") && !webs.empty())
     std::cerr << "[finite-mode-discovery] R" << register_name_for_index(reg)
               << " webs=" << webs.size() << " reductions=" << reduction_items.size()
-              << " ranges=" << numeric.x_before.size() << '\n';
+              << " ranges=" << numeric.x_before.size()
+              << " work=" << numeric.work << " exhausted=" << numeric.exhausted << '\n';
   for (const auto& web : webs) {
     std::map<std::size_t, Projection> observations;
     std::set<std::size_t> products;
@@ -1460,9 +1562,9 @@ std::vector<Plan> discover_inline_coefficient_carriers(
       std::vector<Encoding> alternatives{{encoded, false, false}};
       const bool unit_signs = web.values == std::set<std::string>{"-1", "1"};
       const bool symmetric = unit_signs && encoded[0] == "-" + encoded[1];
-      if (free_seed && symmetric)
+      if (web.producers.empty() && free_seed && symmetric)
         alternatives.push_back({encoded, false, true});
-      if (free_seed && symmetric && web.normalizers.empty() && web.predicates.empty() &&
+      if (web.producers.empty() && free_seed && symmetric && web.normalizers.empty() && web.predicates.empty() &&
           std::all_of(web.updates.begin(), web.updates.end(), [](const auto& update) {
             return update.second.function.opcode == 0x0b && !update.second.function.operand;
           }) &&
@@ -1538,6 +1640,28 @@ std::vector<Plan> discover_inline_coefficient_carriers(
           plan.saved_cells += static_cast<int>(literal.end - begin) -
                               static_cast<int>(definition.replacement_literal.size());
           plan.macros.emplace(begin, std::move(definition));
+        }
+        for (const auto& [begin, input] : web.producers) {
+          const std::vector<std::string> original(input.values.begin(), input.values.end());
+          std::vector<std::string> wanted;
+          for (const auto& value : original)
+            wanted.push_back(codebook.at(value));
+          const auto decoder = choose_decoder(original, wanted, functions);
+          if (!decoder) {
+            valid = false;
+            break;
+          }
+          Macro producer;
+          producer.end = begin + 1U;
+          producer.finite_producer = true;
+          producer.replacement_projection = decoder->code;
+          producer.replacement_binary = decoder->binary;
+          producer.identical_value = original == wanted;
+          for (const auto& [state, value] : input.value_by_state)
+            producer.finite_producer_rows.emplace(state, static_cast<int>(
+                std::find(values.begin(), values.end(), value) - values.begin()));
+          plan.saved_cells -= static_cast<int>(decoder->code.size());
+          plan.macros.emplace(begin, std::move(producer));
         }
         for (const auto store : web.seeds) {
           Macro definition;
@@ -2332,10 +2456,10 @@ bool prove(const std::vector<MachineItem>& items,
       required_predecessor.emplace(machine[i], machine[i - 1U]);
     }
   }
-  std::set<std::size_t> external_items;
   for (const auto& entry : flow.external_entries) {
-    external_items.insert(entry.entry.item_index);
-    if (interiors.contains(entry.entry.item_index) || starts.contains(entry.entry.item_index))
+    if (interiors.contains(entry.entry.item_index) ||
+        (starts.contains(entry.entry.item_index) &&
+         !(plan.preload_replacement && entry.kind == ExternalEntryKind::Main)))
       return fail("independent entry into a representation transaction");
   }
   for (std::size_t source = 0; source < flow.execution_successors.size(); ++source) {
@@ -2386,18 +2510,44 @@ bool prove(const std::vector<MachineItem>& items,
       return fail("extended register alias is outside this proof");
   }
 
+  std::set<int> typed_protocols;
+  for (const auto& item : items)
+    if (!item.raw && item.manual_interaction &&
+        item.manual_interaction->kind == ManualInteractionAnchorKind::PromptStop &&
+        std::find(item.roles.begin(), item.roles.end(), kTypedDisplayObservationRole) != item.roles.end())
+      typed_protocols.insert(item.manual_interaction->protocol_id);
+  const auto typed_display = [&](const MachineItem& item) {
+    return !item.raw && item.opcode == 0x50 &&
+        std::find(item.roles.begin(), item.roles.end(), kTypedDisplayObservationRole) != item.roles.end() &&
+        (item.stop_disposition == StopDisposition::Terminal ||
+         (item.manual_interaction && typed_protocols.contains(item.manual_interaction->protocol_id)));
+  };
+  const auto admitted_entries = resolve_post_layout_external_entry_contexts(flow);
+  if (!admitted_entries) return fail("external PC/return contexts are unresolved");
   std::vector<std::set<int>> seen(flow.execution_states.size());
   std::deque<std::pair<std::size_t, Equality>> work;
   const auto enqueue = [&](std::size_t index, const Equality& state) {
     if (seen[index].insert(state.key()).second)
       work.emplace_back(index, state);
   };
-  if (roots) {
+  if (plan.preload_replacement) {
+    const auto boundaries = prove_post_layout_input_boundaries(items, flow);
+    if (!boundaries.proved)
+      return fail("preloaded carrier has an unresolved input/resume protocol");
+    for (const auto root : boundaries.main_states) {
+      Equality initial;
+      // Rebuilt setup may leave different X/Y/Z/T, last-X and entry shadow.
+      // No initial stack equality is a consequence of memory encoding.
+      initial.stack = {{false, false, false, false}, false, false};
+      initial.initialized = true;
+      enqueue(root, initial);
+    }
+  } else if (roots) {
     for (const auto root : *roots)
       enqueue(root, Equality{});
   } else {
     for (std::size_t i = 0; i < flow.execution_states.size(); ++i)
-      if (external_items.contains(flow.execution_states[i].item_index))
+      if (admitted_entries->external[i])
         enqueue(i, Equality{});
   }
   if (work.empty())
@@ -2454,11 +2604,26 @@ bool prove(const std::vector<MachineItem>& items,
     }
     if (const auto found = starts.find(item_index); found != starts.end()) {
       const auto& macro = *found->second;
-      if (state.retired && !macro.definition && !macro.input_literal && !macro.input_store)
+      // A new independently proved producer begins another finite epoch. Its
+      // following store, not an unrelated read, reactivates the carrier.
+      if (state.retired && !macro.definition && !macro.input_literal &&
+          !macro.input_store && !macro.finite_producer)
         return fail("retired carrier is read before its proved overwrite");
       reached_macros.insert(item_index);
       const auto old = state.stack.stack_equal;
-      if (macro.unit_literal_elision) {
+      if (macro.finite_producer) {
+        if (!old[0]) return fail("finite producer receives an unequal X");
+        if (macro.replacement_binary &&
+            (flow.execution_successors[index].size() != 1U ||
+             !automatic_entry_lift[flow.execution_successors[index].front()]))
+          return fail("finite producer decoder has no automatic literal lift");
+        state.stack.stack_equal = {macro.identical_value, old[1], old[2],
+                                   !macro.replacement_binary && old[3]};
+        state.stack.x1_equal = macro.replacement_projection.empty();
+        if (!macro.replacement_projection.empty())
+          state.stack.x2_equal = false;
+        state.encoded_input = true;
+      } else if (macro.unit_literal_elision) {
         state.stack.stack_equal.fill(false);
         state.stack.x2_equal = false;
         state.encoded_input = true;
@@ -2534,7 +2699,7 @@ bool prove(const std::vector<MachineItem>& items,
           return fail("transition has an entry-live or unproved mode definition");
         // The independently checked full transition table preserves the
         // relation between the two carrier values, not their bit patterns.
-        state.stack.stack_equal = {macro.identical_value, old[0], old[1],
+        state.stack.stack_equal = {macro.identical_value || macro.transition_x_decoded, old[0], old[1],
             macro.binary_projection == macro.replacement_binary
                 ? old[macro.binary_projection ? 1U : 2U] : false};
         state.stack.x1_equal = false;
@@ -2594,9 +2759,16 @@ bool prove(const std::vector<MachineItem>& items,
       if (!transports_input)
         state.encoded_input = false;
       if (item.manual_interaction) {
-        if (!stack_values_fully_equal(state.stack))
-          return fail("manual input observes unequal stack/X1/X2 state");
-        if (state.initialized) {
+        const bool typed = typed_protocols.contains(item.manual_interaction->protocol_id);
+        if (typed ? (!state.stack.stack_equal[0] || !state.stack.stack_equal[1])
+                  : !stack_values_fully_equal(state.stack))
+          return fail("manual input observes unequal state");
+        if (typed) {
+          state.stack.stack_equal[3] = state.stack.stack_equal[3] && state.stack.stack_equal[2];
+          state.stack.stack_equal[2] = state.stack.stack_equal[2] && state.stack.stack_equal[1];
+          state.entry = false;
+        }
+        if (state.initialized && !(plan.preload_replacement && typed)) {
           if (!plan.dead_manual_items.contains(item_index))
             return fail("manual input crosses a live encoded lifetime");
           // End the representation relation, not the physical difference.
@@ -2619,12 +2791,20 @@ bool prove(const std::vector<MachineItem>& items,
         state.coefficient_ready = false;
       }
       if (opcode == 0x50) {
+        if (typed_display(item) && item.stop_disposition == StopDisposition::Terminal) {
+          if (!state.stack.stack_equal[0] || !state.stack.stack_equal[1])
+            return fail("terminal display observes an encoded value");
+          continue;
+        }
         if (state.retired && !plan.dead_manual_items.contains(item_index))
           return fail("retired carrier reaches an untyped or terminal stop");
-        if (state.initialized && item.stop_disposition != StopDisposition::Terminal)
+        if (state.initialized && item.stop_disposition != StopDisposition::Terminal &&
+            !(plan.preload_replacement && typed_display(item)))
           return fail("encoded lifetime crosses an independent resume entry");
-        if (!stack_values_fully_equal(state.stack))
-          return fail("encoded mode leaks into displayed or resumable stack state");
+        if (typed_display(item)
+                ? (!state.stack.stack_equal[0] || !state.stack.stack_equal[1])
+                : !stack_values_fully_equal(state.stack))
+          return fail("encoded mode leaks into displayed or resumable state");
         state.entry = false;
       } else if (opcode <= 9) {
         if (transfer_decimal_digit_equality(state.stack, state.entry) ==
@@ -2702,14 +2882,14 @@ std::optional<FiniteEpochGraph> finite_epoch_graph(
       flow.execution_edges.size() != count || entry_lift.size() != count)
     return std::nullopt;
   std::map<std::size_t, const Macro*> ends;
-  std::set<std::size_t> macro_items, entries;
+  std::set<std::size_t> macro_items;
   for (const auto& [begin, macro] : plan.macros) {
     ends.emplace(machine[macro.end - 1U], &macro);
     for (auto i = begin; i < macro.end; ++i)
       macro_items.insert(machine[i]);
   }
-  for (const auto& entry : flow.external_entries)
-    entries.insert(entry.entry.item_index);
+  const auto entries = resolve_post_layout_external_entry_contexts(flow);
+  if (!entries) return std::nullopt;
 
   FiniteEpochGraph result;
   result.flow = flow;
@@ -2733,7 +2913,7 @@ std::optional<FiniteEpochGraph> finite_epoch_graph(
     return found->second;
   };
   for (std::size_t i = 0; i < count; ++i)
-    if (entries.contains(flow.execution_states[i].item_index))
+    if (entries->external[i])
       result.roots.push_back(add({i, unknown, unknown}));
   if (result.roots.empty())
     return std::nullopt;
@@ -2746,7 +2926,12 @@ std::optional<FiniteEpochGraph> finite_epoch_graph(
     std::optional<bool> predicate;
     if (const auto end = ends.find(item_index); end != ends.end()) {
       const auto& macro = *end->second;
-      if (macro.input_literal || macro.definition) {
+      if (macro.finite_producer) {
+        const auto found = macro.finite_producer_rows.find(original);
+        if (found == macro.finite_producer_rows.end())
+          return std::nullopt;
+        input = found->second;
+      } else if (macro.input_literal || macro.definition) {
         input = macro.finite_input_row.value_or(unknown);
         if (macro.definition)
           row = input;
@@ -2994,6 +3179,261 @@ bool prove_with_finite_exits(
 
 } // namespace
 
+
+
+// Constant exponentiation is a representation of a literal, not a source
+// formula recognizer. Its exact integer domain is bounded before constructing
+// a decimal word; unsupported or rounded constants remain ordinary barriers.
+static std::optional<Projection> preloaded_projection_after(
+    const std::vector<IrOp>& ops, std::size_t read) {
+  if (auto projection = projection_after(ops, read)) return projection;
+  const auto literal = literal_at(ops, read + 1U);
+  if (!literal || literal->end + 1U >= ops.size() ||
+      !ordinary(ops[literal->end]) || ops[literal->end].kind != IrKind::Plain ||
+      ops[literal->end].opcode != 0x15) return std::nullopt;
+  const auto exponent = exact_decimal(literal->value);
+  if (!exponent || exponent->numerator % exponent->denominator != 0) return std::nullopt;
+  const auto value = exponent->numerator / exponent->denominator;
+  if (value < -7 || value > 7) return std::nullopt;
+  const auto& operation = ops[literal->end + 1U];
+  if (!ordinary(operation) || operation.kind != IrKind::Plain ||
+      operation.opcode < 0x10 || operation.opcode > 0x13) return std::nullopt;
+  const auto word = value >= 0 ? "1" + std::string(static_cast<std::size_t>(value), '0')
+      : "0." + std::string(static_cast<std::size_t>(-value - 1), '0') + "1";
+  return Projection{operation.opcode, word, literal->end + 2U};
+}
+
+// A Main preload is a definition too. Keep this alternative separate from the
+// historical literal-seeded search: its whole physical carrier must have a
+// closed transition table, and its private relation must survive every typed
+// resume on the authoritative graph. No caller supplies a numerical assumption.
+
+static bool normalized_power10_product_input(
+    const std::vector<IrOp>& ops, const AuthoritativePostLayoutControlFlow& flow,
+    const std::vector<std::size_t>& machine, std::size_t read) {
+  // Normal completion of the documented exponentiation supplies an ordinary
+  // positive decimal. This is not a range/integrality claim about its input,
+  // nor a claim about an opaque/manual entry or an explicit error resume.
+  if (!flow.proved || read >= machine.size()) return false;
+  std::map<std::size_t,std::size_t> ir_at;
+  for (std::size_t i=0;i<machine.size();++i) ir_at.emplace(machine[i],i);
+  const auto entries=resolve_post_layout_external_entry_contexts(flow);
+  if (!entries) return false;
+  std::vector<std::vector<std::size_t>> predecessors(flow.execution_states.size());
+  if(flow.execution_edges.size()!=predecessors.size())return false;
+  for(std::size_t s=0;s<flow.execution_edges.size();++s)for(const auto& edge:flow.execution_edges[s]){
+    if(edge.target_state>=predecessors.size())return false;
+    predecessors[edge.target_state].push_back(s);
+  }
+  bool reached=false;
+  for (std::size_t state=0;state<flow.execution_states.size();++state) {
+    if (flow.execution_states[state].item_index!=machine[read]) continue;
+    reached=true;
+    if (entries->external[state]) return false;
+    bool incoming=false;
+    for (const auto previous:predecessors[state]) {
+        incoming=true;
+        const auto at=ir_at.find(flow.execution_states[previous].item_index);
+        if (at==ir_at.end() || !ordinary(ops[at->second]) ||
+            ops[at->second].kind!=IrKind::Plain || ops[at->second].opcode!=0x15 ||
+            flow.execution_states[previous].return_stack!=flow.execution_states[state].return_stack ||
+            flow.execution_states[previous].formal_return_stack!=flow.execution_states[state].formal_return_stack)
+          return false;
+      }
+    if (!incoming) return false;
+  }
+  return reached;
+}
+
+static std::vector<Plan> discover_preloaded_inline_carriers(
+    const std::vector<IrOp>& ops, int reg,
+    const AuthoritativePostLayoutControlFlow& flow,
+    const std::vector<std::size_t>& machine,
+    const FiniteModeCandidateOptions& options) {
+  const auto reject = [&](const std::string& reason) {
+    if (std::getenv("MKPRO_NATIVE_TRACE_FINITE_MODE_REPRESENTATION"))
+      std::cerr << "[finite-preload] reg=" << reg << " reject=" << reason << '\n';
+    return std::vector<Plan>{};
+  };
+  if (!options.runtime_preloads) return reject("missing environment");
+  const auto name = register_name_for_index(reg);
+  const PreloadReport* initial = nullptr;
+  std::set<std::string> owners;
+  for (const auto& word : *options.runtime_preloads) {
+    if (word.register_name.size() != 1U ||
+        std::string_view{"0123456789abcde"}.find(word.register_name[0]) ==
+            std::string_view::npos || !owners.insert(word.register_name).second)
+      return reject("invalid/duplicate owner " + word.register_name);
+    if (word.register_name == name) initial = &word;
+  }
+  if (!initial || initial->setup_expression || initial->setup_target_name ||
+      initial->setup_expression_text || initial->counts_against_program ||
+      initial->retunable_natural_fractional_prefix ||
+      (initial->lowered_data_value && *initial->lowered_data_value != initial->value) ||
+      !encode_decimal(initial->value))
+    return reject("ineligible initial word " + (initial ? initial->value : std::string{"<missing>"}));
+  const auto negative = exact_projection(0x0b, initial->value, std::nullopt);
+  if (!negative || *negative == initial->value) return reject("not a two-state sign orbit");
+  const std::set<std::string> words{initial->value, *negative};
+  const std::vector<std::string> values(words.begin(), words.end());
+  std::map<std::size_t, Projection> observations;
+  std::set<std::size_t> products, updates;
+  std::vector<Projection> encoders, functions;
+  for (std::size_t at = 0; at < ops.size(); ++at) {
+    if (ops[at].kind != IrKind::Store || ops[at].opcode != 0x40 + reg) continue;
+    if (at < 2U || ops[at - 2U].kind != IrKind::Recall ||
+        ops[at - 2U].opcode != 0x60 + reg ||
+        ops[at - 1U].kind != IrKind::Plain || ops[at - 1U].opcode != 0x0b ||
+        !ordinary(ops[at - 2U]) || !ordinary(ops[at - 1U]) || !ordinary(ops[at]))
+      return reject("noncanonical update at item " + std::to_string(at));
+    updates.insert(at - 2U);
+  }
+  if (updates.empty()) return reject("no closed update");
+  for (std::size_t at = 0; at < ops.size(); ++at) {
+    if (ops[at].kind != IrKind::Recall || ops[at].opcode != 0x60 + reg ||
+        updates.contains(at)) continue;
+    if (!ordinary(ops[at])) return reject("observed read barrier at item " + std::to_string(at));
+    auto projection = preloaded_projection_after(ops, at);
+    if (!projection) projection = Projection{-1, std::nullopt, at + 1U};
+    const bool product = projection->end < ops.size() &&
+        ordinary(ops[projection->end]) && ops[projection->end].kind == IrKind::Plain &&
+        ops[projection->end].opcode == 0x12;
+    observations.emplace(at, *projection);
+    functions.push_back(*projection);
+    if (product) products.insert(at);
+    if (projection->opcode >= 0 || product) {
+      if (std::none_of(encoders.begin(), encoders.end(), [&](const auto& old) {
+            return old.same_function(*projection);
+          }))
+        encoders.push_back(*projection);
+    }
+  }
+  if (encoders.empty()) return reject("no projected observations");
+  functions.push_back(Projection{0x0b, std::nullopt, 0});
+  std::vector<Plan> output;
+  for (const auto& encoder : encoders) {
+    const auto apply_encoder=[&](const std::string& value) {
+      return encoder.opcode<0 ? std::optional<std::string>{value} : encoder.apply(value);
+    };
+    std::vector<std::string> ordinary_encoding;
+    for (const auto& value : values) {
+      const auto word=apply_encoder(value);
+      if(!word) break;
+      ordinary_encoding.push_back(*word);
+    }
+    if(ordinary_encoding.size()!=values.size()) continue;
+    struct Encoding{std::vector<std::string> words;bool raw=false;};
+    std::vector<Encoding> alternatives{{ordinary_encoding,false}};
+    const bool symmetric=ordinary_encoding.size()==2U &&
+        ordinary_encoding[0]=="-"+ordinary_encoding[1];
+    const bool compatible_products=!products.empty() && std::all_of(
+        products.begin(),products.end(),[&](auto read){
+          return encoder.same_function(observations.at(read)) &&
+              normalized_power10_product_input(ops,flow,machine,read);
+        });
+    if(symmetric && compatible_products){
+      constexpr std::array<const char*,4> powers{"0.001","0.01","0.1","1"};
+      const auto power=std::find_if(powers.begin(),powers.end(),
+          [&](auto word){return ordinary_encoding[1]==word;});
+      if(power!=powers.end()){
+        const int exponent=static_cast<int>(power-powers.begin())-3;
+        RawWordSynthesisRequest request;
+        for(int sign:{-1,1}){
+          RawWordMode mode;mode.sign=sign;
+          for(int input=-8;input<=8;++input)mode.right_products.push_back({input,input+exponent,sign});
+          request.modes.push_back(std::move(mode));
+        }
+        request.transitions={{0,1,RawWordTransitionKind::Negate},{1,0,RawWordTransitionKind::Negate}};
+        const auto proposed=synthesize_raw_multirole_words(request,
+            {.maximum_work=4096,.maximum_candidates=4});
+        for(const auto& encoding:proposed.encodings)
+          if(certify_raw_multirole_words(encoding,request) &&
+              std::all_of(encoding.words.begin(),encoding.words.end(),[&](const auto& word){
+                const auto law=evaluate_raw_right_decimal_scale(word);
+                return law && law->exponent==exponent;
+              }))
+            alternatives.push_back({encoding.words,true});
+      }
+    }
+    for(const auto& encoding:alternatives){
+      auto replacement=*initial;
+      const auto initial_row=std::find(values.begin(),values.end(),initial->value);
+      if(initial_row==values.end()) continue;
+      replacement.value=encoding.words[static_cast<std::size_t>(initial_row-values.begin())];
+      if(replacement.lowered_data_value)replacement.lowered_data_value=replacement.value;
+      Plan plan;plan.reg=reg;plan.inline_coefficient=true;plan.raw_coefficient=encoding.raw;
+      plan.synthesized=true;plan.value_count=values.size();
+      plan.preload_replacement=FiniteModePreloadReplacement{*initial,replacement};
+      plan.transition_count=updates.size();plan.finite_values=values;plan.finite_encoding=encoding.words;
+      for(std::size_t row=0;row<values.size();++row){
+        if(!plan.encoding_summary.empty())plan.encoding_summary+=", ";
+        plan.encoding_summary+=values[row]+" -> "+encoding.words[row];
+      }
+      const auto raw_decoder=[&](const std::vector<std::string>& wanted)->std::optional<Decoder>{
+        if(wanted==std::vector<std::string>{"-1","1"})return Decoder{{0x32},false};
+        return std::nullopt;
+      };
+      bool valid=true;
+      for(const auto&[read,projection]:observations){
+        std::vector<std::string>wanted;
+        for(const auto&value:values){
+          auto word=projection.opcode<0?std::optional<std::string>{value}:projection.apply(value);
+          if(!word){valid=false;break;}wanted.push_back(*word);
+        }
+        if(!valid)break;
+        const bool raw_product=encoding.raw && products.contains(read) &&
+            encoder.same_function(projection) &&
+            normalized_power10_product_input(ops,flow,machine,read);
+        const auto decoder=raw_product?std::optional<Decoder>{Decoder{{},false}}:
+            encoding.raw?raw_decoder(wanted):choose_decoder(encoding.words,wanted,functions);
+        if(!decoder){valid=false;break;}
+        Macro consumer;consumer.end=projection.end+(products.contains(read)?1U:0U);
+        consumer.binary_projection=projection.operand.has_value();
+        consumer.replacement_projection=decoder->code;consumer.replacement_binary=decoder->binary;
+        consumer.inline_product=products.contains(read);
+        if(consumer.inline_product)consumer.replacement_projection.push_back(0x12);
+        plan.saved_cells+=static_cast<int>(consumer.end-read-1U)-
+            static_cast<int>(consumer.replacement_projection.size());
+        plan.macros.emplace(read,std::move(consumer));
+      }
+      if(!valid)continue;
+      for(auto read:updates){
+        std::vector<std::string>wanted;std::vector<int>rows;
+        for(const auto&value:values){
+          const auto next=exact_projection(0x0b,value,std::nullopt);
+          if(!next){valid=false;break;}const auto row=std::find(values.begin(),values.end(),*next);
+          if(row==values.end()){valid=false;break;}
+          rows.push_back(static_cast<int>(row-values.begin()));
+          wanted.push_back(encoding.words[static_cast<std::size_t>(row-values.begin())]);
+        }
+        if(!valid)break;
+        const auto decoder=encoding.raw?std::optional<Decoder>{Decoder{{0x0b},false}}:
+            choose_decoder(encoding.words,wanted,functions);
+        if(!decoder){valid=false;break;}
+        Macro transition;transition.end=read+3U;transition.transition=true;
+        transition.replacement_projection=decoder->code;transition.replacement_binary=decoder->binary;
+        transition.finite_transition_rows=std::move(rows);
+        plan.saved_cells+=1-static_cast<int>(decoder->code.size());
+        plan.macros.emplace(read,std::move(transition));
+      }
+      std::size_t end=0;
+      for(const auto&[read,macro]:plan.macros){valid=valid && read>=end;end=macro.end;}
+      if(!valid)continue;
+      if(plan.saved_cells>=-options.maximum_growth_cells &&
+          (options.maximum_growth_cells>0 || plan.saved_cells>0))output.push_back(plan);
+      const auto inverse=encoding.raw?raw_decoder(values):choose_decoder(encoding.words,values,functions);
+      if(!inverse || inverse->binary || inverse->code.empty())continue;
+      for(auto read:updates){
+        auto&transition=plan.macros.at(read);transition.post_store_projection=inverse->code;
+        transition.transition_x_decoded=true;plan.saved_cells-=static_cast<int>(inverse->code.size());
+      }
+      if(plan.saved_cells>=-options.maximum_growth_cells &&
+          (options.maximum_growth_cells>0 || plan.saved_cells>0))output.push_back(std::move(plan));
+    }
+  }
+  return output;
+}
+
 static std::vector<DeferredFiniteModeRepresentation> finite_mode_candidates_impl(
     const std::vector<IrOp>& ops, const PassContext& context,
     const FiniteModeCandidateOptions& candidate_options, bool defer_layout, bool units_only = false) {
@@ -3023,7 +3463,8 @@ static std::vector<DeferredFiniteModeRepresentation> finite_mode_candidates_impl
   for (std::size_t i = 0; i < ops.size() && !has_projection; ++i)
     has_projection = ops[i].kind == IrKind::Recall && projection_after(ops, i).has_value();
   const bool has_unit_inputs = candidate_options.runtime_preloads && std::any_of(ops.begin(),ops.end(),[](const auto& op){return op.kind==IrKind::Plain && op.opcode==1;});
-  if (!has_projection && !units_only && !has_unit_inputs)
+  if (!has_projection && !units_only && !has_unit_inputs &&
+      !candidate_options.encode_preloaded_state)
     return unchanged();
   const auto items = lower_ir_to_machine(ops);
   PostLayoutControlFlowOptions options;
@@ -3082,10 +3523,13 @@ static std::vector<DeferredFiniteModeRepresentation> finite_mode_candidates_impl
     flow.execution_successors = selector_graph.successors;
     flow.execution_edges = selector_graph.execution_edges;
   }
-  const auto automatic_entry_lift =
-      analyze_post_layout_automatic_entry_lift(items, flow, kMaximumProofStates);
-  if (!automatic_entry_lift)
+  const auto automatic_entry_lift = candidate_options.precise_entry_facts
+      ? analyze_post_layout_automatic_entry_lift_with_indirect_store_facts(items, flow, kMaximumProofStates)
+      : analyze_post_layout_automatic_entry_lift(items, flow, kMaximumProofStates);
+  if (!automatic_entry_lift) {
+    if(std::getenv("MKPRO_NATIVE_TRACE_COPY_TRANSPORT"))std::cerr<<"[copy-transport-codec] automatic entry proof unavailable\n";
     return unchanged();
+  }
   std::vector<std::size_t> machine;
   std::size_t item = 0;
   for (const auto& op : ops) {
@@ -3099,6 +3543,13 @@ static std::vector<DeferredFiniteModeRepresentation> finite_mode_candidates_impl
       plans.insert(plans.end(), std::make_move_iterator(units.begin()), std::make_move_iterator(units.end()));
     }
     if (units_only) continue;
+    if (defer_layout && candidate_options.encode_preloaded_state) {
+      auto seeded = discover_preloaded_inline_carriers(ops, reg, flow, machine, candidate_options);
+      if(std::getenv("MKPRO_NATIVE_TRACE_COPY_TRANSPORT"))std::cerr<<"[copy-transport-codec] R"<<reg<<" plans="<<seeded.size()<<"\n";
+      plans.insert(plans.end(), std::make_move_iterator(seeded.begin()),
+                   std::make_move_iterator(seeded.end()));
+      continue; // A separate frontier must not spend the older finite-mode beam.
+    }
     if (auto plan = discover(ops, reg, flow, machine))
       plans.push_back(std::move(*plan));
     auto joint = discover_joint(ops, reg, flow, machine, options.address_space_model, candidate_options);
@@ -3163,6 +3614,20 @@ static std::vector<DeferredFiniteModeRepresentation> finite_mode_candidates_impl
         continue;
       }
       const auto& macro = found->second;
+      if (macro.finite_producer) {
+        rewritten.push_back(ops[i]);
+        for (const int opcode : macro.replacement_projection) {
+          IrOp decoder;
+          decoder.kind = IrKind::Plain;
+          decoder.opcode = opcode;
+          decoder.meta.mnemonic = opcode_by_code(opcode).name;
+          decoder.meta.source_line = ops[i].meta.source_line;
+          decoder.meta.comment = "finite producer image decoder";
+          rewritten.push_back(std::move(decoder));
+        }
+        i = macro.end;
+        continue;
+      }
       if (macro.unit_store) {
         IrOp sign; sign.kind = IrKind::Plain; sign.opcode = 0x32;
         sign.meta.mnemonic = opcode_by_code(0x32).name;
@@ -3207,8 +3672,18 @@ static std::vector<DeferredFiniteModeRepresentation> finite_mode_candidates_impl
           decoder.meta.comment = "finite mode consumer decoder";
           rewritten.push_back(std::move(decoder));
         }
-        if (macro.transition)
+        if (macro.transition) {
           rewritten.push_back(ops[macro.end - 1U]);
+          for (const int opcode : macro.post_store_projection) {
+            IrOp decoder;
+            decoder.kind = IrKind::Plain;
+            decoder.opcode = opcode;
+            decoder.meta.mnemonic = opcode_by_code(opcode).name;
+            decoder.meta.source_line = ops[i].meta.source_line;
+            decoder.meta.comment = "finite transition X-only decoder";
+            rewritten.push_back(std::move(decoder));
+          }
+        }
       }
       if (plan.raw_coefficient)
         for (std::size_t emitted = output_begin; emitted < rewritten.size(); ++emitted)
@@ -3319,6 +3794,16 @@ static std::vector<DeferredFiniteModeRepresentation> finite_mode_candidates_impl
       },
       .required_target_addresses = std::move(required_targets),
     });
+    if (plan.preload_replacement) {
+      alternatives.back().preload_replacements.push_back(*plan.preload_replacement);
+      alternatives.back().transformation.optimizations.push_back({
+          "preloaded-finite-state-carrier",
+          "Encoded a delivered Main initializer together with its exact finite transition "
+          "and consumer tables. Transported the private relation only through validated "
+          "typed input/resume contexts; preserved visible X/Y, future register reads, "
+          "stack/X1/X2 and every original control/return path. The complete artifact must "
+          "match the initializer ownership snapshot and discharge all placement bindings."});
+    }
     if (plan.epoch_pruned_edges != 0 || !plan.exit_recoveries.empty())
       alternatives.back().transformation.optimizations.push_back({
           "finite-mode-exit-recovery",

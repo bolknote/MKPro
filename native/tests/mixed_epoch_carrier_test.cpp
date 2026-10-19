@@ -14,6 +14,7 @@
 #include <exception>
 #include <iostream>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace {
@@ -658,7 +659,8 @@ void exponent_recovery_rom_facts() {
 enum class ManualEpochVariant {
   Direct, BothArms, Callee, FirstPhaseKill, OneArmRead, AliasRecall,
   DefiniteIndirectStore, PossibleIndirectStore, Selector, Counter, NoWrite,
-  CycleBeforeWrite, CycleWithRead, RepeatedPrompt, Untyped, Raw, BrokenPhase, DisplayedCarrier
+  CycleBeforeWrite, CycleWithRead, RepeatedPrompt, Untyped, Raw, BrokenPhase, DisplayedCarrier,
+  DisplayedCarrierLastX
 };
 
 std::vector<MachineItem> manual_epoch_fixture(ManualEpochVariant variant, int reg = 8) {
@@ -668,7 +670,8 @@ std::vector<MachineItem> manual_epoch_fixture(ManualEpochVariant variant, int re
     append(items, {0x6b, 0x60 + reg, 1, 0, 0x13, 0x12, 0x4a});
   items.push_back(MachineItem::label("manual-prompt-setup"));
   append(items, {0x6b, 0x6c, 0x6d, 0x6e, 0x6b, 0x10});
-  if (variant == ManualEpochVariant::DisplayedCarrier)
+  if (variant == ManualEpochVariant::DisplayedCarrier ||
+      variant == ManualEpochVariant::DisplayedCarrierLastX)
     append(items, {0x60 + reg});
   append(items, {0x50});
   items.back().stop_disposition = StopDisposition::Resumable;
@@ -684,6 +687,8 @@ std::vector<MachineItem> manual_epoch_fixture(ManualEpochVariant variant, int re
   append(items, {0x45});
   items.back().manual_interaction =
       ManualInteractionAnchor{41, 1, ManualInteractionAnchorKind::ContinuousResume};
+  if (variant == ManualEpochVariant::DisplayedCarrierLastX)
+    append(items, {0x0f, 0x46});
 
   if (variant == ManualEpochVariant::BothArms || variant == ManualEpochVariant::OneArmRead) {
     append(items, {0x65});
@@ -737,6 +742,8 @@ std::vector<MachineItem> manual_epoch_fixture(ManualEpochVariant variant, int re
       append(items, {0x40 + reg});
     }
   }
+  if (variant == ManualEpochVariant::DisplayedCarrierLastX)
+    append(items, {0x66});
   finish(items);
   if (variant == ManualEpochVariant::Callee) {
     items.push_back(MachineItem::label("manual-overwrite"));
@@ -777,7 +784,7 @@ struct ManualEpochObservation {
 
 ManualEpochObservation observe_manual_epoch(const std::vector<MachineItem>& items, int reg,
     const std::string& first, const std::string& second, int probe_phase, bool repeat,
-    const std::vector<PreloadReport>* preloads = nullptr) {
+    const std::vector<PreloadReport>* preloads = nullptr, bool typed_projection = false) {
   const auto resolved = resolve_machine_items(items);
   require(resolved.diagnostics.empty(), "manual epoch fixture must resolve");
   std::vector<int> code;
@@ -798,7 +805,9 @@ ManualEpochObservation observe_manual_epoch(const std::vector<MachineItem>& item
   const auto snapshot = [&](bool after_overwrite) {
     result.values.push_back(calc.display_text(true));
     for (const char* name : {"X", "Y", "Z", "T", "X1"})
-      result.values.push_back(calc.read_register(name));
+      if (!typed_projection || after_overwrite || std::string_view(name) == "X" ||
+          std::string_view(name) == "Y")
+        result.values.push_back(calc.read_register(name));
     // Only this proved dead private word is outside the source-typed UI.
     for (std::size_t i = 0; i < names.size(); ++i)
       if (after_overwrite || static_cast<int>(i) != reg)
@@ -867,9 +876,19 @@ void manual_epoch_lifetime_contracts() {
                 "carrier optimization must not bypass a negative lifetime contract");
       }
     }
-    const auto displayed = candidates(manual_epoch_fixture(ManualEpochVariant::DisplayedCarrier, reg));
-    require(std::none_of(displayed.begin(), displayed.end(), retired_input),
-            "register death must not erase its still-observed stack value");
+    const auto displayed_source = manual_epoch_fixture(ManualEpochVariant::DisplayedCarrier, reg);
+    const auto displayed = candidates(displayed_source);
+    for (const auto& proposal : displayed) {
+      if (!retired_input(proposal)) continue;
+      const auto decoded = lower_ir_to_machine(proposal.ops);
+      require(cells(decoded) < cells(displayed_source), "a visible decoder must pay its code cost");
+      for (const int phase : {0, 1, 2})
+        require(observe_manual_epoch(displayed_source, reg, "3.25", "-2", phase, false,
+                                      nullptr, true).values ==
+                    observe_manual_epoch(decoded, reg, "3.25", "-2", phase, false,
+                                         nullptr, true).values,
+                "a displayed carrier must be decoded before observing X/Y");
+    }
   }
   require(!prompt_overwrite_proves(manual_epoch_fixture(ManualEpochVariant::Counter, 2), 2),
           "FL is a read before its destructive counter update");
@@ -956,11 +975,44 @@ void typed_input_seed_preload_contracts() {
     return !result.preloads.empty();
   }), "an incomplete setup environment must not authorize a new seed register");
   for (const auto variant : {ManualEpochVariant::Raw, ManualEpochVariant::BrokenPhase,
-                            ManualEpochVariant::DisplayedCarrier}) {
+                            ManualEpochVariant::DisplayedCarrierLastX}) {
     const auto rejected = candidates(fixture_with_signs(variant), &complete_preloads);
     require(std::none_of(rejected.begin(), rejected.end(), [](const auto& result) {
       return !result.preloads.empty();
-    }), "raw/broken input or an observed carrier cannot acquire a pooled encoding");
+    }), "raw/broken input or a subsequent last-X read must reject pooled encoding");
+  }
+  // A decoded display is observable; its overwritten hidden last-X is not.
+  const auto displayed_source = fixture_with_signs(ManualEpochVariant::DisplayedCarrier);
+  const auto displayed_proposals = candidates(displayed_source, &complete_preloads);
+  const auto decoded = std::find_if(displayed_proposals.begin(), displayed_proposals.end(),
+      [](const auto& proposal) { return retired_input(proposal) && proposal.preloads.size() == 1U; });
+  require(decoded != displayed_proposals.end(), "a visible carrier permits a proved decoder");
+  const auto decoded_items = lower_ir_to_machine(decoded->ops);
+  require(cells(displayed_source) == 51 && cells(decoded_items) == 43,
+          "decoded typed-display baseline must shrink 51 to 43, including the decoder");
+  auto observed_counterexample = decoded_items;
+  const auto resumed = std::find_if(observed_counterexample.begin(), observed_counterexample.end(),
+      [](const auto& item) { return item.manual_interaction && item.manual_interaction->kind ==
+          ManualInteractionAnchorKind::ContinuousResume; });
+  require(resumed != observed_counterexample.end(), "decoded fixture keeps its resume phase");
+  observed_counterexample.insert(resumed + 1,
+      {MachineItem::op(0x0f, "last-X read"), MachineItem::op(0x46, "remember last-X")});
+  const auto terminal = std::find_if(observed_counterexample.begin(), observed_counterexample.end(),
+      [](const auto& item) { return item.stop_disposition == StopDisposition::Terminal; });
+  require(terminal != observed_counterexample.end(), "decoded fixture keeps its final display");
+  observed_counterexample.insert(terminal, MachineItem::op(0x66, "observe remembered last-X"));
+  for (const char* sign : {"-7", "13"}) {
+    auto setup = decoded->preloads;
+    setup.push_back({.register_name = "b", .value = sign});
+    for (const int phase : {0, 1, 2})
+      require(observe_manual_epoch(displayed_source, 8, "3.25", "-2", phase, false, &setup, true).values ==
+                  observe_manual_epoch(decoded_items, 8, "3.25", "-2", phase, false, &setup, true).values,
+              "decoded X/Y and every subsequent observation must match ROM");
+    require(observe_manual_epoch(fixture_with_signs(ManualEpochVariant::DisplayedCarrierLastX),
+                8, "3.25", "-2", 2, false, &setup, true).values !=
+                observe_manual_epoch(observed_counterexample, 8, "3.25", "-2", 2, false,
+                                     &setup, true).values,
+            "ROM must expose a live last-X counterexample instead of erasing its observation");
   }
   // Leave only R0 unreserved, then make the PP command write it. The input
   // certificate is not permission to borrow a register used by that protocol.

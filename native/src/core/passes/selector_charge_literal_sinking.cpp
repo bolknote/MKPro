@@ -1,3 +1,4 @@
+#include "mkpro/core/stable_register_value_flow.hpp"
 #include "mkpro/core/passes/selector_charge_literal_sinking.hpp"
 
 #include "mkpro/core/callee_hole_boundary_normalization.hpp"
@@ -170,7 +171,8 @@ bool literal_entry_is_closed(const std::vector<MachineItem>& items,
 // branches; no display/return boundary is exempted from stack/X1/X2 equality.
 bool entry_converges(const std::vector<MachineItem>& original,
                       const AuthoritativePostLayoutControlFlow& flow,
-                      int entry, int reg, int leaf, bool x_equal) {
+                      int entry, int reg, int leaf, bool x_equal,
+                      std::optional<std::size_t> charge_start = std::nullopt) {
   auto items = original;
   auto restricted = flow;
   for (std::size_t index = 0; index < items.size(); ++index) {
@@ -226,7 +228,75 @@ bool entry_converges(const std::vector<MachineItem>& original,
   // Transfer that boundary explicitly before entering the equal-mode proof.
   StackValueEqualityState equality{{x_equal, false, false, false}, false, false};
   transfer_stack_value_equality(equality, 0x60, StackValueEqualityStepKind::Recall);
-  return prove_post_layout_stack_entry_equality(items, restricted, entry + 1, equality);
+  if (!charge_start)
+    return prove_post_layout_stack_entry_equality(items, restricted, entry + 1, equality);
+  // A shared entry can have different return continuations for different
+  // literal producers. Prove this literal's actual matched contexts, not a
+  // Cartesian product with unrelated callers. Every path from the complete
+  // charge contexts is retained until the first shared-body recall.
+  std::vector<std::size_t> pending, roots;
+  for (std::size_t s = 0; s < flow.execution_states.size(); ++s)
+    if (flow.execution_states[s].item_index == *charge_start) pending.push_back(s);
+  std::set<std::size_t> visited;
+  while (!pending.empty()) {
+    const auto s = pending.back(); pending.pop_back();
+    if (s >= flow.execution_states.size() || visited.size() >= 100000U) return false;
+    if (!visited.insert(s).second) continue;
+    const auto& state = flow.execution_states[s];
+    if (state.item_index >= items.size()) return false;
+    const auto& command = original[state.item_index];
+    if (command.kind != MachineItemKind::Op || command.raw || command.manual_interaction)
+      return false;
+    const auto& next = flow.execution_successors[s];
+    if (state.address == entry) {
+      if (command.opcode < 0x60 || command.opcode > 0x6e || next.size() != 1U)
+        return false;
+      const auto& after = flow.execution_states[next.front()];
+      if (after.address != entry + 1 || after.return_stack != state.return_stack ||
+          after.formal_return_stack != state.formal_return_stack) return false;
+      roots.push_back(next.front());
+      continue;
+    }
+    const int opcode = command.opcode;
+    if (!((opcode >= 0 && opcode <= 9) || opcode == 0x0e || opcode == 0x25 ||
+          opcode == 0x40 + reg || opcode == 0x51 || opcode == 0x53 ||
+          (opcode >= 0xa7 && opcode <= 0xae) ||
+          (opcode >= 0x87 && opcode <= 0x8e)) || next.empty()) return false;
+    pending.insert(pending.end(), next.begin(), next.end());
+  }
+  if (roots.empty()) return false;
+  std::sort(roots.begin(), roots.end());
+  roots.erase(std::unique(roots.begin(), roots.end()), roots.end());
+  // The first direct recall has unconditionally closed numeric entry in
+  // both executions. No mode assumption is transported across a raw barrier.
+  const PostLayoutStackEntryProofOptions proof_options{
+      .refine_runtime_selectors = false, .numeric_entry_closed = true,
+      .transport_closed_entry_through_control = true,
+      .use_indirect_store_entry_facts = true};
+  if (prove_post_layout_stack_state_equality(items, restricted, roots, equality,
+                                             proof_options)) return true;
+  // Reassigning the selector ends the uniform-leaf assumption above, not the
+  // underlying memory equality. Independently track the actual selector word
+  // through every definition and caller context. A store must still have
+  // equal X; all subsequent branches, returns and observations remain checked.
+  const auto selected = build_selector_consistent_execution_graph(original, flow);
+  if (!selected.proved) return false;
+  auto exact = flow;
+  exact.execution_states.clear();
+  std::vector<std::size_t> selected_roots;
+  for (std::size_t s = 0; s < selected.original_states.size(); ++s) {
+    const auto original_state = selected.original_states[s];
+    exact.execution_states.push_back(flow.execution_states.at(original_state));
+    if (std::binary_search(roots.begin(), roots.end(), original_state))
+      selected_roots.push_back(s);
+  }
+  // Only contexts excluded by a separately proved selector certificate can
+  // disappear here. Do not publish a partial/unproved refinement or empty root.
+  if (selected_roots.empty()) return false;
+  exact.execution_successors = selected.successors;
+  exact.execution_edges = selected.execution_edges;
+  return prove_post_layout_stack_state_equality(original, exact, selected_roots,
+                                                equality, proof_options);
 }
 
 PassResult sink_literal(const std::vector<IrOp>& ops,
@@ -422,8 +492,14 @@ bool prove_selector_charge_sunk_literal_entry(
     const std::vector<MachineItem>& items,
     const AuthoritativePostLayoutControlFlow& flow,
     std::size_t store, std::size_t charge_start, int leaf) {
-  if (!flow.proved || store >= items.size() || charge_start >= items.size())
+  const auto reject = [&](std::string_view why) {
+    if (std::getenv("MKPRO_NATIVE_TRACE_COPY_TRANSPORT"))
+      std::cerr << "[sunk-final] store=" << store << " charge=" << charge_start
+                << " leaf=" << leaf << " " << why << '\n';
     return false;
+  };
+  if (!flow.proved || store >= items.size() || charge_start >= items.size())
+    return reject("guard-1");
   const auto id = role_suffix(items[store], "selector-sunk-literal-id:");
   const auto literal = role_suffix(items[store], "selector-sunk-literal-value:");
   if (!id || !literal || literal->size() > 8 ||
@@ -432,20 +508,20 @@ bool prove_selector_charge_sunk_literal_entry(
       items[store].kind != MachineItemKind::Op || items[store].opcode < 0x47 ||
       items[store].opcode > 0x4e || items[store].raw ||
       items[store].manual_interaction.has_value())
-    return false;
+    return reject("guard-2");
   const int reg = items[store].opcode & 15;
   std::optional<std::size_t> origin;
   for (std::size_t index = 0; index < items.size(); ++index) {
     if (index != store &&
         role_suffix(items[index], "selector-sunk-literal-id:") == id)
-      return false;
+      return reject("guard-3");
     if (role_suffix(items[index], "selector-sunk-literal-source:") == id) {
-      if (origin.has_value()) return false;
+      if (origin.has_value()) return reject("guard-4");
       origin = index;
     }
   }
   if (!origin || !literal_entry_is_closed(items, flow, *origin))
-    return false;
+    return reject("guard-5");
 
   const auto next = [&](std::size_t index) {
     while (++index < items.size() && items[index].kind == MachineItemKind::Label) {}
@@ -467,33 +543,33 @@ bool prove_selector_charge_sunk_literal_entry(
         items[source_low].opcode < 0 || items[source_low].opcode > 9 ||
         role_suffix(items[source_low], "late-decimal-selector-low:") != source_target ||
         items[*origin].opcode * 10 + items[source_low].opcode != std::stoi(*literal))
-      return false;
+      return reject("guard-6");
     int address = 0;
     std::optional<int> target_address;
     for (const auto& item : items) {
       if (item.kind == MachineItemKind::Label) {
         if (item.name == *source_target) {
-          if (target_address) return false;
+          if (target_address) return reject("guard-7");
           target_address = address;
         }
       } else {
         ++address;
       }
     }
-    if (target_address != std::optional<int>(std::stoi(*literal))) return false;
+    if (target_address != std::optional<int>(std::stoi(*literal))) return reject("guard-8");
     // Relocation changes the private selector's numeric value. It must not
     // acquire an ordinary data use, including an indirect memory alias.
     for (std::size_t index = 0; index < items.size(); ++index) {
       const auto& item = items[index];
       if (item.kind != MachineItemKind::Op) continue;
-      if (item.opcode == 0x60 + reg) return false;
+      if (item.opcode == 0x60 + reg) return reject("guard-9");
       const bool memory = (item.opcode >= 0xb0 && item.opcode <= 0xbe) ||
                           (item.opcode >= 0xd0 && item.opcode <= 0xde);
       if (!memory) continue;
       const auto targets = flow.indirect_memory_targets.find(index);
       if ((item.opcode & 15) == reg || targets == flow.indirect_memory_targets.end() ||
           std::find(targets->second.begin(), targets->second.end(), reg) !=
-              targets->second.end()) return false;
+              targets->second.end()) return reject("guard-10");
     }
   } else {
     for (const char digit : *literal) {
@@ -502,7 +578,7 @@ bool prove_selector_charge_sunk_literal_entry(
           items[current].opcode != digit - '0' || items[current].raw ||
           items[current].manual_interaction.has_value() ||
           !incoming_only_from(flow, current, {previous}))
-        return false;
+        return reject("guard-11");
       previous = current;
     }
   }
@@ -511,7 +587,7 @@ bool prove_selector_charge_sunk_literal_entry(
       items[body].opcode < 0x60 || items[body].opcode > 0x6e ||
       items[body].raw || items[body].manual_interaction.has_value() ||
       !incoming_only_from(flow, body, {previous}))
-    return false;
+    return reject("guard-12");
 
   const std::size_t low = next(charge_start);
   if (low >= items.size() || items[charge_start].raw || items[low].raw ||
@@ -523,19 +599,24 @@ bool prove_selector_charge_sunk_literal_entry(
       items[low].opcode < 0 || items[low].opcode > 9 ||
       items[charge_start].opcode * 10 + items[low].opcode != leaf ||
       !incoming_only_from(flow, low, {charge_start}))
-    return false;
+    return reject("guard-13");
   const auto high_target = role_suffix(items[charge_start], "late-decimal-selector-high:");
   if (!high_target || role_suffix(items[low], "late-decimal-selector-low:") != high_target ||
       role_suffix(items[charge_start], "late-decimal-selector-register:") !=
           std::optional<std::string>(register_name_for_index(reg)) ||
       role_suffix(items[low], "late-decimal-selector-register:") !=
           std::optional<std::string>(register_name_for_index(reg)))
-    return false;
+    return reject("guard-14");
 
   int body_address = 0;
   for (std::size_t index = 0; index < body; ++index)
     if (items[index].kind != MachineItemKind::Label) ++body_address;
-  return entry_converges(items, flow, body_address, reg, leaf, charge_start == *origin);
+  const bool converges = entry_converges(items, flow, body_address, reg, leaf,
+                                         charge_start == *origin) ||
+      entry_converges(items, flow, body_address, reg, leaf,
+                      charge_start == *origin, charge_start);
+  if (!converges) return reject("stack convergence");
+  return true;
 }
 
 

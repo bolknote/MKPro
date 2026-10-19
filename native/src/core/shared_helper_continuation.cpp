@@ -1,4 +1,5 @@
 #include "mkpro/core/shared_helper_continuation.hpp"
+#include "mkpro/core/post_layout_control_flow.hpp"
 
 #include "mkpro/core/opcodes.hpp"
 #include "mkpro/core/stack_value_equivalence.hpp"
@@ -760,7 +761,22 @@ verify_shared_helper_continuation(const std::vector<MachineItem>& items,
   int first_entry = proof.helper_body_start_address;
   for (const auto& call : calls) first_entry = std::min(first_entry, call.entry_address);
   if (first_entry < proof.helper_body_start_address) {
-    const auto before = index.cell_items.find(first_entry - 1);
+    int before_address=first_entry-1;
+    bool padding_proved=true;
+    while(before_address>=0){
+      const auto preceding=index.cell_items.find(before_address);
+      if(preceding==index.cell_items.end())break;
+      const auto& item=items[preceding->second];
+      if(item.kind!=MachineItemKind::Op || item.opcode!=0x54)break;
+      const auto* complete=options.exact_control;
+      if(!complete || !complete->proved || item.raw || item.manual_interaction ||
+          std::any_of(complete->execution_states.begin(),complete->execution_states.end(),[&](const auto& state){return state.item_index==preceding->second;}) ||
+          std::any_of(complete->external_entries.begin(),complete->external_entries.end(),[&](const auto& entry){return entry.entry.item_index==preceding->second;})){
+        padding_proved=false;break;
+      }
+      --before_address;
+    }
+    const auto before = index.cell_items.find(before_address);
     bool closed = false;
     if (before != index.cell_items.end()) {
       const auto& item = items[before->second];
@@ -774,7 +790,7 @@ verify_shared_helper_continuation(const std::vector<MachineItem>& items,
             items[*flow].opcode == 0x51;
       }
     }
-    if (!closed) proof.reasons.push_back("helper prologue has an unproved fallthrough entry");
+    if (!closed || !padding_proved) proof.reasons.push_back("helper prologue has an unproved fallthrough entry");
   }
   if (calls.size() != 3U)
     proof.reasons.push_back(

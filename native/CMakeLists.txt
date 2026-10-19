@@ -33,6 +33,7 @@ add_library(mkpro_core STATIC
   src/core/constant_folder.cpp
   src/core/constant_synthesis.cpp
   src/core/multirole_word_synthesis.cpp
+  src/core/passes/idempotent_entry_prologue.cpp
   src/core/post_layout_numeric_ranges.cpp
   src/core/post_layout_packed_sign.cpp
   src/core/raw_bcd_word.cpp
@@ -70,6 +71,8 @@ add_library(mkpro_core STATIC
   src/core/passes/branch_target_x_reuse.cpp
   src/core/passes/call_continuation_composition.cpp
   src/core/passes/common_processor_factoring.cpp
+  src/core/passes/contextual_copy_layout.cpp
+  src/core/passes/contextual_copy_transport.cpp
   src/core/passes/cfg.cpp
   src/core/passes/conditional_branch_trampoline.cpp
   src/core/passes/constant_folding.cpp
@@ -902,6 +905,18 @@ mkpro_configure_target(mkpro_finite_mode_exit_decoder_tests)
 add_test(NAME mkpro.finite_mode_exit_decoder_compiler_and_rom
   COMMAND mkpro_finite_mode_exit_decoder_tests)
 
+add_executable(mkpro_typed_display_observation_tests tests/typed_display_observation_test.cpp)
+target_link_libraries(mkpro_typed_display_observation_tests PRIVATE mkpro_debug)
+mkpro_configure_target(mkpro_typed_display_observation_tests)
+add_test(NAME mkpro.typed_display_observation_compiler_and_rom
+  COMMAND mkpro_typed_display_observation_tests)
+
+add_executable(mkpro_selector_entry_word_tests tests/selector_entry_word_test.cpp)
+target_link_libraries(mkpro_selector_entry_word_tests PRIVATE mkpro_debug)
+mkpro_configure_target(mkpro_selector_entry_word_tests)
+add_test(NAME mkpro.selector_entry_word_compiler_and_rom
+  COMMAND mkpro_selector_entry_word_tests)
+
 add_executable(mkpro_register_recoloring_tests tests/register_recoloring_test.cpp)
 target_link_libraries(mkpro_register_recoloring_tests PRIVATE mkpro_debug)
 mkpro_configure_target(mkpro_register_recoloring_tests)
@@ -932,3 +947,37 @@ add_executable(mkpro_indirect_control_entry_rom_tests tests/indirect_control_ent
 target_link_libraries(mkpro_indirect_control_entry_rom_tests PRIVATE mkpro_debug)
 mkpro_configure_target(mkpro_indirect_control_entry_rom_tests)
 add_test(NAME mkpro.indirect_control_entry_rom_compiler_and_rom COMMAND mkpro_indirect_control_entry_rom_tests)
+
+add_executable(mkpro_finite_producer_image_tests tests/finite_producer_image_test.cpp)
+target_link_libraries(mkpro_finite_producer_image_tests PRIVATE mkpro_debug)
+mkpro_configure_target(mkpro_finite_producer_image_tests)
+add_test(NAME mkpro.finite_producer_image_compiler_and_rom
+  COMMAND mkpro_finite_producer_image_tests)
+
+add_executable(mkpro_contextual_copy_layout_tests tests/contextual_copy_layout_test.cpp)
+target_link_libraries(mkpro_contextual_copy_layout_tests PRIVATE mkpro_debug)
+mkpro_configure_target(mkpro_contextual_copy_layout_tests)
+add_test(NAME mkpro.contextual_copy_layout_compiler_and_rom
+  COMMAND mkpro_contextual_copy_layout_tests)
+
+add_executable(mkpro_preloaded_finite_state_tests tests/preloaded_finite_state_test.cpp)
+target_link_libraries(mkpro_preloaded_finite_state_tests PRIVATE mkpro_debug)
+mkpro_configure_target(mkpro_preloaded_finite_state_tests)
+add_test(NAME mkpro.preloaded_finite_state_compiler_and_rom
+  COMMAND mkpro_preloaded_finite_state_tests)
+
+add_executable(mkpro_contextual_copy_transport_tests tests/contextual_copy_transport_test.cpp)
+target_link_libraries(mkpro_contextual_copy_transport_tests PRIVATE mkpro_debug)
+mkpro_configure_target(mkpro_contextual_copy_transport_tests)
+add_test(NAME mkpro.contextual_copy_transport_compiler_and_rom
+  COMMAND mkpro_contextual_copy_transport_tests)
+
+target_compile_definitions(mkpro_contextual_copy_transport_tests PRIVATE
+  MKPRO_CONTEXT_REPO_ROOT="${CMAKE_CURRENT_SOURCE_DIR}/..")
+add_test(NAME mkpro.contextual_copy_transport_pending_reduction
+  COMMAND mkpro_contextual_copy_transport_tests --pending)
+
+add_executable(mkpro_raw_decimal_multiplier_tests tests/raw_decimal_multiplier_test.cpp)
+target_link_libraries(mkpro_raw_decimal_multiplier_tests PRIVATE mkpro_debug)
+mkpro_configure_target(mkpro_raw_decimal_multiplier_tests)
+add_test(NAME mkpro.raw_decimal_multiplier_compiler_and_rom COMMAND mkpro_raw_decimal_multiplier_tests)

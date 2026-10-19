@@ -740,6 +740,88 @@ std::vector<passes::RegisterWebRecoloringRequest> epoch_recolor_request(
   return {{{*first,*second}}};
 }
 
+void mutable_selector_keeps_independent_charge_origins() {
+  PostLayoutControlFlowOptions control; control.empty_return_target=1;
+  for (const bool expose_first : {false,true}) {
+    LayoutSearchArtifact original; auto& items=original.items;
+    items.push_back(MachineItem::label("zero_return")); emit(items,{0x52});
+    emit(items,{0x6c,0x0b,0x4c,0xac});
+    items.back().indirect_flow_targets=std::vector<IrTarget>{std::string{"zero_return"},std::string{"opaque_return"}};
+    const auto charge=[&](const std::string& target) {
+      for (const auto part : {LateBoundDecimalSelectorPart::High,LateBoundDecimalSelectorPart::Low}) {
+        emit(items,{0}); items.back().mnemonic="0"; items.back().roles.push_back(make_late_bound_decimal_selector_role(part,target));
+        items.back().roles.push_back("late-decimal-selector-register:b");
+      }
+      emit(items,{0x4b,0xab}); items.back().roles.push_back("late-decimal-selector-consumer");
+      items.back().indirect_flow_targets=std::vector<IrTarget>{std::string{"discard"},std::string{"observe"}};
+    };
+    charge("discard"); charge("observe");
+    emit(items,{0x6a,0x50}); items.back().stop_disposition=StopDisposition::Terminal;
+    // Moving these unreachable padding cells across the first callback changes
+    // only its address. The second callback's observable word stays fixed.
+    emit(items,{0x54,0x54,0x54});
+    items.push_back(MachineItem::label("discard"));
+    if (expose_first) emit(items,{0x49});
+    emit(items,{0x67,0x67,0x67,0x67,0x52});
+    items.push_back(MachineItem::label("observe")); emit(items,{0x4a,0x67,0x67,0x67,0x67,0x52});
+    items.push_back(MachineItem::label("opaque_return")); emit(items,{0x52});
+    original.preloads={{.register_name="c",.value="1E-1"},{.register_name="7",.value="13"}};
+    const auto bound=rebind_layout_search_artifact(std::move(original));
+    require(bound.has_value(),"mutable selector fixture has complete charge bindings"); original=*bound;
+    const auto flow=build_post_layout_control_flow(original.items,control);
+    require(flow.proved,"mutable selector and both exact callback families have a rooted CFG");
+    detail::JointOriginMap origins; int address=0;
+    for (const auto& item : original.items) {
+      if (item.kind==MachineItemKind::Label) origins[item.name]=address;
+      else ++address;
+    }
+    const auto selected=build_deferred_selector_consistent_execution_graph(original.items,flow,origins).execution;
+    const auto opaque=std::find_if(original.items.begin(),original.items.end(),[](const auto& item){
+      return item.kind==MachineItemKind::Label && item.name=="opaque_return";
+    });
+    const auto opaque_item=static_cast<std::size_t>(opaque-original.items.begin())+1U;
+    require(selected.proved && std::any_of(selected.original_states.begin(),selected.original_states.end(),
+        [&](const auto state){return flow.execution_states[state].item_index==opaque_item;}),
+        "an unknown written selector retains its second declared callback; stale preload text cannot prune it");
+    const auto pinned=detail::protected_joint_runtime_charge_targets(original.items,&flow,&original.preloads,true);
+    require(pinned && pinned->contains("observe") && pinned->contains("discard")==expose_first,
+        "a written independent selector never turns its stale Main word into an origin or disables exact callback privacy");
+    if(expose_first)continue;
+    auto moved=original;
+    const auto first=std::find_if(moved.items.begin(),moved.items.end(),[](const auto& item){
+      return item.kind==MachineItemKind::Label && item.name=="discard";});
+    const auto second=std::find_if(moved.items.begin(),moved.items.end(),[](const auto& item){
+      return item.kind==MachineItemKind::Label && item.name=="observe";});
+    require(first!=moved.items.end() && second>first && first-moved.items.begin()>=3,
+        "callback and skipped padding identities exist");
+    const auto low=static_cast<std::size_t>(first-moved.items.begin());
+    const auto high=static_cast<std::size_t>(second-moved.items.begin());
+    std::rotate(moved.items.begin()+static_cast<std::ptrdiff_t>(low-3U),
+                moved.items.begin()+static_cast<std::ptrdiff_t>(low),
+                moved.items.begin()+static_cast<std::ptrdiff_t>(high));
+    const auto relocated=rebind_layout_search_artifact(std::move(moved));
+    require(relocated.has_value(),"separately movable private charge is rebound by identity");
+    const auto play=[&](const LayoutSearchArtifact& artifact) {
+      const auto image=resolve_machine_items(artifact.items); require(image.diagnostics.empty(),"callback fixture resolves");
+      std::vector<int> bytes;for(const auto& step:image.steps)bytes.push_back(step.opcode);
+      emulator::MK61 calc;require(calc.load_program(bytes).diagnostics.empty(),"callback fixture fits stock ROM");
+      for(const auto& word:artifact.preloads)calc.set_register(word.register_name,word.value);
+      calc.set_register("X","17");calc.set_register("Y","23");calc.set_register("Z","31");calc.set_register("T","43");
+      calc.press_sequence({"\u0412/\u041e","\u0421/\u041f"});
+      require(calc.run_until_stable(5000,8).stopped,"both callbacks return to the original terminal observation");
+      std::vector<std::string> values;
+      for(const char* reg:{"X","Y","Z","T","X1","a","b","c"})values.push_back(calc.read_register(reg));
+      calc.press(".");values.push_back(calc.display_text(true));return values;
+    };
+    require(play(original)==play(*relocated),
+        "ROM preserves observable callback data, every later register read, stack, last-X and entry shadow after moving only the private leaf");
+    const auto altered_flow=build_post_layout_control_flow(relocated->items,control);
+    const auto altered=detail::protected_joint_runtime_charge_targets(relocated->items,&altered_flow,&relocated->preloads,true);
+    require(altered && !altered->contains("discard") && altered->contains("observe"),
+        "the independent privacy proof survives the final callback relocation");
+  }
+}
+
 void deferred_web_recoloring_contracts() {
   CompileOptions options;
   options.coalesce_copies=true;
@@ -1916,6 +1998,7 @@ void run() {
 int main() {
   try {
     set_valued_closure_frontier_contracts();
+    mutable_selector_keeps_independent_charge_origins();
     deferred_web_recoloring_contracts();
     prepared_joint_proof_input_contracts();
     joint_origin_transport_contracts();

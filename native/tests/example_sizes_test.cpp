@@ -247,7 +247,7 @@ void example_sizes_match_typescript_baselines() {
   const std::map<std::string, std::size_t> PENDING_BASELINE{
       {"nekromant", 138},
       {"podvodnaya-lodka-lazarev", 246},
-      {"tic-tac-toe-4x4", 127},
+      {"tic-tac-toe-4x4", 125},
   };
 
   const std::filesystem::path root = std::filesystem::current_path();
@@ -620,7 +620,25 @@ void example_sizes_match_typescript_baselines() {
           (control_crossing || nested_input) &&
           mark_details.contains("valueAwareEstimatedNetSavingsAfterMaterialization") &&
           std::stoi(mark_details.at("valueAwareEstimatedNetSavingsAfterMaterialization")) <= 0;
-      require((old_nonpositive_model || nested_input_with_output) &&
+      // Prefix placement can end this helper before its shared consumer.
+      // Its persistent argument then becomes output state of the short helper,
+      // not a removable local input. Require the explicit persistent-store
+      // classification and zero/nonpositive net estimate, not the old boundary.
+      const bool persistent_continuation_output =
+          detail_has_name("valueAwareStateOutputNames", "best_score") &&
+          !detail_has_name("valueAwareProfitableStackInputNames", "best_score") &&
+          !detail_has_name("valueAwareSuggestedResidentInputNames", "best_score") &&
+          mark_details.contains("valueAwareStateOutputPlanStatus") &&
+          mark_details.at("valueAwareStateOutputPlanStatus") == "requires-persistent-state-store" &&
+          mark_details.contains("valueAwareSchedulerPlanStatus") &&
+          mark_details.at("valueAwareSchedulerPlanStatus") == "requires-persistent-state-store" &&
+          mark_details.contains("valueAwareEstimatedNetSavingsExcludes") &&
+          mark_details.at("valueAwareEstimatedNetSavingsExcludes") == "persistent-state-output-stores" &&
+          mark_details.contains("valueAwareStateOutputCells") &&
+          std::stoi(mark_details.at("valueAwareStateOutputCells")) > 0 &&
+          mark_details.contains("valueAwareEstimatedNetSavingsAfterMaterialization") &&
+          std::stoi(mark_details.at("valueAwareEstimatedNetSavingsAfterMaterialization")) <= 0;
+      require((old_nonpositive_model || nested_input_with_output || persistent_continuation_output) &&
                   !detail_has_name("valueAwareMixedStateTempCarrierNames", "best_score"),
               "tic-tac-toe best_score must remain persistent across nested calls "
               "instead of being reported as a removable local stack carrier");

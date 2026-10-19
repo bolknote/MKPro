@@ -18,6 +18,11 @@
 namespace mkpro::core {
 namespace {
 
+bool preserves_closed_numeric_entry(int opcode, bool matched_return) {
+  return opcode == 0x51 || opcode == 0x54 || (opcode == 0x52 && matched_return);
+}
+
+
 std::optional<std::size_t> executable(const std::vector<IrOp>& ops, std::size_t index) {
   while (index < ops.size() && ops[index].kind == IrKind::Label)
     ++index;
@@ -130,10 +135,12 @@ static bool prove_post_layout_stack_equality_impl(
     StackValueEqualityState initial, const PostLayoutStackEntryProofOptions& options,
     const std::vector<std::size_t>* entry_states) {
   const bool trace = std::getenv("MKPRO_NATIVE_TRACE_STACK_ENTRY_EQUALITY") != nullptr;
+  int diagnostic_pc = -1, diagnostic_opcode = -1, diagnostic_state = -1;
   const auto reject = [&](const char* reason) {
     if (trace)
       std::cerr << "[stack-entry-equality] entry=" << entry_address
-                << " rejected: " << reason << '\n';
+                << " pc=" << diagnostic_pc << " opcode=" << diagnostic_opcode
+                << " equality=" << diagnostic_state << " rejected: " << reason << '\n';
     return false;
   };
   if (!flow.proved || flow.execution_states.empty() ||
@@ -219,11 +226,14 @@ static bool prove_post_layout_stack_equality_impl(
     DecimalEntry entry_mode = entry_modes[index];
     if (stack_values_fully_equal(state))
       continue;
-    ++explored;
+    if (++explored > options.maximum_work)
+      return reject("stack equality proof work exhausted");
     const auto& execution = flow.execution_states[graph.original_states[index]];
     if (execution.item_index >= items.size())
       return reject("execution state is outside the artifact");
     const auto& item = items[execution.item_index];
+    diagnostic_pc = execution.address; diagnostic_opcode = item.opcode;
+    diagnostic_state = stack_value_equality_key(state);
     if (item.kind != MachineItemKind::Op || item.raw)
       return reject("opaque or externally observed instruction");
 
@@ -236,8 +246,7 @@ static bool prove_post_layout_stack_equality_impl(
     if (item.manual_interaction && !typed_manual)
       return reject("untyped manual interaction");
     if (typed_manual || projected_stop) {
-      if (!state.stack_equal[0] || !state.stack_equal[1] ||
-          !state.x1_equal || !state.x2_equal)
+      if (!state.stack_equal[0] || !state.stack_equal[1])
         return reject("typed interaction observes a differing value");
       if (projected_stop && item.stop_disposition == StopDisposition::Terminal)
         continue;
@@ -316,7 +325,15 @@ static bool prove_post_layout_stack_equality_impl(
       entry_mode = DecimalEntry::Open;
     else if (kind == IrKind::Recall && item.opcode >= 0x60 && item.opcode <= 0x6e)
       entry_mode = DecimalEntry::Recalled;
-    else if (selector_charge_entry_closer_opcode(item.opcode))
+    else if (selector_charge_entry_closer_opcode(item.opcode) ||
+             (options.use_indirect_store_entry_facts &&
+              item.opcode >= 0xb0 && item.opcode <= 0xbe))
+      entry_mode = DecimalEntry::Closed;
+    else if (options.transport_closed_entry_through_control &&
+             preserves_closed_numeric_entry(item.opcode, !execution.return_stack.empty()) &&
+             (entry_mode == DecimalEntry::Closed || entry_mode == DecimalEntry::Recalled))
+      // A real caller return/BP/NOP preserves the closed-entry certificate,
+      // but not the stronger immediate-recall sign-edit certificate.
       entry_mode = DecimalEntry::Closed;
     else
       entry_mode = DecimalEntry::Unknown;
@@ -689,6 +706,9 @@ bool callee_hole_return_stack_fits(const std::vector<IrOp>& ops) {
 }
 
 bool selector_charge_entry_closer_opcode(int opcode) {
+  // Preserve the conservative greedy charging policy. Context-specific
+  // indirect-flow facts belong to the separate closed-artifact analysis;
+  // widening this whitelist can displace an older layout before joint pricing.
   // These commands finish numeric entry and enable the next digit's
   // automatic lift. Direct predicates and FL0..FL3 do so on BOTH edges,
   // including after open mantissa/exponent and Enter-suppressed input.
@@ -697,16 +717,20 @@ bool selector_charge_entry_closer_opcode(int opcode) {
   // The shared ROM contract covers every stock register and entry prefix.
   return (opcode >= 0x60 && opcode <= 0x6e) ||
          (opcode >= 0x10 && opcode <= 0x13) || opcode == 0x15 ||
-         opcode == 0x22 || opcode == 0x31 || opcode == 0x34 || opcode == 0x35 ||
+         opcode == 0x22 || opcode == 0x31 || opcode == 0x32 || opcode == 0x34 || opcode == 0x35 ||
          opcode == 0x53 || (opcode >= 0x57 && opcode <= 0x5e) ||
          (opcode >= 0x40 && opcode <= 0x4e) ||
          (opcode >= 0xa7 && opcode <= 0xae);
 }
 
+enum class NumericEntryCertificate { AutomaticLift, FreshInteger };
+
 static std::optional<std::vector<bool>> analyze_entry_lift_impl(
     const std::vector<MachineItem>& items,
     const AuthoritativePostLayoutControlFlow& flow,
-    std::size_t maximum_work,bool include_indirect) {
+    std::size_t maximum_work, bool include_indirect,
+    NumericEntryCertificate certificate = NumericEntryCertificate::AutomaticLift,
+    bool include_indirect_store = false) {
   const std::size_t count = flow.execution_states.size();
   if (!flow.proved || count == 0 || count > maximum_work ||
       flow.execution_successors.size() != count)
@@ -719,15 +743,15 @@ static std::optional<std::vector<bool>> analyze_entry_lift_impl(
   std::vector<unsigned> incoming(count, 0U);
   std::vector<bool> queued(count, false);
   std::vector<std::size_t> pending;
-  std::set<std::size_t> external;
-  for (const auto& entry : flow.external_entries)
-    external.insert(entry.entry.item_index);
+  const auto entries = resolve_post_layout_external_entry_contexts(flow);
+  if (!entries) return std::nullopt;
   for (std::size_t state = 0; state < count; ++state) {
     const auto item = flow.execution_states[state].item_index;
     if (item >= items.size())
       return std::nullopt;
-    // Conservatively seed every context of an externally enterable command.
-    if (external.contains(item)) {
+    // A shared command can also execute under an ordinary caller's frame.
+    // Seed only the independently admitted external PC/return context.
+    if (entries->external[state]) {
       incoming[state] = unknown;
       queued[state] = true;
       pending.push_back(state);
@@ -746,14 +770,16 @@ static std::optional<std::vector<bool>> analyze_entry_lift_impl(
     const auto& item = items[context.item_index];
     unsigned outgoing = unknown;
     if (item.kind == MachineItemKind::Op && !item.raw && !item.manual_interaction) {
-      if (selector_charge_entry_closer_opcode(item.opcode)) {
+      if (selector_charge_entry_closer_opcode(item.opcode) ||
+          (include_indirect_store && item.opcode >= 0xb0 && item.opcode <= 0xbe) ||
+          (certificate == NumericEntryCertificate::FreshInteger &&
+           (item.opcode == 0x0d || item.opcode == 0x0e))) {
         outgoing = enabled;
-      } else if (item.opcode == 0x51 || item.opcode == 0x54 ||
+      } else if (preserves_closed_numeric_entry(item.opcode, !context.return_stack.empty()) ||
                  (include_indirect && (item.opcode & 15)>=7 && (item.opcode & 15)<=14 &&
                   ((item.opcode & 0xf0)==0x70 || (item.opcode & 0xf0)==0x80 ||
                    (item.opcode & 0xf0)==0x90 || (item.opcode & 0xf0)==0xc0 ||
-                   (item.opcode & 0xf0)==0xe0)) ||
-                 (item.opcode == 0x52 && !context.return_stack.empty())) {
+                   (item.opcode & 0xf0)==0xe0))) {
         // Return to this exact caller, not a syntactic call-site shortcut.
         // Empty-stack hardware returns have a separate, deliberately absent
         // entry-state certificate.
@@ -781,6 +807,13 @@ static std::optional<std::vector<bool>> analyze_entry_lift_impl(
 
 std::optional<std::vector<bool>> analyze_post_layout_automatic_entry_lift(const std::vector<MachineItem>& items,const AuthoritativePostLayoutControlFlow& flow,std::size_t maximum_work){return analyze_entry_lift_impl(items,flow,maximum_work,false);}
 std::optional<std::vector<bool>> analyze_post_layout_automatic_entry_lift_with_indirect_flow_facts(const std::vector<MachineItem>& items,const AuthoritativePostLayoutControlFlow& flow,std::size_t maximum_work){return analyze_entry_lift_impl(items,flow,maximum_work,true);}
+
+std::optional<std::vector<bool>> analyze_post_layout_fresh_integer_entry(
+    const std::vector<MachineItem>& items, const AuthoritativePostLayoutControlFlow& flow,
+    std::size_t maximum_work, bool transport_stable_indirect) {
+  return analyze_entry_lift_impl(items, flow, maximum_work, transport_stable_indirect,
+                                NumericEntryCertificate::FreshInteger);
+}
 
 bool selector_charge_has_automatic_entry_lift(const std::vector<IrOp>& ops,
                                              std::size_t entry, AddressSpaceModel model) {
@@ -877,6 +910,13 @@ bool selector_charge_has_automatic_entry_lift(const std::vector<IrOp>& ops,
     saw_context = true;
   }
   return saw_context;
+}
+
+std::optional<std::vector<bool>> analyze_post_layout_automatic_entry_lift_with_indirect_store_facts(
+    const std::vector<MachineItem>& items, const AuthoritativePostLayoutControlFlow& flow,
+    std::size_t maximum_work) {
+  return analyze_entry_lift_impl(items,flow,maximum_work,true,
+                                NumericEntryCertificate::AutomaticLift,true);
 }
 
 } // namespace mkpro::core

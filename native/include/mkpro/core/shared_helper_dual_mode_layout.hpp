@@ -137,6 +137,23 @@ exchange_profitable_direct_indirect_call_families(
     const AuthoritativePostLayoutControlFlow& control_flow,
     AddressSpaceModel model = AddressSpaceModel::Standard);
 
+// A deferred inverse of the established dual-mode continuation law. This is
+// not an executable laid-out artifact: unchanged selector words still refer
+// to their old command identities. The caller must retain those equations,
+// charge added_cells against the immutable root and close the final layout.
+struct SharedHelperDualModeReopening {
+  std::vector<MachineItem> items;
+  SharedHelperContinuationProof continuation;
+  std::vector<passes::AppliedOptimization> optimizations;
+  std::vector<std::string> reasons;
+  int added_cells = 0;
+  int applied = 0;
+};
+
+SharedHelperDualModeReopening reopen_shared_helper_dual_mode_layout(
+    const std::vector<MachineItem>& items,
+    const PostLayoutControlFlowOptions& control_options);
+
 // Complete an exact placement transaction. Two identical `join; store`
 // continuations are moved into one official helper tail. When both ordinary
 // continuations immediately perform one more identical direct store, that

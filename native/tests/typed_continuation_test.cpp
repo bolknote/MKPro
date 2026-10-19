@@ -212,8 +212,13 @@ void negative_contracts() {
     if (observer == 1) difference.stack_equal[1] = false;
     if (observer == 2) difference.x1_equal = false;
     if (observer == 3) difference.x2_equal = false;
-    require(!check_terminal(terminal, difference), "X/Y/X1/X2 remain observation barriers");
+    require(check_terminal(terminal, difference) == (observer >= 2),
+            "typed halt observes X/Y, not unused X1/X2");
   }
+  auto untyped_terminal = terminal;
+  untyped_terminal.back().roles.clear();
+  require(!check_terminal(untyped_terminal, equal_front),
+          "an untyped terminal remains a full-state barrier");
   terminal.back().raw = true;
   require(!check_terminal(terminal, equal_front), "raw typed halt must not bypass opacity");
 

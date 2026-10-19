@@ -379,6 +379,17 @@ deferred_natural_target_selector_allocations(
     const PostLayoutControlFlowOptions& control_options,
     const DeferredNaturalTargetSelectorAllocationOptions& options = {});
 
+// Independent neutral lane: permute only already owned complete families.
+// Keep it separate from conversions/releases whose lower immediate delta can
+// otherwise consume the whole frontier before any geometry is considered.
+std::vector<DeferredNaturalTargetSelectorAllocation>
+permuted_deferred_natural_target_selector_allocations(
+    const std::vector<MachineItem>& items, const std::vector<PreloadReport>& preloads,
+    const AuthoritativePostLayoutControlFlow& control_flow,
+    const std::map<std::string,int>& encoded_selector_targets,
+    const PostLayoutControlFlowOptions& control_options,
+    const DeferredNaturalTargetSelectorAllocationOptions& options = {});
+
 } // namespace mkpro::core
 
 // Bounded, target-set-diverse matching; historical ordering remains separate.

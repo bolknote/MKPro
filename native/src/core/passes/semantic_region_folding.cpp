@@ -9,6 +9,8 @@
 #include "mkpro/core/post_layout_control_flow.hpp"
 
 #include <algorithm>
+#include <cstdint>
+#include <queue>
 #include <functional>
 #include <numeric>
 #include <set>
@@ -295,12 +297,85 @@ std::optional<SymbolicRegionLayout> layout_symbolic_regions(
     }
     return false;
   };
-  if (!place(0))
-    return std::nullopt;
+  std::vector<int> padding_before(parts.size(),0);
+  if (!place(0)) {
+    const int padding_limit=projection?projection->maximum_padding_cells:0;
+    if(padding_limit<=0 || work>=maximum_work || parts.size()>24U)return std::nullopt;
+    // An absolute empty-return root is an entry contract too. Padding may
+    // never turn physical 01 into an unobserved gap instead of its command.
+    const auto options=control_options?*control_options:flow_options(context);
+    const auto flow=build_post_layout_control_flow(lower_ir_to_machine(ops),options);
+    if(!flow.proved)return std::nullopt;
+    if(flow.empty_return_target){
+      const auto indexes=machine_indexes(ops);bool found=false;
+      for(std::size_t part=0;part<parts.size();++part){int offset=0;
+        for(std::size_t i=parts[part].begin;i<parts[part].end;++i){
+          if(indexes[i]==flow.empty_return_target->item_index){
+            const int start=flow.empty_return_target->address-offset;
+            if(start<0 || (starts[part] && *starts[part]!=start))return std::nullopt;
+            starts[part]=start;found=true;
+          }
+          offset+=widths[i];
+        }
+      }
+      if(!found)return std::nullopt;
+    }
+    struct State{std::uint32_t mask=0;int address=0,padding=0;
+      std::size_t parent=0;int part=-2;bool closed=true;};
+    std::vector<State> states(1);
+    using Key=std::tuple<std::uint32_t,int,bool>;
+    std::map<Key,std::size_t> visited{{Key{0,0,true},0}};
+    using QueueEntry=std::pair<int,std::size_t>;
+    std::priority_queue<QueueEntry,std::vector<QueueEntry>,std::greater<QueueEntry>> queue;queue.emplace(0,0);
+    const auto all=(std::uint32_t{1}<<parts.size())-1U;
+    std::optional<std::size_t> answer;
+    const auto enqueue=[&](State next){
+      const Key key{next.mask,next.padding,next.closed};
+      if(visited.contains(key))return;
+      const std::size_t index=states.size();visited.emplace(key,index);
+      states.push_back(next);queue.emplace(next.padding,index);
+    };
+    while(!queue.empty() && work<maximum_work){
+      const auto id=queue.top().second;queue.pop();++work;const State current=states[id];
+      if(current.mask==all){answer=id;break;}
+      std::optional<std::size_t> due;int deadline=1000000;bool valid=true;
+      for(std::size_t i=0;i<parts.size();++i){
+        if((current.mask&(std::uint32_t{1}<<i)) || !starts[i])continue;
+        if(*starts[i]<current.address){valid=false;break;}
+        if(*starts[i]==current.address){
+          if(due && parts[i].cells!=0 && parts[*due].cells!=0){valid=false;break;}
+          due=i;
+        }else deadline=std::min(deadline,*starts[i]);
+      }
+      if(!valid)continue;
+      for(std::size_t i=0;i<parts.size();++i){
+        const auto bit=std::uint32_t{1}<<i;
+        if((current.mask&bit) || (due && *due!=i) ||
+            (starts[i] && *starts[i]!=current.address) ||
+            current.address<bounds[i].first || current.address>bounds[i].second ||
+            current.address+parts[i].cells>deadline || (!current.closed && parts[i].cells!=0))continue;
+        const bool closed=parts[i].cells==0?current.closed:ends_chain(ops[parts[i].end-1U]);
+        enqueue({current.mask|bit,current.address+parts[i].cells,current.padding,id,static_cast<int>(i),closed});
+      }
+      if(!due && current.mask!=0U && current.closed && current.padding<padding_limit && current.address<deadline)
+        enqueue({current.mask,current.address+1,current.padding+1,id,-1,true});
+    }
+    if(!answer)return std::nullopt;
+    std::vector<int> actions;for(auto id=*answer;id!=0;id=states[id].parent)actions.push_back(states[id].part);
+    std::reverse(actions.begin(),actions.end());order.clear();int pad=0;
+    for(const int action:actions)if(action<0)++pad;else{
+      const auto part=static_cast<std::size_t>(action);padding_before[part]=pad;pad=0;order.push_back(part);
+    }
+    if(pad!=0 || order.size()!=parts.size())return std::nullopt;
+  }
   SymbolicRegionLayout result;
   result.work = work;
   std::vector<std::size_t> mapping(ops.size());
-  for (const auto part : order)
+  for (const auto part : order) {
+    for(int n=0;n<padding_before[part];++n){
+      IrOp nop;nop.kind=IrKind::Plain;nop.opcode=0x54;nop.meta.mnemonic=opcode_by_code(0x54).name;
+      result.ops.push_back(std::move(nop));++result.projected_cells;result.changed=true;
+    }
     for (std::size_t i = parts[part].begin; i < parts[part].end; ++i) {
       mapping[i] = result.ops.size();
       result.changed = result.changed || mapping[i] != i;
@@ -309,7 +384,9 @@ std::optional<SymbolicRegionLayout> layout_symbolic_regions(
       result.projected_cells += widths[i];
       result.ops.push_back(ops[i]);
     }
-  if (!relocated(ops, result.ops, mapping, context, control_options))
+  }
+  if (!relocated(ops, result.ops, mapping, context, control_options,
+                 projection && projection->defer_indirect_entries))
     return std::nullopt;
   return result;
 }

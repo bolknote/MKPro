@@ -38,7 +38,8 @@ struct PrecoloredRegisterAllocationOptions {
   std::map<std::string, int> preferred_colors;
   // A speculative optimization needs only a valid witness, not a proof that
   // no coloring exists. In this mode failure is inconclusive and never starts
-  // the exponential fallback search.
+  // the unbounded fallback search. An explicit nonzero repair budget may
+  // admit a bounded, complete-witness search after greedy/component repair.
   bool greedy_only = false;
   // Omission means every target register is admissible. An explicitly empty
   // domain is unsatisfiable, including for an otherwise valid fixed color.
@@ -46,9 +47,10 @@ struct PrecoloredRegisterAllocationOptions {
   // Optional MRV ordering for bounded speculative list coloring. The default
   // exact/legacy DSATUR ordering is unchanged.
   bool prioritize_constrained_domains = false;
-  // Opt-in polynomial two-color chain repair after a failed greedy choice.
-  // Counts graph/domain visits over this solver invocation; zero preserves the
-  // historical greedy/exact ordering. Exhaustion exports no partial witness.
+  // Opt-in bounded repair after a failed greedy choice. Two-color components
+  // keep their full historical budget; a fresh deterministic list-color search
+  // may use only the unspent remainder. Counts graph/domain visits and decisions. Zero preserves
+  // historical greedy/exact ordering; exhaustion exports no partial witness.
   std::size_t maximum_recoloring_work = 0;
 };
 
@@ -75,12 +77,23 @@ PassResult register_web_copy_coalesce(const std::vector<IrOp>& ops,
 // identities, not provisional cell positions. The caller must retain and close
 // those equations before publishing. Typed manual input stores may change only
 // their physical register; phases, hardware roles and empty returns stay intact.
-// Every terminal execution exit observes the complete physical register bank.
+// This ordinary conditional coalescer retains physical terminal observations.
+// The separate complete-runtime equal-size API below may use a typed X/Y
+// terminal projection, subject to its caller's final artifact certificate.
 PassResult deferred_register_web_copy_coalesce(
     const std::vector<IrOp>& ops, const PassContext& context,
     const PostLayoutControlFlowOptions& control,
     const std::map<std::string, int>& encoded_origins);
-// Equalities refer to static direct Store/Recall operands, not source names.
+// Complete-artifact precision after an ABI rewrite. Runtime preloads establish
+// entry equality only; immutable pools remain independently reserved.
+PassResult deferred_register_web_copy_coalesce(
+    const std::vector<IrOp>& ops, const PassContext& context,
+    const PostLayoutControlFlowOptions& control,
+    const std::map<std::string, int>& encoded_origins,
+    const std::vector<PreloadReport>& runtime_preloads);
+// Equalities refer to static Store/Recall operands, or an indirect-memory/FL
+// selector web anchor, not source names. Hardware commands retain their exact
+// opcode/mutation class; selecting their web is not permission to retarget it.
 // Analyze the immutable input once; independently recolor each request without
 // deleting instructions. The consumer must prove and price its own rewrite.
 using RegisterWebRecoloringRequest =
@@ -91,13 +104,18 @@ void for_each_register_web_recoloring(
     const std::vector<RegisterWebRecoloringRequest>& requests,
     const RegisterWebRecoloringConsumer& consume);
 // Conditional equal-size allocation over exact selector-consistent epochs.
-// Preserve every terminal physical-bank observation and re-prove input/flow
+// Preserve every declared terminal observation and re-prove input/flow
 // obligations before delivery; the caller still owns final selector/layout closure.
+// Optional complete runtime preloads also opt this equal-size lane into typed
+// terminal projection and provenance-only metadata transport. They seed data
+// analysis, never immutable constant-pool ownership or an entry-live free home.
 void for_each_deferred_register_web_recoloring(const std::vector<IrOp>& ops, const PassContext& context,
     const std::vector<RegisterWebRecoloringRequest>& requests,
     const PostLayoutControlFlowOptions& control,
     const std::map<std::string, int>& encoded_origins,
-    const RegisterWebRecoloringConsumer& consume);
+    const RegisterWebRecoloringConsumer& consume,
+    const std::vector<PreloadReport>* runtime_preloads = nullptr,
+    bool allow_equal_preload_homes = false);
 IrPass register_web_copy_coalesce_pass();
 IrPass register_coalesce_pass();
 

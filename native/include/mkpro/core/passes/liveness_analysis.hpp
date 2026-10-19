@@ -56,15 +56,22 @@ struct LivenessOptions {
   // narrows the guarded proof's entry set; ordinary live sets still include
   // disconnected fragments. Standalone IR fragments keep arbitrary entries.
   bool closed_program_entry = false;
+  // Complete-artifact clients may request independently proved signs of a
+  // closed delivered toggle carrier. This is a demand, never a range hint.
+  bool discover_toggle_projection_signs = false;
 };
 
-// A static definition/use relation, evaluated in every matched execution
-// context. A proved exclusion removes only this edge, not the instruction,
-// register, other reads, or a control-flow alternative.
+// An old-word observation before an operation in exact execution contexts.
+// Omitted context IDs quantify over every invocation of the static operation.
+// The use may be a hypothetical observation (including before a store), not
+// just an existing machine read. A proved exclusion removes only this edge,
+// never an instruction, register, other read or control-flow alternative.
 struct GuardedDefinitionUseQuery {
   std::size_t definition = 0;
   std::size_t use = 0;
   std::string register_name;
+  std::optional<std::size_t> definition_state = {};
+  std::optional<std::size_t> use_state = {};
   auto operator<=>(const GuardedDefinitionUseQuery&) const = default;
 };
 
@@ -92,6 +99,27 @@ std::set<GuardedDefinitionUseQuery> prove_unreachable_definition_uses(
     const core::AuthoritativePostLayoutControlFlow& flow,
     const std::vector<GuardedDefinitionUseQuery>& queries,
     LivenessOptions options = {});
+
+// Start immediately after an arbitrary instruction, not at a definition of
+// the queried register. This distinguishes two dynamic occurrences of the
+// same static definition across a loop. Every feasible old-word read before
+// overwrite, alias, untyped escape and public terminal bank is an observation.
+struct GuardedOldWordQuery {
+  std::size_t after_instruction = 0;
+  std::string register_name;
+  std::optional<std::size_t> execution_state = {};
+  auto operator<=>(const GuardedOldWordQuery&) const = default;
+};
+struct GuardedOldWordProof {
+  std::set<GuardedOldWordQuery> dead_words;
+  std::size_t work = 0;
+  bool exhausted = false;
+};
+GuardedOldWordProof analyze_dead_old_words(
+    const std::vector<IrOp>& ops,
+    const core::AuthoritativePostLayoutControlFlow& flow,
+    const std::vector<GuardedOldWordQuery>& queries, LivenessOptions options = {},
+    std::size_t maximum_work = 400000U);
 
 // An old-word non-observation proof over exact PC/return contexts. Every
 // path must overwrite it before a read, escape, or untyped interaction.

@@ -34,14 +34,24 @@ bool prove_stack_entry_equality(const StackEntryProofReader& reader,
 // executions have equal memory and decimal-entry modes at entry; every
 // reachable instance of the entry address must hide the differing stack
 // components before a consumer. A compiler-typed display observes X/Y and
-// requires X1/X2 equality; deeper differences remain live across its proved
-// entered() protocol and must be hidden before every subsequent use. Untyped
+// does not observe private X1/X2; those differences and deeper stack values
+// remain live across its proved entered() protocol and must be hidden before
+// every subsequent use. Untyped
 // stops, raw cells and independent manual commands remain full-state barriers.
 struct PostLayoutStackEntryProofOptions {
   // Disable while encoded selector words and speculative positions disagree.
   bool refine_runtime_selectors = true;
   // An explicit ROM-certified fact, not inferred from a closed-looking X.
   bool numeric_entry_closed = false;
+  // Finer flow-mode transport is priced by complete-artifact transactions.
+  // Keep older greedy clients' candidate enumeration independently stable.
+  bool transport_closed_entry_through_control = false;
+  // Stock B0..BE stores close numeric entry independently of their selector
+  // value/mutation. This does not prove X2 equal or weaken alias obligations.
+  // Opt in only after complete-artifact pricing, not in greedy charge lowering.
+  bool use_indirect_store_entry_facts = false;
+  // A proof-work cap, never a sampling limit. Exhaustion rejects the whole query.
+  std::size_t maximum_work = 100000;
 };
 
 bool prove_post_layout_stack_entry_equality(
@@ -91,6 +101,17 @@ std::optional<std::vector<bool>> analyze_post_layout_automatic_entry_lift(
     const std::vector<MachineItem>& items,
     const AuthoritativePostLayoutControlFlow& flow,
     std::size_t maximum_work = 100000);
+// Value-only entry certificate: the next first digit replaces the numeric
+// buffer, even after Cx/Enter suppresses automatic stack lift. This does not
+// certify Y/Z/T or hidden X2. Unknown external entry, raw/manual operations
+// and unsupported continuations remain unproved. The optional indirect-flow
+// transport uses the same independently pinned policy as the lift analysis.
+std::optional<std::vector<bool>> analyze_post_layout_fresh_integer_entry(
+    const std::vector<MachineItem>& items,
+    const AuthoritativePostLayoutControlFlow& flow,
+    std::size_t maximum_work = 100000,
+    bool transport_stable_indirect = false);
+
 bool selector_charge_has_automatic_entry_lift(const std::vector<IrOp>& ops,
                                              std::size_t entry,
                                              AddressSpaceModel model = AddressSpaceModel::Standard);
@@ -110,6 +131,13 @@ normalize_callee_hole_boundaries(const std::vector<IrOp>& ops);
 // Exact bounded return-stack exploration; recursion, unresolved flow and proof
 // budget exhaustion reject the proposed outline rather than guessing a bound.
 bool callee_hole_return_stack_fits(const std::vector<IrOp>& ops);
+
+// Separate complete-artifact precision: add the ROM-certified B0..BE store
+// boundary without changing the historical greedy entry-lift policy.
+std::optional<std::vector<bool>> analyze_post_layout_automatic_entry_lift_with_indirect_store_facts(
+    const std::vector<MachineItem>& items,
+    const AuthoritativePostLayoutControlFlow& flow,
+    std::size_t maximum_work = 100000);
 
 } // namespace mkpro::core
 

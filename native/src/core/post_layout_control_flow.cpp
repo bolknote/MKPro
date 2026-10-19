@@ -4,6 +4,7 @@
 
 #include "mkpro/core/callee_hole_boundary_normalization.hpp"
 #include "mkpro/core/indirect_addressing.hpp"
+#include "mkpro/core/layout_search_artifact.hpp"
 #include "mkpro/core/opcodes.hpp"
 #include "mkpro/core/register_allocator.hpp"
 
@@ -11,6 +12,7 @@
 #include <array>
 #include <compare>
 #include <deque>
+#include <cstdlib>
 #include <exception>
 #include <map>
 #include <optional>
@@ -22,6 +24,51 @@
 
 
 namespace mkpro::core {
+
+bool post_layout_execution_matches_external_entry(
+    const PostLayoutExecutionState& execution,
+    const PostLayoutExternalEntryState& entry) {
+  if (execution.item_index != entry.entry.item_index ||
+      execution.address != entry.entry.address ||
+      execution.formal_opcode != entry.formal_opcode ||
+      execution.formal_return_stack != entry.formal_return_stack ||
+      execution.return_stack.size() != entry.return_stack.size() ||
+      execution.return_stack.size() != execution.formal_return_stack.size() ||
+      entry.return_stack.size() != entry.formal_return_stack.size())
+    return false;
+  for (std::size_t frame = 0; frame < execution.return_stack.size(); ++frame)
+    if (execution.return_stack[frame] != entry.return_stack[frame].address)
+      return false;
+  return true;
+}
+
+std::optional<PostLayoutExternalEntryContexts>
+resolve_post_layout_external_entry_contexts(const AuthoritativePostLayoutControlFlow& control) {
+  const auto count = control.execution_states.size();
+  if (!control.proved || count == 0 ||
+      control.execution_successors.size() != count || control.external_entries.empty())
+    return std::nullopt;
+  PostLayoutExternalEntryContexts result;
+  result.external.assign(count, false);
+  result.main.assign(count, false);
+  bool main = false;
+  for (const auto& entry : control.external_entries) {
+    bool matched = false;
+    for (std::size_t state = 0; state < count; ++state) {
+      if (!post_layout_execution_matches_external_entry(control.execution_states[state], entry))
+        continue;
+      result.external[state] = true;
+      if (entry.kind == ExternalEntryKind::Main) {
+        result.main[state] = true;
+        main = true;
+      }
+      matched = true;
+    }
+    if (!matched) return std::nullopt;
+  }
+  if (!main) return std::nullopt;
+  return result;
+}
 
 namespace {
 
@@ -870,9 +917,9 @@ std::optional<PostLayoutByteImage> materialize_post_layout_byte_image(
   return image;
 }
 
-AuthoritativePostLayoutControlFlow
-build_post_layout_control_flow(const std::vector<MachineItem>& items,
-                               const PostLayoutControlFlowOptions& options) {
+static AuthoritativePostLayoutControlFlow
+build_post_layout_control_flow_uncached(const std::vector<MachineItem>& items,
+                                        const PostLayoutControlFlowOptions& options) {
   AuthoritativePostLayoutControlFlow result;
   result.address_space_model = options.address_space_model;
   if (has_executable_address_words(items)) {
@@ -952,6 +999,42 @@ build_post_layout_control_flow(const std::vector<MachineItem>& items,
   }
   result.proved = result.reasons.empty();
   return result;
+}
+
+AuthoritativePostLayoutControlFlow
+build_post_layout_control_flow(const std::vector<MachineItem>& items,
+                               const PostLayoutControlFlowOptions& options) {
+  const char* enabled=std::getenv("MKPRO_NATIVE_CFG_CACHE");
+  if(enabled && std::string_view(enabled)=="0")
+    return build_post_layout_control_flow_uncached(items,options);
+  struct Entry {
+    LayoutSearchArtifact artifact;
+    PostLayoutControlFlowOptions options;
+    AuthoritativePostLayoutControlFlow flow;
+  };
+  // A bounded per-thread cache owns every snapshot. A caller may freely prune
+  // or mutate its returned graph without changing another proof's input.
+  static thread_local std::vector<Entry> cache;
+  const auto key=[](const PostLayoutControlFlowOptions& value){
+    return std::tie(value.address_space_model,value.maximum_return_depth,
+        value.maximum_execution_states,value.main_entry,value.main_formal_opcode,
+        value.proved_indirect_formal_targets,value.empty_return_target,value.opcode_address_words);
+  };
+  const LayoutSearchArtifact artifact{.items=items};
+  for(auto it=cache.rbegin();it!=cache.rend();++it)
+    if(key(it->options)==key(options) && same_layout_search_artifact(it->artifact,artifact))
+      return it->flow;
+  auto flow=build_post_layout_control_flow_uncached(items,options);
+  constexpr std::size_t maximum_entries=16,maximum_states=65536;
+  if(flow.execution_states.size()<=maximum_states){
+    std::size_t states=flow.execution_states.size();
+    for(const auto& entry:cache)states+=entry.flow.execution_states.size();
+    while(!cache.empty() && (cache.size()>=maximum_entries || states>maximum_states)){
+      states-=cache.front().flow.execution_states.size();cache.erase(cache.begin());
+    }
+    cache.push_back({artifact,options,flow});
+  }
+  return flow;
 }
 
 namespace {
@@ -1229,15 +1312,18 @@ static SelectorConsistentExecutionGraph build_selector_execution_graph_impl(
   // alternative its previous invocation took. Keep this as a value proof,
   // not a promise inferred from the target set or from compiler role names.
   // Only fresh, uninterrupted, one/two-digit ordinary entries are admitted.
+  // Numeric-buffer freshness is independent of stack lift: Cx and Enter
+  // permit a fresh literal but do not certify an automatic Y/Z/T shift.
   // In particular, a digit appended to an unknown mantissa/exponent is NOT
   // the corresponding small integer. Calls and jumps may transport a proved
   // value to a shared store; all other unsupported producers forget it.
-  const auto entry_lift = bindings && std::any_of(items.begin(), items.end(), [](const auto& item) {
+  const bool transport_stable_indirect =
+      std::any_of(items.begin(), items.end(), [](const auto& item) {
         return std::find(item.roles.begin(), item.roles.end(),
                          kTransportedConstantPrefixRole) != item.roles.end();
-      })
-      ? analyze_post_layout_automatic_entry_lift_with_indirect_flow_facts(items,control,maximum_states * 8U)
-      : analyze_post_layout_automatic_entry_lift(items,control,maximum_states * 8U);
+      });
+  const auto entry_start = analyze_post_layout_fresh_integer_entry(
+      items, control, maximum_states * 8U, transport_stable_indirect);
   std::vector<std::vector<std::size_t>> predecessors(count);
   std::set<std::size_t> external_items;
   for (const auto& entry : control.external_entries)
@@ -1251,17 +1337,17 @@ static SelectorConsistentExecutionGraph build_selector_execution_graph_impl(
            item.opcode >= 0 && item.opcode <= 9;
   };
   std::vector<std::optional<int>> literal_after(count);
-  if (entry_lift) {
+  if (entry_start) {
     for (std::size_t state = 0; state < count; ++state) {
       if (!plain_digit(state))
         continue;
       const int low = items[control.execution_states[state].item_index].opcode;
-      if ((*entry_lift)[state]) {
+      if ((*entry_start)[state]) {
         literal_after[state] = low;
       } else if (!external_items.contains(control.execution_states[state].item_index) &&
                  predecessors[state].size() == 1U) {
         const auto high = predecessors[state].front();
-        if (plain_digit(high) && (*entry_lift)[high] &&
+        if (plain_digit(high) && (*entry_start)[high] &&
             control.execution_successors[high].size() == 1U &&
             control.execution_states[high].address + 1 == control.execution_states[state].address)
           literal_after[state] = items[control.execution_states[high].item_index].opcode * 10 + low;
@@ -1516,10 +1602,21 @@ PostLayoutExecutionRelocationProof prove_post_layout_execution_relocation(
     return next.has_value() ? std::optional<int>(after_index.item_addresses.at(*next))
                             : std::nullopt;
   };
+  std::map<int,int> copy_frame_continuations;
+  std::map<std::size_t,std::size_t> copy_prefix_successors;
+  std::set<std::size_t> copy_prefix_starts;
+  std::set<int> copy_prefix_interiors;
   const auto frame_addresses = [&](const std::vector<int>& frames, bool remap)
       -> std::optional<std::vector<int>> {
-    if (!remap)
-      return frames;
+    if (!remap) {
+      auto canonical = frames;
+      for (auto& address : canonical) {
+        if (copy_prefix_interiors.contains(address)) return std::nullopt;
+        if (const auto found = copy_frame_continuations.find(address); found != copy_frame_continuations.end())
+          address = found->second;
+      }
+      return canonical;
+    }
     std::vector<int> mapped;
     for (const int address : frames) {
       const auto next = mapped_address(address);
@@ -1579,6 +1676,257 @@ PostLayoutExecutionRelocationProof prove_post_layout_execution_relocation(
   const auto new_entries = entry_facts(after_control);
   if (!old_entries.has_value() || !new_entries.has_value())
     return reject("external entries do not identify exact execution contexts");
+
+
+  std::map<std::size_t,std::size_t> return_aliases;
+  std::map<std::size_t,std::size_t> canonical_returns;
+  const auto plain_return=[](const MachineItem& item){
+    return item.kind==MachineItemKind::Op && item.opcode==0x52 && !item.raw &&
+        !item.manual_interaction && !item.procedure_boundary && item.semantic_call_origins.empty();
+  };
+  for(const auto& [old_item,new_alias]:options.equivalent_return_items){
+    const auto retained=mapped_item(old_item);
+    if(old_item>=before.size() || new_alias>=after.size() || !retained || *retained==new_alias ||
+        !plain_return(before[old_item]) || !plain_return(after[*retained]) || !plain_return(after[new_alias]) ||
+        !return_aliases.emplace(old_item,new_alias).second ||
+        !canonical_returns.emplace(*retained,new_alias).second)
+      return reject("return alias does not identify distinct plain retained V/O commands");
+  }
+  for(const auto& [retained,alias]:canonical_returns){
+    (void)retained;
+    if(canonical_returns.contains(alias))return reject("return aliases cannot form a chain or cycle");
+  }
+  const auto canonical_return=[&](std::size_t item){
+    const auto alias=canonical_returns.find(item);
+    return alias==canonical_returns.end()?item:alias->second;
+  };
+
+  std::map<std::size_t,std::vector<std::size_t>> return_completions;
+  const auto pure_completion_command=[](const MachineItem& item){
+    if(item.kind!=MachineItemKind::Op || item.raw || item.manual_interaction || item.procedure_boundary ||
+        !item.semantic_call_origins.empty())return false;
+    const int code=item.opcode;
+    return (code>=0&&code<=0x0e) || (code>=0x10&&code<=0x15) || code==0x22 || code==0x25 ||
+        (code>=0x30&&code<=0x35);
+  };
+  for(const auto& completion:options.pure_return_completions){
+    const auto source=completion.old_return_item;
+    const auto target=mapped_item(source);
+    const auto& body=completion.body_items;
+    if(source>=before.size() || !target || !plain_return(before[source]) || body.size()<2U ||
+        body.size()>17U || body.back()!=*target || !plain_return(after[*target]) ||
+        return_aliases.contains(source) || !return_completions.emplace(source,body).second)
+      return reject("pure return completion has no distinct bounded return body");
+    std::set<std::size_t> unique;
+    for(std::size_t i=0;i<body.size();++i){
+      if(body[i]>=after.size() || !unique.insert(body[i]).second ||
+          (i+1U<body.size()&&!pure_completion_command(after[body[i]])) ||
+          (i>0&&after_index.item_addresses.at(body[i])!=after_index.item_addresses.at(body[i-1U])+1))
+        return reject("return completion is not consecutive pure code ending in V/O");
+    }
+    bool reached=false;
+    for(std::size_t state=0;state<before_control.execution_states.size();++state){
+      const auto& here=before_control.execution_states[state];
+      if(here.operand_item_index==source)return reject("completed return also serves as an operand");
+      if(here.item_index==source){
+        reached=true;
+        if(!old_entries->labels[state].empty() ||
+            here.formal_opcode!=canonical_cursor(before_index,here.address,before_control.address_space_model).formal_opcode)
+          return reject("completed return has an external or noncanonical entry");
+      }
+      // Call/return continuations must retain their exact numeric frame words.
+      // This first version adds pure work only on physical fallthrough edges.
+      for(const auto& edge:before_control.execution_edges[state])
+        if(before_control.execution_states[edge.target_state].item_index==source &&
+            edge.kind!=PostLayoutExecutionEdgeKind::Fallthrough &&
+            edge.kind!=PostLayoutExecutionEdgeKind::DirectTarget &&
+            edge.kind!=PostLayoutExecutionEdgeKind::IndirectTarget)
+          return reject("completed return is a saved resume/return continuation");
+    }
+    if(!reached)return reject("completed return has no rooted context");
+    for(std::size_t state=0;state<after_control.execution_states.size();++state){
+      const auto& here=after_control.execution_states[state];
+      const auto position=std::find(body.begin(),body.end()-1,here.item_index);
+      if(position==body.end()-1)continue;
+      const auto& edges=after_control.execution_edges[state];
+      if(!new_entries->labels[state].empty() || here.operand_item_index ||
+          here.formal_opcode!=canonical_cursor(after_index,here.address,after_control.address_space_model).formal_opcode ||
+          edges.size()!=1U || edges.front().kind!=PostLayoutExecutionEdgeKind::Fallthrough)
+        return reject("completion body has an external, formal or non-fallthrough execution");
+      const auto& next=after_control.execution_states[edges.front().target_state];
+      if(next.item_index!=*(position+1) || next.return_stack!=here.return_stack ||
+          next.formal_return_stack!=here.formal_return_stack)
+        return reject("completion body changes its exact return frames");
+    }
+  }
+
+  const std::set<std::size_t> erased_data(options.erased_data_effect_items.begin(),
+                                         options.erased_data_effect_items.end());
+  const std::set<std::size_t> inserted_jumps(options.inserted_transparent_jump_items.begin(),
+                                            options.inserted_transparent_jump_items.end());
+  if (erased_data.size() != options.erased_data_effect_items.size() ||
+      inserted_jumps.size() != options.inserted_transparent_jump_items.size() ||
+      (options.erased_stack_producer_item &&
+       erased_data.contains(*options.erased_stack_producer_item)))
+    return reject("duplicated data-erasure or transparent-jump certificate");
+  for (const auto source : erased_data) {
+    if (source >= before.size() || !mapped_item(source))
+      return reject("data erasure has no retained continuation");
+    const auto& item = before[source];
+    if (item.kind != MachineItemKind::Op || item.raw || item.manual_interaction ||
+        item.procedure_boundary || !item.semantic_call_origins.empty() ||
+        !((item.opcode >= 0x40 && item.opcode <= 0x4e) ||
+          (item.opcode >= 0x60 && item.opcode <= 0x6e)))
+      return reject("data erasure requires a direct, non-observable register transfer");
+    for (const auto& entry : before_control.external_entries)
+      if (entry.entry.item_index == source)
+        return reject("an external entry cannot be an erased register transfer");
+    bool reached = false;
+    for (std::size_t state = 0; state < before_control.execution_states.size(); ++state) {
+      const auto& here = before_control.execution_states[state];
+      if (here.operand_item_index == source)
+        return reject("an erased transfer also serves as an address operand");
+      if (here.item_index != source) continue;
+      reached = true;
+      const auto& edges = before_control.execution_edges[state];
+      if (!old_entries->labels[state].empty() ||
+          here.formal_opcode != canonical_cursor(before_index, here.address,
+                                                 before_control.address_space_model).formal_opcode ||
+          edges.size() != 1U || edges.front().kind != PostLayoutExecutionEdgeKind::Fallthrough)
+        return reject("data erasure crosses an entry or noncanonical path");
+      const auto& next = before_control.execution_states[edges.front().target_state];
+      if (next.item_index == source || next.return_stack != here.return_stack ||
+          next.formal_return_stack != here.formal_return_stack ||
+          mapped_item(next.item_index) != mapped_item(source))
+        return reject("data erasure changes its continuation or return frames");
+    }
+    if (!reached) return reject("erased transfer has no rooted execution context");
+  }
+
+  std::set<std::size_t> retargeted_reads;
+  for (const auto source : options.retargeted_direct_recall_items) {
+    const auto target = mapped_item(source);
+    if (source >= before.size() || !target || !retargeted_reads.insert(source).second ||
+        before[source].kind != MachineItemKind::Op || after[*target].kind != MachineItemKind::Op ||
+        before[source].opcode < 0x60 || before[source].opcode > 0x6e ||
+        after[*target].opcode < 0x60 || after[*target].opcode > 0x6e ||
+        before[source].raw || after[*target].raw || before[source].manual_interaction ||
+        after[*target].manual_interaction || before[source].opcode == after[*target].opcode)
+      return reject("equal-word transport requires distinct ordinary direct recalls");
+  }
+  const auto copy_lift = options.inserted_copy_prefixes.empty() ? std::optional<std::vector<bool>>{}
+      : analyze_post_layout_automatic_entry_lift(after, after_control, 100000);
+  if (!options.inserted_copy_prefixes.empty() && !copy_lift)
+    return reject("inserted copies require a complete numeric-entry certificate");
+  std::vector<std::vector<std::size_t>> new_predecessors(after_control.execution_states.size());
+  if (!options.inserted_copy_prefixes.empty())
+    for (std::size_t state = 0; state < after_control.execution_states.size(); ++state)
+      for (const auto next : after_control.execution_successors[state]) new_predecessors[next].push_back(state);
+  for (const auto& [read, store] : options.inserted_copy_prefixes) {
+    if (read >= after.size() || store >= after.size() || read == store ||
+        after[read].kind != MachineItemKind::Op || after[store].kind != MachineItemKind::Op ||
+        after[read].opcode < 0x60 || after[read].opcode > 0x6e ||
+        after[store].opcode < 0x40 || after[store].opcode > 0x4e ||
+        after[read].opcode - 0x20 == after[store].opcode ||
+        after[read].raw || after[store].raw || after[read].manual_interaction || after[store].manual_interaction ||
+        after[read].procedure_boundary || after[store].procedure_boundary ||
+        !after[read].roles.empty() || !after[store].roles.empty() ||
+        !after[read].semantic_call_origins.empty() || !after[store].semantic_call_origins.empty() ||
+        after_index.item_addresses.at(store) != after_index.item_addresses.at(read) + 1 ||
+        inserted_jumps.contains(read) || inserted_jumps.contains(store) ||
+        std::any_of(old_to_new_item.begin(),old_to_new_item.end(),[&](auto item){return item==read || item==store;}) ||
+        copy_prefix_successors.contains(read) || copy_prefix_successors.contains(store))
+      return reject("inserted copy is not a fresh plain Recall/Store prefix");
+    std::optional<std::size_t> continuation;
+    bool saw_read = false, saw_store = false;
+    for (std::size_t state = 0; state < after_control.execution_states.size(); ++state) {
+      const auto& here = after_control.execution_states[state];
+      if (here.operand_item_index == read || here.operand_item_index == store)
+        return reject("inserted copy also serves as a fetched operand");
+      if (here.item_index != read && here.item_index != store) continue;
+      if (here.item_index == read) saw_read = true; else saw_store = true;
+      const auto& edges = after_control.execution_edges[state];
+      if (!new_entries->labels[state].empty() ||
+          (here.item_index == read && !copy_lift->at(state)) ||
+          here.formal_opcode != canonical_cursor(after_index,here.address,after_control.address_space_model).formal_opcode ||
+          edges.size()!=1U || edges.front().kind!=PostLayoutExecutionEdgeKind::Fallthrough)
+        return reject("inserted copy crosses an entry, open numeric mode or formal path");
+      const auto& next = after_control.execution_states[edges.front().target_state];
+      if (next.return_stack!=here.return_stack || next.formal_return_stack!=here.formal_return_stack)
+        return reject("inserted copy changes return frames");
+      if (here.item_index == read) {
+        if (next.item_index!=store) return reject("copy prefix has no exclusive store successor");
+      } else {
+        for (auto previous : new_predecessors[state])
+          if (after_control.execution_states[previous].item_index!=read)
+            return reject("copy prefix interior has an independent predecessor");
+        if (continuation && *continuation!=next.item_index)
+          return reject("copy prefix has inconsistent continuations");
+        continuation=next.item_index;
+      }
+    }
+    if (!saw_read || !saw_store || !continuation || *continuation==read || *continuation==store ||
+        std::none_of(old_to_new_item.begin(),old_to_new_item.end(),[&](auto item){return item==continuation;}))
+      return reject("copy prefix has no retained rooted continuation");
+    copy_prefix_starts.insert(read);
+    copy_prefix_successors.emplace(read,store);
+    copy_prefix_successors.emplace(store,*continuation);
+    copy_frame_continuations.emplace(after_index.item_addresses.at(read),after_index.item_addresses.at(*continuation));
+    copy_prefix_interiors.insert(after_index.item_addresses.at(store));
+  }
+  for (const auto& [start,next] : copy_prefix_successors)
+    if (!copy_prefix_starts.contains(start) && copy_prefix_successors.contains(next))
+      return reject("separate copy prefixes cannot form a transparent chain");
+
+  const auto jump_lift = inserted_jumps.empty() ? std::optional<std::vector<bool>>{}
+      : analyze_post_layout_automatic_entry_lift(after, after_control, 100000);
+  if (!inserted_jumps.empty() && !jump_lift)
+    return reject("inserted jumps require a complete numeric-entry certificate");
+  for (const auto source : inserted_jumps) {
+    if (source >= after.size() || after[source].kind != MachineItemKind::Op ||
+        after[source].opcode != kJumpOpcode || after[source].raw ||
+        after[source].manual_interaction ||
+        std::any_of(old_to_new_item.begin(), old_to_new_item.end(), [&](const auto& item) {
+          return item == source;
+        }))
+      return reject("inserted transparent command is not a new direct jump");
+    for (const auto& entry : after_control.external_entries)
+      if (entry.entry.item_index == source)
+        return reject("an external entry cannot be a transparent inserted jump");
+    bool reached = false;
+    std::vector<std::size_t> successors;
+    for (std::size_t state = 0; state < after_control.execution_states.size(); ++state) {
+      const auto& here = after_control.execution_states[state];
+      if (here.operand_item_index == source)
+        return reject("an inserted jump also serves as an address operand");
+      if (here.item_index != source) continue;
+      reached = true;
+      const auto& edges = after_control.execution_edges[state];
+      if (!new_entries->labels[state].empty() || !jump_lift->at(state) ||
+          here.formal_opcode != canonical_cursor(after_index, here.address,
+                                                  after_control.address_space_model).formal_opcode ||
+          edges.size() != 1U || edges.front().kind != PostLayoutExecutionEdgeKind::DirectTarget ||
+          !here.operand_item_index)
+        return reject("inserted jump crosses an entry, open numeric mode or formal path");
+      const auto& operand = after[*here.operand_item_index];
+      if (operand.kind != MachineItemKind::Address || operand.raw || operand.manual_interaction)
+        return reject("inserted jump has no independent plain address operand");
+      const auto& next = after_control.execution_states[edges.front().target_state];
+      if (next.return_stack != here.return_stack ||
+          next.formal_return_stack != here.formal_return_stack ||
+          inserted_jumps.contains(next.item_index))
+        return reject("inserted jump changes return frames or creates a transparent chain");
+      successors.push_back(edges.front().target_state);
+    }
+    if (!reached) return reject("inserted jump has no rooted execution context");
+    std::sort(successors.begin(), successors.end());
+    successors.erase(std::unique(successors.begin(), successors.end()), successors.end());
+    if (!prove_post_layout_stack_state_equality(after, after_control, successors,
+            {{true, true, true, true}, false, true},
+            {.refine_runtime_selectors = false, .numeric_entry_closed = true,
+             .transport_closed_entry_through_control = true}))
+      return reject("inserted jump exposes its changed X2 on a continuation");
+  }
 
   if (options.erased_stack_producer_item) {
     const auto source = *options.erased_stack_producer_item;
@@ -1725,6 +2073,19 @@ PostLayoutExecutionRelocationProof prove_post_layout_execution_relocation(
             item = mapped_item(reached.item_index);
         }
       }
+      if (!remap && copy_prefix_successors.contains(target.item_index)) {
+        if (!copy_prefix_starts.contains(target.item_index)) return std::nullopt;
+        item = copy_prefix_successors.at(copy_prefix_successors.at(target.item_index));
+      }
+      if (!remap && inserted_jumps.contains(target.item_index)) {
+        const auto& outgoing = control.execution_edges[edge.target_state];
+        if (outgoing.size() != 1U) return std::nullopt;
+        item = control.execution_states[outgoing.front().target_state].item_index;
+      }
+      if(remap&&edge.kind==PostLayoutExecutionEdgeKind::Fallthrough){
+        const auto completion=return_completions.find(target.item_index);
+        if(completion!=return_completions.end())item=completion->second.front();
+      }
       const auto frames = frame_addresses(target.return_stack, remap);
       if (!item.has_value() || !frames.has_value())
         return std::nullopt;
@@ -1742,7 +2103,7 @@ PostLayoutExecutionRelocationProof prove_post_layout_execution_relocation(
                        control.execution_states.at(state_index).item_index) &&
           kind == PostLayoutExecutionEdgeKind::DirectTarget)
         kind = PostLayoutExecutionEdgeKind::IndirectTarget;
-      groups[EdgeKey{kind, *item, *frames}].push_back(edge);
+      groups[EdgeKey{kind, canonical_return(*item), *frames}].push_back(edge);
       targets.insert(edge.target_state);
     }
     const auto& projected = control.execution_successors.at(state_index);
@@ -1775,9 +2136,41 @@ PostLayoutExecutionRelocationProof prove_post_layout_execution_relocation(
     const auto& new_state = after_control.execution_states.at(new_state_index);
     const auto target = mapped_item(old_state.item_index);
     const auto frames = frame_addresses(old_state.return_stack, true);
-    if (options.erased_stack_producer_item == old_state.item_index) {
+    const auto new_frames = frame_addresses(new_state.return_stack, false);
+    if (copy_prefix_successors.contains(new_state.item_index)) {
+      if (!frames || !new_frames || *frames != *new_frames ||
+          !new_entries->labels[new_state_index].empty())
+        return reject("inserted copy changes its paired return continuation");
+      new_seen.insert(new_state_index);
+      if (!enqueue(old_state_index,after_control.execution_edges[new_state_index].front().target_state))
+        return reject("inserted copy exceeds the execution-pair budget");
+      continue;
+    }
+    if (inserted_jumps.contains(new_state.item_index)) {
+      if (!frames || !new_frames || *frames != *new_frames ||
+          !new_entries->labels[new_state_index].empty())
+        return reject("inserted jump changes its paired continuation");
+      new_seen.insert(new_state_index);
+      if (!enqueue(old_state_index,
+                   after_control.execution_edges[new_state_index].front().target_state))
+        return reject("inserted jump exceeds the execution-pair budget");
+      continue;
+    }
+    if(const auto completion=return_completions.find(old_state.item_index);completion!=return_completions.end()){
+      const auto& body=completion->second;
+      if(std::find(body.begin(),body.end()-1,new_state.item_index)!=body.end()-1){
+        if(!frames||!new_frames||*frames!=*new_frames||!old_entries->labels[old_state_index].empty()||
+            !new_entries->labels[new_state_index].empty())
+          return reject("pure return completion changes an interaction or frame");
+        new_seen.insert(new_state_index);
+        if(!enqueue(old_state_index,after_control.execution_edges[new_state_index].front().target_state))
+          return reject("pure return completion exceeds its execution-pair budget");
+        continue;
+      }
+    }
+    if (options.erased_stack_producer_item == old_state.item_index || erased_data.contains(old_state.item_index)) {
       if (!target || *target != new_state.item_index || !frames ||
-          *frames != new_state.return_stack ||
+          (!new_frames || *frames != *new_frames) ||
           !old_entries->labels.at(old_state_index).empty() ||
           !new_entries->labels.at(new_state_index).empty())
         return reject("producer erasure changes an entry or return continuation");
@@ -1789,7 +2182,7 @@ PostLayoutExecutionRelocationProof prove_post_layout_execution_relocation(
     }
     if ((!target.has_value() || *target != new_state.item_index) &&
         options.allow_bypassed_direct_jumps && frames.has_value() &&
-        *frames == new_state.return_stack &&
+        (new_frames && *frames == *new_frames) &&
         old_entries->labels.at(old_state_index).empty()) {
       const auto& jump = before.at(old_state.item_index);
       const auto& edges = before_control.execution_edges.at(old_state_index);
@@ -1802,15 +2195,32 @@ PostLayoutExecutionRelocationProof prove_post_layout_execution_relocation(
         continue;
       }
     }
-    if (!target.has_value() || *target != new_state.item_index ||
-        !frames.has_value() || *frames != new_state.return_stack ||
+    const bool return_alias=return_aliases.contains(old_state.item_index) &&
+        return_aliases.at(old_state.item_index)==new_state.item_index;
+    if(return_alias &&
+        (old_state.formal_opcode!=canonical_cursor(before_index,old_state.address,before_control.address_space_model).formal_opcode ||
+         new_state.formal_opcode!=canonical_cursor(after_index,new_state.address,after_control.address_space_model).formal_opcode))
+      return reject("return aliases require canonical physical execution on both sides");
+    if(return_alias){
+      if(old_state.return_stack.size()!=new_state.return_stack.size() ||
+          old_state.formal_return_stack.size()!=old_state.return_stack.size() ||
+          new_state.formal_return_stack.size()!=new_state.return_stack.size())
+        return reject("return alias has incomplete formal frames");
+      for(std::size_t frame=0;frame<old_state.return_stack.size();++frame)
+        if(old_state.formal_return_stack[frame]!=canonical_cursor(before_index,old_state.return_stack[frame],before_control.address_space_model).formal_opcode ||
+            new_state.formal_return_stack[frame]!=canonical_cursor(after_index,new_state.return_stack[frame],after_control.address_space_model).formal_opcode)
+          return reject("return alias cannot reinterpret a noncanonical return frame");
+    }
+
+    if (!target.has_value() || (*target != new_state.item_index && !return_alias) ||
+        !frames.has_value() || (!new_frames || *frames != *new_frames) ||
         old_entries->labels.at(old_state_index) != new_entries->labels.at(new_state_index))
       return reject("execution context or external interaction does not follow command relocation");
     const auto& old_item = before.at(old_state.item_index);
     const auto& new_item = after.at(new_state.item_index);
     const bool converted_direct = converted_direct_flows.contains(old_state.item_index);
     if (old_item.kind != MachineItemKind::Op || new_item.kind != MachineItemKind::Op ||
-        (!converted_direct && !inverted_direct_conditions.contains(old_state.item_index) &&
+        (!converted_direct && !retargeted_reads.contains(old_state.item_index) && !inverted_direct_conditions.contains(old_state.item_index) &&
          old_item.opcode != new_item.opcode) ||
         old_item.raw != new_item.raw ||
         old_item.stop_disposition != new_item.stop_disposition ||

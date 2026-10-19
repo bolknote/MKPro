@@ -72,6 +72,32 @@ void run() {
   require(!color_precolored_register_graph(path, blocked), "a restricted member blocks the chain");
   require(color_precolored_register_graph(path, options) == repaired, "repair is deterministic");
 
+  // A planted three-register allocation exists, but no legal two-color chain
+  // can repair the first MRV/DSATUR choices. This is a graph/list-domain case,
+  // independent of source names, arithmetic formulas and program layout.
+  RegisterInterferenceGraph lists;
+  const std::vector<std::string> adjacency={"cfhj","cdei","abj","bej","bdhj","agj","fhi","aeg","bgj","acdefi"};
+  const std::vector<std::string> domains={"02","012","12","02","01","02","012","12","02","012"};
+  const std::vector<int> preferences={2,0,2,0,1,0,2,0,2,1};
+  PrecoloredRegisterAllocationOptions bounded;bounded.color_count=3;bounded.greedy_only=true;
+  bounded.prioritize_constrained_domains=true;
+  for(std::size_t i=0;i<adjacency.size();++i){
+    const std::string name(1,static_cast<char>('a'+i));lists.neighbors[name];
+    for(const char adjacent:adjacency[i])edge(lists,name,std::string(1,adjacent));
+    for(const char color:domains[i])bounded.allowed_colors[name].insert(color-'0');
+    bounded.preferred_colors[name]=preferences[i];
+  }
+  require(!color_precolored_register_graph(lists,bounded),"the legacy greedy list-color witness fails");
+  bounded.maximum_recoloring_work=1;
+  require(!color_precolored_register_graph(lists,bounded),"a bounded search never exports a partially colored graph");
+  bounded.maximum_recoloring_work=4096;
+  const auto joint=color_precolored_register_graph(lists,bounded);
+  require(joint.has_value(),"bounded recoloring must escape a non-Kempe list-color local minimum");
+  validate(lists,bounded,*joint);
+  require(color_precolored_register_graph(lists,bounded)==joint,"bounded coloring is deterministic");
+  auto impossible=bounded;impossible.allowed_colors["a"]={0};impossible.allowed_colors["c"]={0};
+  require(!color_precolored_register_graph(lists,impossible),"bounded search never violates a list-domain contradiction");
+
   // Exhaust every labelled five-node graph. Compare with the independent
   // legacy exact solver; success is always a full witness, failure inconclusive.
   for (unsigned mask = 0; mask < 1024; ++mask) {

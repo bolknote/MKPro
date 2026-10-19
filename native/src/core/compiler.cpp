@@ -94,6 +94,9 @@ struct OptimizerLayoutContinuation {
   struct Checkpoint {
     CompileResult result;
     CompileOptions options;
+    // Independent, already statically proved pre-geometry representation.
+    // Its complete emitted cost is still charged before accepting a winner.
+    bool unfrozen_geometry = false;
   };
   std::vector<Checkpoint> checkpoints;
 };
@@ -7994,6 +7997,11 @@ void allocate_collected_registers(LoweringContext& context, const RegisterCollec
         bind_register(context, variable, forced->second);
     }
     for (const std::string& owner : context.forced_logical_preload_owners) {
+      // A regenerated ABI may eliminate an old constant/owner altogether.
+      // Its stale preference cannot suppress a new live initial value in
+      // the same physical register. Retain ownership only for an allocated
+      // logical value; the ordinary interference proof still owns sharing.
+      if (!context.logical_register_variables.contains(owner)) continue;
       const auto forced = context.forced_logical_register_indices.find(owner);
       if (forced != context.forced_logical_register_indices.end())
         context.forced_share_preload_owners[forced->second].insert(owner);
@@ -46889,7 +46897,8 @@ solve_logical_register_allocation(const LoweringContext& context, const V2Progra
                                   const std::vector<MachineItem>& items,
                                   bool compact = false,
                                   bool preserve_instruction_classes = false,
-                                  std::size_t* constrained_values = nullptr) {
+                                  std::size_t* constrained_values = nullptr,
+                                  bool prefer_forced_assignment = false) {
   if (constrained_values != nullptr)
     *constrained_values = 0;
   const LogicalRegisterGraphModel model =
@@ -46900,9 +46909,10 @@ solve_logical_register_allocation(const LoweringContext& context, const V2Progra
   // rejecting by owner count, but keep this formerly rejected case bounded.
   const bool many_entry_owners =
       model.preload_owners.size() > static_cast<std::size_t>(color_count);
-  const auto fixed_colors = core::merge_logical_register_pins(
-      model.fixed_colors, context.forced_logical_register_indices,
-      model.logical_names, color_count);
+  const auto fixed_colors = prefer_forced_assignment
+      ? std::optional{model.fixed_colors}
+      : core::merge_logical_register_pins(model.fixed_colors, context.forced_logical_register_indices,
+                                         model.logical_names, color_count);
   if (!fixed_colors.has_value())
     return std::nullopt;
   std::map<std::string, std::set<int>> allowed_colors;
@@ -46920,11 +46930,12 @@ solve_logical_register_allocation(const LoweringContext& context, const V2Progra
           model.graph, core::passes::PrecoloredRegisterAllocationOptions{
                            .color_count = color_count,
                            .fixed_colors = *fixed_colors,
-                           .preferred_colors = compact ? std::map<std::string, int>{}
+                           .preferred_colors = compact && !prefer_forced_assignment ? std::map<std::string, int>{}
                                                        : model.preferred_colors,
-                           .greedy_only = compact || preserve_instruction_classes || many_entry_owners,
+                           .greedy_only = prefer_forced_assignment || compact || preserve_instruction_classes || many_entry_owners,
                            .allowed_colors = std::move(allowed_colors),
                            .prioritize_constrained_domains = preserve_instruction_classes,
+                           .maximum_recoloring_work = prefer_forced_assignment ? 4096U : 0U,
                        });
   if (!colors.has_value())
     return std::nullopt;
@@ -53583,12 +53594,19 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
       context.feature_profile == FeatureProfile::Mk61SMiniExpanded &&
       options.collect_coalesce_shares;
   context.provisional_logical_register_allocation = options.collect_logical_register_allocation;
+  const bool repairing_allocation_preferences = options.collect_logical_register_allocation &&
+      options.repair_logical_register_assignment_preferences;
   for (const LogicalRegisterAssignment& assignment : options.forced_logical_register_assignments) {
     try {
-      context.forced_logical_register_indices[assignment.name] =
-          register_index(assignment.register_name);
-      if (assignment.preload_owner)
-        context.forced_logical_preload_owners.insert(assignment.name);
+      const int color=register_index(assignment.register_name);
+      if(repairing_allocation_preferences){
+        // Never let obsolete physical aliases change expression folding or
+        // instruction selection before the changed ABI graph exists.
+        context.logical_preferred_registers[assignment.name]=color;
+      }else{
+        context.forced_logical_register_indices[assignment.name]=color;
+        if(assignment.preload_owner)context.forced_logical_preload_owners.insert(assignment.name);
+      }
     } catch (const std::exception&) {
       context.diagnostics.push_back(diagnostic(DiagnosticSeverity::Error, "native-unsupported",
                                                "Invalid forced logical register '" +
@@ -53888,7 +53906,7 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
         const FeatureProfile lowering_profile = context.feature_profile;
         const auto allocation_profile = context.register_allocation_profile;
         const bool forced_standard_rf_overflow =
-            lowering_profile == FeatureProfile::Standard &&
+            lowering_profile == FeatureProfile::Standard && !repairing_allocation_preferences &&
             std::any_of(options.forced_register_shares.begin(),
                         options.forced_register_shares.end(), [](const RegisterShare& share) {
                           return share.free_register == "f";
@@ -53903,7 +53921,8 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
         context.preloaded_indirect_flow =
             context.preloaded_indirect_flow ||
             (program_uses_cells_bit_mask_sugar(context, *ast.v2) && !context.cave_sketch_shape);
-        apply_forced_register_shares(context, options.forced_register_shares);
+        if(!repairing_allocation_preferences)
+          apply_forced_register_shares(context, options.forced_register_shares);
         if (forced_standard_rf_overflow) {
           const bool rf_remains =
               std::any_of(context.register_index_by_name.begin(),
@@ -54016,7 +54035,8 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
         solve_logical_register_allocation(context, *ast.v2, context.emitter.items,
                                           options.compact_logical_register_allocation,
                                           options.preserve_logical_register_instruction_classes,
-                                          &instruction_class_values);
+                                          &instruction_class_values,
+                                          options.repair_logical_register_assignment_preferences);
     result.registers = context.registers;
     hide_internal_constant_report_registers(result.registers);
     hide_inline_x_param_report_registers(result.registers, context, *ast.v2);
@@ -57999,6 +58019,7 @@ std::string reclaim_base_key(const CompileOptions& options) {
       << ";selector_charge_literal_sinking=" << options.selector_charge_literal_sinking
       << ";register_aware_tail_sharing=" << options.register_aware_tail_sharing
       << ";compact_logical_register_allocation=" << options.compact_logical_register_allocation
+      << ";repair_logical_register_assignment_preferences=" << options.repair_logical_register_assignment_preferences
       << ";zero_underflow_constant_rematerialization="
       << options.zero_underflow_constant_rematerialization
       << ";zero_underflow_optimizer_root=" << options.zero_underflow_optimizer_root
@@ -72005,6 +72026,32 @@ void write_compile_result_cache(const std::string& source, const CompileOptions&
   cache[key] = {result, winning_options ? *winning_options : options};
 }
 
+// Cache only completed public compilations, separately from profile/probe
+// results. A profile cache hit must not replay the entire outer continuation
+// search. Immutable continuation snapshots may safely be shared by copies.
+std::map<std::string, CompileResult>& completed_compile_result_cache() {
+  static std::map<std::string, CompileResult> cache;
+  return cache;
+}
+std::optional<CompileResult> read_completed_compile_result_cache(
+    const std::string& source,const CompileOptions& options) {
+  if(!compile_result_cache_enabled())return std::nullopt;
+  const auto key=compile_result_cache_key(source,options);
+  std::lock_guard<std::mutex> lock(compile_result_cache_mutex());
+  const auto& cache=completed_compile_result_cache();const auto found=cache.find(key);
+  return found==cache.end()?std::nullopt:std::optional{found->second};
+}
+void write_completed_compile_result_cache(const std::string& source,
+    const CompileOptions& options,const CompileResult& result) {
+  if(!compile_result_cache_enabled())return;
+  const auto key=compile_result_cache_key(source,options);
+  std::lock_guard<std::mutex> lock(compile_result_cache_mutex());
+  auto& cache=completed_compile_result_cache();
+  constexpr std::size_t maximum_completed_entries=8;
+  if(!cache.contains(key) && cache.size()>=maximum_completed_entries)cache.clear();
+  cache.insert_or_assign(key,result);
+}
+
 struct SelectedAbsoluteDarkLayout {
   std::vector<MachineItem> items;
   std::vector<PreloadReport> preloads;
@@ -75184,11 +75231,14 @@ select_absolute_dark_layout_for_final_artifact(const CompileResult& selected,
   return best;
 }
 
+enum class FinalLayoutMaterialization { StrictImprovement, ProvedSearchIntermediate };
+
 std::optional<CompileResult>
 materialize_proved_layout_result(const std::string& source,
                                  const CompileResult& selected,
                                  const CompileOptions& options,
-                                 const SelectedAbsoluteDarkLayout& selected_layout) {
+                                 const SelectedAbsoluteDarkLayout& selected_layout,
+                                 FinalLayoutMaterialization mode = FinalLayoutMaterialization::StrictImprovement) {
   const auto* layout = &selected_layout;
   const bool trace = std::getenv("MKPRO_NATIVE_TRACE_CANDIDATES") != nullptr;
   CompileResult candidate = selected;
@@ -75205,7 +75255,13 @@ materialize_proved_layout_result(const std::string& source,
     return std::nullopt;
 
   const ResolvedProgram resolved = resolve_machine_items(candidate.items, options);
-  if (!resolved.diagnostics.empty() || resolved.steps.size() >= selected.steps.size()) {
+  const bool intermediate = mode == FinalLayoutMaterialization::ProvedSearchIntermediate;
+  const bool excessive_growth = resolved.steps.size() > selected.steps.size() &&
+      resolved.steps.size()-selected.steps.size() >
+          static_cast<std::size_t>(core::kJointRepresentationConstraintLimits.maximum_growth_cells);
+  if (!resolved.diagnostics.empty() ||
+      (!intermediate && resolved.steps.size() >= selected.steps.size()) ||
+      (intermediate && excessive_growth)) {
     if (trace) {
       std::cerr << "[selected-dark-layout] resolved-cells=" << resolved.steps.size()
                 << " selected-cells=" << selected.steps.size()
@@ -75248,6 +75304,11 @@ materialize_proved_layout_result(const std::string& source,
         candidate.setup_program->steps, address_space_model_for_options(options));
   }
 
+  if(intermediate && resolved.steps.size()>=selected.steps.size())
+    candidate.optimizations.push_back({"proved-nonwinning-layout-checkpoint",
+        "Validated an unpublished "+std::to_string(selected.steps.size())+" -> "+
+        std::to_string(resolved.steps.size())+" cell layout inside the joint path growth budget; "
+        "continued ordinary proof-valid search without faking step counts or replacing the independent incumbent."});
   candidate.steps = resolved.steps;
   candidate.labels = label_map(resolved.labels);
   candidate.hex = format_hex_steps(candidate.steps, address_space_model_for_options(options));
@@ -75260,22 +75321,85 @@ materialize_proved_layout_result(const std::string& source,
 }
 
 
+CompileResult apply_finalization_fixed_point_to_selected_result(
+    const std::string& source, CompileResult selected,
+    const CompileOptions& candidate_options, const CompileOptions& comparison_options);
+
+std::optional<CompileResult>
+apply_contextual_copy_layout_to_selected_result(
+    const std::string& source, const CompileResult& selected,
+    const CompileOptions& options, const CompileOptions& comparison_options) {
+  if (!selected.implemented || selected.items.empty() ||
+      selected.manual_startup_sequence)
+    return std::nullopt;
+  std::optional<CompileResult> best;
+  auto edges = core::contextual_copy_layout_transactions(
+      {selected.items, selected.preloads, {}}, options);
+  auto finite = core::preloaded_finite_state_layout_transactions(
+      {selected.items, selected.preloads, {}}, options);
+  edges.insert(edges.end(), std::make_move_iterator(finite.begin()),
+               std::make_move_iterator(finite.end()));
+  auto transported = core::contextual_copy_transport_layout_transactions(
+      {selected.items, selected.preloads, {}}, options);
+  edges.insert(edges.end(), std::make_move_iterator(transported.begin()),
+               std::make_move_iterator(transported.end()));
+  std::vector<core::LayoutSearchArtifact> finalized_context_inputs;
+  for (const auto& edge : edges) {
+    if(std::any_of(finalized_context_inputs.begin(),finalized_context_inputs.end(),
+        [&](const auto& old){return core::same_layout_search_artifact(old,edge.node);}))continue;
+    finalized_context_inputs.push_back(edge.node);
+    SelectedAbsoluteDarkLayout layout{.items = edge.node.items,
+        .preloads = edge.node.preloads, .optimizations = {}};
+    for (const auto& report : edge.node.optimizations)
+      layout.optimizations.push_back({report.name, report.detail});
+    auto candidate = materialize_proved_layout_result(source, selected, options, layout);
+    if (!candidate) {
+      if (std::getenv("MKPRO_NATIVE_TRACE_COPY_TRANSPORT"))
+        std::cerr << "[context-publication] materialization rejected " << core::machine_cell_count(layout.items) << " cells\n";
+      continue;
+    }
+    if (candidate_needs_static_proof_gate(options)) {
+      if (const auto reason = optimizer_static_gate_rejection_reason(options, *candidate)) {
+        if (std::getenv("MKPRO_NATIVE_TRACE_COPY_TRANSPORT"))
+          std::cerr << "[context-publication] static gate: " << *reason << '\n';
+        continue;
+      }
+    }
+    // A locally smaller closed layout can block a later erasure/overlay.
+    // Finish and independently validate every enabling artifact before ranking
+    // it; do not spend this root's alternatives on a premature local winner.
+    *candidate = apply_finalization_fixed_point_to_selected_result(
+        source, std::move(*candidate), options, comparison_options);
+    if (!candidate->implemented || (candidate_needs_static_proof_gate(options) &&
+        optimizer_static_gate_rejection_reason(options, *candidate))) continue;
+    if (std::getenv("MKPRO_NATIVE_TRACE_COPY_TRANSPORT"))
+      std::cerr << "[context-publication] closed " << core::machine_cell_count(layout.items)
+                << " -> finalized " << candidate->steps.size() << '\n';
+    if (!best || candidate_beats_best(*candidate, *best, comparison_options))
+      best = std::move(candidate);
+  }
+  return best;
+}
+
+
 std::optional<CompileResult>
 apply_absolute_dark_layout_once(const std::string& source,
                                 const CompileResult& selected,
                                 const CompileOptions& options,
-                                bool allow_proved_prefix_repayment = false) {
+                                bool allow_proved_prefix_repayment = false,
+                                FinalLayoutMaterialization mode = FinalLayoutMaterialization::StrictImprovement) {
   if (selected.manual_startup_sequence) return std::nullopt;
   std::vector<SelectedAbsoluteDarkLayout> alternatives;
   if (auto layout = select_absolute_dark_layout_for_final_artifact(selected, options))
     alternatives.push_back(std::move(*layout));
   if (allow_proved_prefix_repayment &&
-      core::machine_cell_count(selected.items) < static_cast<int>(selected.steps.size()))
+      (core::machine_cell_count(selected.items) < static_cast<int>(selected.steps.size()) ||
+       mode == FinalLayoutMaterialization::ProvedSearchIntermediate))
     alternatives.push_back({.items = selected.items, .preloads = selected.preloads,
                             .optimizations = {}});
   std::optional<CompileResult> best;
   for (const auto& alternative : alternatives) {
-    auto candidate = materialize_proved_layout_result(source, selected, options, alternative);
+    auto candidate = materialize_proved_layout_result(source, selected, options, alternative, mode);
     if (!candidate || (allow_proved_prefix_repayment &&
         candidate_needs_static_proof_gate(options) &&
         optimizer_static_gate_rejection_reason(options, *candidate)))
@@ -75305,6 +75429,7 @@ void retain_optimizer_layout_checkpoints(
   std::stable_sort(candidates.begin(), candidates.end(), [](const auto& a, const auto& b) {
     return core::machine_cell_count(a.result.items) < core::machine_cell_count(b.result.items);
   });
+  const auto unfrozen_candidates = candidates;
   constexpr std::size_t maximum_checkpoints = 8;
   constexpr int maximum_growth = 4;
   const auto artifact = [](const CompileResult& value) {
@@ -75334,6 +75459,34 @@ void retain_optimizer_layout_checkpoints(
         }))
       continue;
     retained->checkpoints.push_back(std::move(checkpoint));
+  }
+  // Cell-only truncation used to keep eight nearly identical frozen layouts
+  // and drop the ordinary representation which generated them. Reserve two
+  // independent geometry classes, rather than relaxing the old beam. All
+  // roots come from independently proved transactions of this compilation;
+  // they are not executable winners or permission to underprice final code.
+  const bool frozen_winner=std::any_of(winner.items.begin(),winner.items.end(),[](const auto& item){
+    return item.formal_opcode.has_value() || item.indirect_flow_formal_targets.has_value();
+  });
+  std::size_t unfrozen_count=0;
+  for(auto checkpoint:unfrozen_candidates) {
+    if(!frozen_winner)break;
+    if(unfrozen_count==2U)break;
+    auto& root=checkpoint.result;
+    if(!root.implemented || root.manual_startup_sequence || root.items.empty() ||
+        std::any_of(root.items.begin(),root.items.end(),[](const auto& item){
+          return item.raw || item.formal_opcode.has_value() || item.indirect_flow_formal_targets.has_value();
+        }))continue;
+    if(std::any_of(retained->checkpoints.begin(),retained->checkpoints.end(),[&](const auto& old){
+      return effective_optimizer_feature_profile(old.options)==effective_optimizer_feature_profile(checkpoint.options) &&
+          core::same_layout_search_artifact(artifact(old.result),artifact(root));
+    }))continue;
+    root.layout_search_continuation.reset();
+    // This is an internal snapshot from the current compilation, not a
+    // published proof result. Validate it once when actually resumed below,
+    // rather than rebuilding its whole graph at every local comparison.
+    checkpoint.unfrozen_geometry=true;
+    retained->checkpoints.push_back(std::move(checkpoint));++unfrozen_count;
   }
   if (!retained->checkpoints.empty())
     winner.layout_search_continuation = std::move(retained);
@@ -75659,7 +75812,9 @@ apply_absolute_dark_layout_to_selected_result(const std::string& source,
         alternative.preloads = closed.preloads;
         alternative.optimizations = closed.optimizations;
         const auto candidate = apply_absolute_dark_layout_once(
-            source, alternative, options, /*allow_proved_prefix_repayment=*/true);
+            source, alternative, options, /*allow_proved_prefix_repayment=*/true,
+            intermediate ? FinalLayoutMaterialization::ProvedSearchIntermediate
+                         : FinalLayoutMaterialization::StrictImprovement);
         if (!candidate || (!intermediate && candidate->steps.size() >= constraint_root.steps.size()) ||
             (candidate_needs_static_proof_gate(options) &&
              optimizer_static_gate_rejection_reason(options, *candidate).has_value()))
@@ -75808,6 +75963,16 @@ std::optional<CompileResult> entered_contract_failure(const std::string& source,
 }
 
 } // namespace
+
+std::optional<CompileResult> materialize_proved_layout_for_testing(
+    const std::string& source,const CompileResult& root,const CompileOptions& options,
+    const std::vector<MachineItem>& items,const std::vector<PreloadReport>& preloads,
+    bool intermediate){
+  return materialize_proved_layout_result(source,root,options,
+      SelectedAbsoluteDarkLayout{.items=items,.preloads=preloads,.optimizations={}},
+      intermediate ? FinalLayoutMaterialization::ProvedSearchIntermediate
+                   : FinalLayoutMaterialization::StrictImprovement);
+}
 
 bool refresh_proved_layout_annotations_for_testing(
     CompileResult& result, const CompileOptions& options) {
@@ -81325,6 +81490,7 @@ void reformat_result_for_target_profile(CompileResult& result, FeatureProfile pr
 
 struct LayoutCheckpointReplayResult {
   std::optional<CompileResult> best;
+  CompileOptions best_options;
   std::vector<CandidateReport> candidates;
 };
 
@@ -81401,6 +81567,7 @@ LayoutCheckpointReplayResult resume_optimizer_layout_checkpoints(
                       "and rechecked final static proofs: " +
                       std::to_string(candidate->steps.size()) + " cells.",
               });
+              replay.best_options = resumed_options;
               replay.best = std::move(candidate);
               report.steps = static_cast<int>(replay.best->steps.size());
               accepted = true;
@@ -81481,10 +81648,202 @@ void append_feature_profile_search_report(CompileResult& selected,
   refresh_rejection_dependent_reports(selected, target_options);
 }
 
+CompileResult close_final_contextual_layout_roots(
+    const std::string& source, CompileResult original,
+    const CompileOptions& lowering_options, const CompileOptions& comparison_options) {
+  const bool soft_budget = !original.implemented && is_only_budget_exceeded(original);
+  const std::size_t requested_budget = comparison_options.budget && *comparison_options.budget > 0
+      ? static_cast<std::size_t>(*comparison_options.budget)
+      : program_step_limit_size_for_options(comparison_options);
+  const auto trigger = std::min(requested_budget,
+      program_step_limit_size_for_options(comparison_options));
+  if ((!original.implemented && !soft_budget) || original.items.empty() ||
+      original.feature_profile != comparison_options.feature_profile ||
+      (!soft_budget && original.steps.size() <= trigger))
+    return original;
+
+  CompileResult best = original;
+  if (soft_budget) {
+    std::erase_if(best.diagnostics, [](const auto& diagnostic) {
+      return diagnostic.severity == DiagnosticSeverity::Error && diagnostic.code == "BUDGET_EXCEEDED";
+    });
+    best.implemented = true;
+  }
+  using Checkpoint = OptimizerLayoutContinuation::Checkpoint;
+  std::vector<Checkpoint> seeds{{best, lowering_options}};
+  std::set<std::size_t> independent_lifetime_roots;
+  if (original.layout_search_continuation)
+    for(const auto& checkpoint:original.layout_search_continuation->checkpoints){
+      if(checkpoint.unfrozen_geometry)independent_lifetime_roots.insert(seeds.size());
+      seeds.push_back(checkpoint);
+    }
+  // A changed source ABI must not inherit a prior sharing proof. Keep the
+  // original roots intact, then independently regenerate the finite-state ABI
+  // with singleton physical preferences. The normal regenerated interference
+  // and publication gates still decide whether any candidate is admissible.
+  if (!lowering_options.alternating_sign_toggle_args) {
+    auto discovery = parse_v2_program_for_optimizer_discovery(source);
+    std::vector<OptimizationReport> changed;
+    if (discovery) toggle_alternating_literal_call_args(*discovery, changed);
+    if (!changed.empty()) {
+      for(const int allocation_mode:{0,1,2,3}) {
+      auto replay_options = lowering_options;
+      replay_options.alternating_sign_toggle_args = true;
+      replay_options.disable_candidate_search = true;
+      replay_options.feature_profile = original.feature_profile;
+      replay_options.optimizer_feature_profile_override.reset();
+      replay_options.analysis = true;
+      replay_options.budget = 999999;
+      // Keep the memory-backed expression ABI as an independent lifetime root.
+      // It can expose common entry prologues that are absent in the one-X ABI.
+      if(allocation_mode==3){
+        if(!replay_options.single_x_expression_helper_entries)continue;
+        replay_options.single_x_expression_helper_entries=false;
+        replay_options.stack_argument_helper_entries=true;
+      }
+      if(allocation_mode==1 || allocation_mode==3){
+        if(replay_options.forced_logical_register_assignments.empty() && replay_options.forced_register_shares.empty())continue;
+        auto probe_options=replay_options;probe_options.collect_logical_register_allocation=true;
+        probe_options.repair_logical_register_assignment_preferences=true;
+        probe_options.compact_logical_register_allocation=false;
+        probe_options.preserve_logical_register_instruction_classes=true;
+        probe_options.logical_register_dead_store_elimination=true;
+        const auto probe=compile_source_once(source,probe_options,lower_ascii(source).find("entered")!=std::string::npos,false,false);
+        if(!probe.implemented || probe.logical_register_assignments.empty())continue;
+        replay_options.forced_register_shares.clear();
+        replay_options.forced_logical_register_assignments=probe.logical_register_assignments;
+        replay_options.logical_register_dead_store_elimination=true;
+      }
+      if(allocation_mode==2){
+      replay_options.forced_register_shares.clear();
+      std::map<std::string,std::size_t> old_homes;
+      for (const auto& assignment : replay_options.forced_logical_register_assignments)
+        ++old_homes[assignment.register_name];
+      std::erase_if(replay_options.forced_logical_register_assignments,
+          [&](const auto& assignment) { return old_homes[assignment.register_name] > 1U; });
+      }
+      // Both assignment APIs are checked again in the regenerated logical
+      // namespace before physical IR optimization. These are candidate pins,
+      // never inherited noninterference certificates from the older ABI.
+      CompileOptions replay_proof;
+      auto replay = compile_source_for_optimizer_profile(source,replay_options,&replay_proof);
+      if (replay.implemented && has_optimization_named(replay.optimizations,"alternating-sign-toggle-arg") &&
+          std::none_of(seeds.begin(),seeds.end(),[&](const auto& old){
+            return core::same_layout_search_artifact(
+                {old.result.items,old.result.preloads,{}},{replay.items,replay.preloads,{}});
+          })) {
+        if(allocation_mode==1 || allocation_mode==3)replay.optimizations.push_back({"abi-logical-allocation-repair",
+            "Rebuilt the changed ABI logical graph, retained valid old color preferences, repaired conflicts within instruction-class domains, then regenerated and independently re-verified every hard assignment. No previous sharing proof was reused."});
+        if(allocation_mode==3)replay.optimizations.push_back({"joint-memory-backed-helper-abi",
+            "Regenerated the memory-backed expression ABI with a fresh logical interference proof; retained its entry-prologue and placement alternative independently of the one-X incumbent until complete final-cell pricing."});
+        independent_lifetime_roots.insert(seeds.size());
+        seeds.push_back({std::move(replay),std::move(replay_proof)});
+      }
+      }
+    }
+  }
+
+  struct Seen {
+    core::LayoutSearchArtifact artifact;
+    std::map<std::string, std::string> registers;
+    std::string options;
+  };
+  std::vector<Seen> seen;
+  bool improved = false;
+  std::size_t added_winners = 0;
+  constexpr std::size_t maximum_added_winners = 8;
+  std::size_t added_enabling = 0;
+  constexpr std::size_t maximum_added_enabling = 8;
+  for (std::size_t index = 0; index < seeds.size(); ++index) {
+    auto seed = seeds[index];
+    if(seed.unfrozen_geometry){
+      if(!refresh_proved_layout_annotations(seed.result,seed.options))continue;
+      const auto resolved=resolve_machine_items(seed.result.items,seed.options);
+      if(!resolved.diagnostics.empty())continue;
+      seed.result.steps=resolved.steps;seed.result.labels=label_map(resolved.labels);
+    }
+    if (!seed.result.implemented || seed.result.feature_profile != original.feature_profile ||
+        (!independent_lifetime_roots.contains(index) &&
+         !core::transaction_growth_fits(static_cast<int>(original.steps.size()),
+            static_cast<int>(seed.result.steps.size()), 4)))
+      continue;
+    CompileOptions proof_options = seed.options;
+    // These are already emitted artifacts. Interpret their PCs under the
+    // delivered model, not an earlier optimizer's restricted source model.
+    proof_options.feature_profile = original.feature_profile;
+    proof_options.optimizer_feature_profile_override.reset();
+    proof_options.budget = comparison_options.budget;
+    const core::LayoutSearchArtifact artifact{
+        seed.result.items, seed.result.preloads, seed.result.optimizations};
+    const auto key = reclaim_base_key(proof_options);
+    if (std::any_of(seen.begin(), seen.end(), [&](const auto& old) {
+          return old.options == key && old.registers == seed.result.registers &&
+                 core::same_layout_search_artifact(old.artifact, artifact);
+        }))
+      continue;
+    seen.push_back({artifact, seed.result.registers, key});
+    if (candidate_needs_static_proof_gate(proof_options)) {
+      if (const auto reason = optimizer_static_gate_rejection_reason(proof_options, seed.result)) {
+        if (std::getenv("MKPRO_NATIVE_TRACE_COPY_TRANSPORT"))
+          std::cerr << "[context-root] static gate: " << *reason << '\n';
+        continue;
+      }
+    }
+    auto candidate = apply_contextual_copy_layout_to_selected_result(
+        source, seed.result, proof_options, comparison_options);
+    if (!candidate) continue;
+    if (!candidate->implemented ||
+        (candidate_needs_static_proof_gate(proof_options) &&
+         optimizer_static_gate_rejection_reason(proof_options, *candidate)))
+      continue;
+    if (!candidate_beats_best(*candidate, best, comparison_options)) {
+      // A separately proved ABI can repay its debt over several rounds.
+      // Retain a strictly shorter local continuation without replacing the
+      // independent global incumbent or spending the winner continuation lane.
+      if (candidate->steps.size() < seed.result.steps.size() &&
+          added_enabling++ < maximum_added_enabling) {
+        if (independent_lifetime_roots.contains(index))
+          independent_lifetime_roots.insert(seeds.size());
+        seeds.push_back({std::move(*candidate),proof_options});
+      }
+      continue;
+    }
+    best = std::move(*candidate);
+    improved = true;
+    // Initial roots always keep their own turn. A bounded winner continuation
+    // composes another allocation/data/layout round without spending old beams.
+    if (added_winners++ < maximum_added_winners)
+      seeds.push_back({best, proof_options});
+  }
+  if (!improved || ((soft_budget || !comparison_options.analysis) &&
+                    best.steps.size() > requested_budget))
+    return original;
+  best.budget = comparison_options.budget;
+  best.optimizations.push_back({
+      .name = "post-root-contextual-layout",
+      .detail = "Completed the unchanged ABI/profile/root search first, then independently "
+          "priced contextual allocation/copy/layout transactions and ordinary finalization: " +
+          std::to_string(original.steps.size()) + " -> " + std::to_string(best.steps.size()) +
+          " cells. Rechecked exact lowering options, delivered memory model, setup and static gates.",
+  });
+  return best;
+}
+
 } // namespace
+
+CompileResult close_final_contextual_layouts_for_testing(
+    const std::string& source, CompileResult result,
+    const CompileOptions& lowering_options, const CompileOptions& comparison_options) {
+  return close_final_contextual_layout_roots(
+      source, std::move(result), lowering_options, comparison_options);
+}
 
 CompileResult compile_source(std::string source, const CompileOptions& requested_options) {
   const CompileOptions options = apply_source_feature_profile_hint(source, requested_options);
+  if(auto cached=read_completed_compile_result_cache(source,options))return *cached;
+  const auto completed=[&](CompileResult result){
+    write_completed_compile_result_cache(source,options,result);return result;
+  };
   const auto close_dead_stack_producers = [&](CompileResult result,
                                                const CompileOptions& lowering_options) {
     if (!result.implemented ||
@@ -81567,8 +81926,10 @@ CompileResult compile_source(std::string source, const CompileOptions& requested
       options.optimizer_feature_profile_override.has_value() ||
       options.optimizer_register_profile_override.has_value() ||
       has_explicit_lowering_variant(options)) {
+    expanded = close_final_contextual_layout_roots(
+        source, std::move(expanded), expanded_lowering_options, options);
     expanded.runtime_cost = runtime_cost_for_result(expanded);
-    return expanded;
+    return completed(std::move(expanded));
   }
 
   CompileOptions standard_options = options;
@@ -81590,6 +81951,7 @@ CompileResult compile_source(std::string source, const CompileOptions& requested
   // result opens this extra full root, and no register restriction can add RF
   // to the stock target.
   std::optional<CompileResult> restricted;
+  CompileOptions restricted_winning_options;
   if (standard.implemented && selected->steps.size() >
           static_cast<std::size_t>(feature_profile_program_step_limit(options.feature_profile))) {
     // Carry the winning combination, not just its final cell count. Reopening
@@ -81600,7 +81962,6 @@ CompileResult compile_source(std::string source, const CompileOptions& requested
     restricted_options.optimizer_feature_profile_override.reset();
     restricted_options.optimizer_register_profile_override = FeatureProfile::Standard;
     restricted_options.budget = options.budget;
-    CompileOptions restricted_winning_options;
     restricted = search_representation_roots(restricted_options, &restricted_winning_options);
     *restricted = close_dead_stack_producers(std::move(*restricted), restricted_winning_options);
     if (candidate_needs_static_proof_gate(restricted_winning_options)) {
@@ -81636,6 +81997,29 @@ CompileResult compile_source(std::string source, const CompileOptions& requested
     }
   }
 
+  // Do not let the new family alter any earlier root's pruning or beam.
+  // Finish every ordinary ABI/profile/continuation search before closing it.
+  expanded = close_final_contextual_layout_roots(
+      source, std::move(expanded), expanded_lowering_options, options);
+  standard = close_final_contextual_layout_roots(
+      source, std::move(standard), standard_lowering_options, options);
+  if (restricted)
+    *restricted = close_final_contextual_layout_roots(
+        source, std::move(*restricted), restricted_winning_options, options);
+  if (continuation.best)
+    *continuation.best = close_final_contextual_layout_roots(
+        source, std::move(*continuation.best), continuation.best_options, options);
+  const auto retain_closed = [&](const CompileResult& candidate) {
+    if (candidate_beats_best(candidate, *selected, options)) {
+      previous = selected;
+      selected = &candidate;
+    }
+  };
+  retain_closed(expanded);
+  retain_closed(standard);
+  if (restricted) retain_closed(*restricted);
+  if (continuation.best) retain_closed(*continuation.best);
+
   CompileResult result = *selected;
   result.candidates.insert(result.candidates.end(), continuation.candidates.begin(),
                            continuation.candidates.end());
@@ -81660,7 +82044,7 @@ CompileResult compile_source(std::string source, const CompileOptions& requested
                                        continuation.best ? &*continuation.best : nullptr,
                                        continuation.best && selected == &*continuation.best);
   result.runtime_cost = runtime_cost_for_result(result);
-  return result;
+  return completed(std::move(result));
 }
 
 } // namespace mkpro

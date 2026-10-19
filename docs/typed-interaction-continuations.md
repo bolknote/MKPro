@@ -8,14 +8,15 @@ uses the selector-consistent graph only as a conservative refinement.
 
 An untyped stop, raw instruction, or independent manual command remains a
 full-state barrier. A compiler-owned `typed-display-observation:xy` stop may
-observe just X/Y, but X1 and X2 must also be equal. A terminal halt needs no
-later continuation.
+observe just X/Y. X1, X2, Z and T remain private, potentially different
+state; a resumable display must carry those differences into every subsequent
+program use. A terminal halt needs no later continuation.
 
 A resumable projection is admitted only for a complete, validated
 `entered()` protocol whose prompt carries that role. Its single-step and
 continuous-resume phases retain the same protocol identities. Equal operator
 input may leave the stack in place or lift it: the proof joins both cases.
-It keeps every possible Z/T difference and follows the exact resume edges.
+It keeps every possible Z/T/X1/X2 difference and follows the exact resume edges.
 A later stack rotation, arithmetic consumer, store, or observation can still
 reject the transformation. Reaching a prompt never establishes full equality.
 
@@ -48,7 +49,7 @@ name. Existing restrictions on frozen numeric/indirect layouts remain.
 ROM comparisons check both input phases, displayed X/Y, memory and last-X,
 then full stack equality and a decimal-entry probe after resumption.
 The skipped-input case is included. Negative cases cover untyped/raw stops,
-malformed input protocols, protected labels, unequal X/Y/X1/X2, and a
+malformed input protocols, protected labels, unequal visible X/Y, and a
 ROM-observed T value after resumption. The arithmetic-entry matrix contains
 108 independent before/after-digit comparisons.
 
@@ -71,3 +72,19 @@ registers, recalled and literal arguments, nonempty return frames, protected
 roles and raw jumps. ROM checks compare the full stack, X1, decimal-entry
 behavior, and every data register; only the proved address-only selector may
 be relocated.
+
+## Hidden state is not an implicit display
+
+`mkpro.typed_display_observation_compiler_and_rom` compares equal displayed
+X/Y with deliberately different physical last-X1. A two-phase manual input
+followed by overwriting arithmetic is accepted; a later `F Bx` read rejects
+the same difference and is confirmed by a ROM counterexample. Unequal X/Y,
+untyped stops and exponent entry consuming a differing X2 remain barriers.
+No manual phase is removed, and no assumption is made about coordinate bounds.
+
+Numeric buffer freshness is a separate certificate from automatic stack lift.
+The selector product may recognize a fresh integer after Cx or Enter, while
+the ordinary lift proof still rejects those prefixes. Raw commands, unknown
+main-entry buffers, and input resumes never acquire a fresh-literal fact by
+assuming a cold start. The decoded-display regression also tests a subsequent
+last-X read and confirms its inequivalence in ROM rather than hiding it.

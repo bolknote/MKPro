@@ -168,9 +168,10 @@ late_bound_decimal_selector_target_labels(const std::vector<MachineItem>& items)
   return std::vector<std::string>(labels.begin(), labels.end());
 }
 
-LateBoundDecimalSelectorResult
-bind_late_bound_decimal_selectors(const std::vector<MachineItem>& items,
-                                  const LateBoundDecimalSelectorOptions& options) {
+static LateBoundDecimalSelectorResult
+process_decimal_selector_charges(const std::vector<MachineItem>& items,
+                                const LateBoundDecimalSelectorOptions& options,
+                                bool inspect_encoded) {
   LateBoundDecimalSelectorResult result;
   result.items = items;
 
@@ -223,7 +224,8 @@ bind_late_bound_decimal_selectors(const std::vector<MachineItem>& items,
                        " must carry exactly one high or low marker role.");
       continue;
     }
-    if (!is_strict_placeholder(item, options)) {
+    if (!(inspect_encoded ? is_non_raw_decimal_digit(item)
+                          : is_strict_placeholder(item, options))) {
       append_error(result.diagnostics, "late-decimal-selector-not-placeholder",
                    "Late-bound decimal selector item " + std::to_string(index) +
                        " is not the configured non-raw decimal placeholder.");
@@ -305,7 +307,9 @@ bind_late_bound_decimal_selectors(const std::vector<MachineItem>& items,
                        "' is not unique in the final layout.");
       continue;
     }
-    const int target_address = label_it->second.front();
+    const int target_address = inspect_encoded
+        ? items[high.item_index].opcode * 10 + items[low.item_index].opcode
+        : label_it->second.front();
     if (target_address < options.minimum_target_address ||
         target_address > options.maximum_target_address) {
       append_error(result.diagnostics, "late-decimal-selector-target-out-of-range",
@@ -333,7 +337,8 @@ bind_late_bound_decimal_selectors(const std::vector<MachineItem>& items,
                        "' is not unique in the final layout.");
       continue;
     }
-    const int target_address = label_it->second.front();
+    const int target_address = inspect_encoded ? items[single.item_index].opcode
+                                               : label_it->second.front();
     if (target_address < options.minimum_target_address || target_address > 9) {
       append_error(result.diagnostics, "late-decimal-selector-single-target-out-of-range",
                    "Single-cell decimal selector target label '" + single.target_label +
@@ -368,7 +373,8 @@ bind_late_bound_decimal_selectors(const std::vector<MachineItem>& items,
     });
   }
   for (const Marker& single : singles) {
-    const int target_address = label_addresses.at(single.target_label).front();
+    const int target_address = inspect_encoded ? items[single.item_index].opcode
+                                               : label_addresses.at(single.target_label).front();
     MachineItem& item = result.items.at(single.item_index);
     item.opcode = target_address;
     item.mnemonic = std::to_string(target_address);
@@ -384,7 +390,33 @@ bind_late_bound_decimal_selectors(const std::vector<MachineItem>& items,
         .low_digit = target_address,
     });
   }
-  result.applied = static_cast<int>(pairs.size() + singles.size());
+  result.applied = inspect_encoded ? 0 : static_cast<int>(pairs.size() + singles.size());
+  return result;
+}
+
+LateBoundDecimalSelectorResult
+bind_late_bound_decimal_selectors(const std::vector<MachineItem>& items,
+                                  const LateBoundDecimalSelectorOptions& options) {
+  return process_decimal_selector_charges(items, options, false);
+}
+
+DeferredDecimalSelectorCharges
+inspect_deferred_decimal_selector_charges(const std::vector<MachineItem>& items) {
+  auto parsed = process_decimal_selector_charges(
+      items, {.minimum_target_address = 0, .maximum_target_address = 99}, true);
+  DeferredDecimalSelectorCharges result;
+  result.diagnostics = std::move(parsed.diagnostics);
+  if (!result.diagnostics.empty()) return result;
+  std::map<std::string, int> equations;
+  for (const auto& charge : parsed.proofs) {
+    const auto [old, inserted] = equations.emplace(charge.target_label, charge.target_address);
+    if (!inserted && old->second != charge.target_address) {
+      append_error(result.diagnostics, "late-decimal-selector-conflicting-origins",
+                   "Deferred decimal charges impose conflicting addresses for target '" +
+                       charge.target_label + "'.");
+    }
+  }
+  if (result.diagnostics.empty()) result.charges = std::move(parsed.proofs);
   return result;
 }
 

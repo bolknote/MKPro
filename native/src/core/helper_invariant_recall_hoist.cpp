@@ -1,6 +1,8 @@
 #include "mkpro/core/helper_invariant_recall_hoist.hpp"
 
 #include "mkpro/core/opcodes.hpp"
+#include "mkpro/core/callee_hole_boundary_normalization.hpp"
+#include "mkpro/core/stable_register_value_flow.hpp"
 #include "mkpro/core/stack_value_equivalence.hpp"
 
 #include <algorithm>
@@ -197,6 +199,37 @@ bool has_fallthrough_barrier_before(const std::vector<MachineItem>& items,
     return false;
   const MachineItem& flow = items.at(*previous - 1U);
   return flow.kind == MachineItemKind::Op && flow.opcode == kDirectJumpOpcode;
+}
+
+bool helper_entry_after_dead_padding(const std::vector<MachineItem>& items,
+    std::size_t label, std::size_t command, const HelperInvariantRecallHoistOptions& options,
+    const std::vector<HelperInvariantRecallCall>& calls) {
+  if(!options.complete_program_control || command>=items.size())return false;
+  auto previous=previous_cell_item(items,label);std::size_t count=0,first=0;
+  while(previous && is_ordinary_op(items[*previous]) && items[*previous].opcode==0x54){
+    first=*previous;++count;previous=previous_cell_item(items,*previous);
+  }
+  if(count==0U || !has_fallthrough_barrier_before(items,first))return false;
+  for(const auto& item:items)if(item.formal_opcode || item.indirect_flow_formal_targets)return false;
+  const auto flow=build_post_layout_control_flow(items,*options.complete_program_control);
+  if(!flow.proved || flow.execution_states.size()!=flow.execution_edges.size())return false;
+  bool reached=false;
+  for(std::size_t to=0;to<flow.execution_states.size();++to){
+    if(flow.execution_states[to].item_index!=command)continue;reached=true;
+    for(const auto& entry:flow.external_entries)
+      if(post_layout_execution_matches_external_entry(flow.execution_states[to],entry))return false;
+    bool incoming=false;
+    for(std::size_t from=0;from<flow.execution_edges.size();++from)for(const auto& edge:flow.execution_edges[from]){
+      if(edge.target_state!=to)continue;incoming=true;
+      const auto source=flow.execution_states[from].item_index;if(source>=items.size())return false;
+      const int opcode=items[source].opcode;
+      if(std::none_of(calls.begin(),calls.end(),[&](const auto& call){return call.call_item_index==source;}))return false;
+      if(!((edge.kind==PostLayoutExecutionEdgeKind::DirectTarget && opcode==kDirectCallOpcode) ||
+           (edge.kind==PostLayoutExecutionEdgeKind::IndirectTarget && is_indirect_call_opcode(opcode))))return false;
+    }
+    if(!incoming)return false;
+  }
+  return reached;
 }
 
 struct SymbolicState {
@@ -771,6 +804,66 @@ bool simulate_helper_body_pair(const std::vector<MachineItem>& items, std::size_
   return execute_symbolic_pair(original, rewritten, items.at(return_index), true, false, rejection);
 }
 
+// Reuse the whole-program relational transfer when the local walker cannot
+// represent an indirect-memory boundary or a selected callback context. The
+// body/join proof above remains mandatory; this proves only non-observation
+// of its residual stack differences.
+bool prove_contextual_continuation(
+    const std::vector<MachineItem>& items, const HelperInvariantRecallHoistProof& helper,
+    const HelperInvariantRecallCall& call, const SymbolicState& original,
+    const SymbolicState& rewritten, const HelperInvariantRecallHoistOptions& options) {
+  if (!options.complete_program_control || original.registers != rewritten.registers ||
+      options.max_continuation_cells == 0) return false;
+  auto flow = build_post_layout_control_flow(items, *options.complete_program_control);
+  if (!flow.proved || !prove_post_layout_input_boundaries(items, flow).proved) return false;
+  if (options.deferred_target_origins) {
+    const auto selected = build_deferred_selector_consistent_execution_graph(
+        items, flow, *options.deferred_target_origins).execution;
+    if (!selected.proved) return false;
+    const auto states = flow.execution_states;
+    flow.execution_states.clear();
+    for (const auto state : selected.original_states) flow.execution_states.push_back(states[state]);
+    flow.execution_successors = selected.successors;
+    flow.execution_edges = selected.execution_edges;
+  }
+  const auto entry = next_cell_item(items, call.continuation_item_index);
+  if (!entry) return false;
+  StackValueEqualityState equality;
+  for (std::size_t slot = 0; slot < 4; ++slot)
+    equality.stack_equal[slot] = original.stack[slot] == rewritten.stack[slot];
+  equality.x1_equal = original.x1 == rewritten.x1;
+  equality.x2_equal = original.x2 == rewritten.x2;
+  auto proof_items = items;
+  // A later command changed by the same transaction cannot serve as a
+  // convergence witness. This includes every invocation of the changed ABI,
+  // not just the recalls scheduled for deletion.
+  for (const auto& other : helper.calls) {
+    proof_items[other.recall_item_index].raw = true;
+    proof_items[other.call_item_index].raw = true;
+    for (const auto permutation : other.join_permutation_items)
+      if (helper.erased_permutation_items.contains(permutation)) proof_items[permutation].raw = true;
+  }
+  if (helper.erased_helper_entry_recall_item)
+    proof_items[*helper.erased_helper_entry_recall_item].raw = true;
+  const bool after_join = call.placement != HelperInvariantRecallPlacement::BeforeCall &&
+      call.continuation_item_index > 0 &&
+      is_commutative_join(items[call.continuation_item_index - 1U].opcode);
+  const PostLayoutStackEntryProofOptions proof_options{
+      .refine_runtime_selectors = !options.deferred_target_origins.has_value(),
+      .numeric_entry_closed = after_join,
+      .transport_closed_entry_through_control = true,
+      .use_indirect_store_entry_facts = true,
+      .maximum_work = options.max_continuation_cells};
+  bool reached = false;
+  for (std::size_t state = 0; state < flow.execution_states.size(); ++state) {
+    if (flow.execution_states[state].item_index != *entry) continue;
+    reached = true;
+    if (!prove_post_layout_stack_state_equality(proof_items, flow, {state}, equality, proof_options))
+      return false;
+  }
+  return reached;
+}
+
 bool prove_call_transfer(const std::vector<MachineItem>& items,
                          const HelperInvariantRecallHoistProof& helper,
                          HelperInvariantRecallCall& call,
@@ -868,6 +961,10 @@ bool prove_call_transfer(const std::vector<MachineItem>& items,
       prove_continuation(items, call.continuation_item_index, original, rewritten, options);
   call.proved_continuation_cells = continuation.cells;
   if (!continuation.proved) {
+    if (prove_contextual_continuation(items, helper, call, original, rewritten, options)) {
+      call.proved_continuation_cells = options.max_continuation_cells;
+      return true;
+    }
     rejection = continuation.reason;
     return false;
   }
@@ -1151,10 +1248,15 @@ bool verify_final_artifact(const std::vector<MachineItem>& original,
     add_reason(proof, "final artifact lost the helper return");
     return false;
   }
+  const auto first_command = index.cell_items.find(index.label_addresses.at(proof.helper_label));
+  if (first_command == index.cell_items.end()) {
+    add_reason(proof, "final artifact lost the helper entry command");
+    return false;
+  }
   const std::size_t expected_recall_item =
       proof.insertion == HelperInvariantRecallInsertion::BeforeReturn
           ? *final_helper_return - (proof.swap_return_operands ? 2U : 1U)
-          : root->second + 1U;
+          : first_command->second;
   if (expected_recall_item >= candidate.size() ||
       candidate.at(expected_recall_item).kind != MachineItemKind::Op ||
       candidate.at(expected_recall_item).opcode != proof.recall_opcode) {
@@ -1289,7 +1391,7 @@ bool verify_final_artifact(const std::vector<MachineItem>& original,
       add_reason(proof, "final artifact contains a missing label target");
       return false;
     }
-    if (label != proof.helper_label)
+    if (index.label_addresses.at(label) != final_helper_start_address)
       continue;
     if (item_index == 0 || candidate.at(item_index - 1U).kind != MachineItemKind::Op ||
         candidate.at(item_index - 1U).opcode != kDirectCallOpcode) {
@@ -1455,8 +1557,8 @@ verify_helper_invariant_recall_hoist(const std::vector<MachineItem>& items,
 
   if (options.max_helper_body_cells == 0 || options.max_continuation_cells == 0)
     add_reason(proof, "symbolic proof bounds must both be positive");
-  if (index.duplicate_labels.contains(helper_label))
-    add_reason(proof, "helper root label is duplicated");
+  if (!index.duplicate_labels.empty())
+    add_reason(proof, "helper artifact contains an ambiguous duplicated label");
   const auto root = index.label_items.find(helper_label);
   if (root == index.label_items.end()) {
     add_reason(proof, "helper root label is absent");
@@ -1464,8 +1566,9 @@ verify_helper_invariant_recall_hoist(const std::vector<MachineItem>& items,
   }
   proof.helper_label_item_index = root->second;
   proof.helper_body_begin_item_index = root->second + 1U;
-  if (!has_fallthrough_barrier_before(items, root->second))
-    add_reason(proof, "official control can fall through into the helper root");
+  while (proof.helper_body_begin_item_index < items.size() &&
+         items[proof.helper_body_begin_item_index].kind == MachineItemKind::Label)
+    ++proof.helper_body_begin_item_index;
 
   bool found_return = false;
   for (std::size_t item_index = proof.helper_body_begin_item_index; item_index < items.size();
@@ -1518,7 +1621,7 @@ verify_helper_invariant_recall_hoist(const std::vector<MachineItem>& items,
         target->second <= index.item_addresses.at(proof.helper_return_item_index);
     if (!targets_helper_range)
       continue;
-    if (label != helper_label) {
+    if (target->second != index.item_addresses.at(root->second)) {
       add_reason(proof, "helper has a second referenced entry");
       continue;
     }
@@ -1549,8 +1652,11 @@ verify_helper_invariant_recall_hoist(const std::vector<MachineItem>& items,
       });
     }
   }
-  if (proof.calls.size() < 2U)
-    add_reason(proof, "helper needs at least two proved direct PP call sites");
+  if (!has_fallthrough_barrier_before(items, root->second) &&
+      !helper_entry_after_dead_padding(items,root->second,proof.helper_body_begin_item_index,options,proof.calls))
+    add_reason(proof, "official control can fall through into the helper root");
+  if (proof.calls.empty() || (!options.allow_size_neutral && proof.calls.size() < 2U))
+    add_reason(proof, "helper needs a complete proved call family (at least two in greedy mode)");
 
   if (!proof.reasons.empty())
     return proof;
@@ -1646,15 +1752,16 @@ verify_helper_invariant_recall_hoist(const std::vector<MachineItem>& items,
         std::string rejection;
         bool proved = prove_call_transfer(items, candidate, call, options, rejection);
         if (options.allow_callsite_operand_swap &&
-            candidate.insertion == HelperInvariantRecallInsertion::BeforeReturn &&
             !candidate.swap_return_operands && !candidate.preserve_entry_x &&
             !call.join_permutation_items.empty()) {
           const std::size_t permutation = call.join_permutation_items.front();
           if (items.at(permutation).opcode == 0x14 &&
               items.at(permutation).roles.empty() &&
               !candidate.erased_permutation_items.contains(permutation)) {
-            // Choose each caller's cheapest proved continuation independently.
-            // A commutative result alone does not make its retained Y or X2 dead.
+            // Choose each caller's proved continuation independently at either
+            // helper insertion point. A memory-backed root can already leave
+            // result/common in the order formerly prepared by this swap.
+            // Commutativity alone never proves retained Y or X2 dead.
             candidate.erased_permutation_items.insert(permutation);
             HelperInvariantRecallCall without_swap = call;
             without_swap.proved_continuation_cells = 0;
@@ -1706,7 +1813,8 @@ verify_helper_invariant_recall_hoist(const std::vector<MachineItem>& items,
         static_cast<int>(candidate.erased_permutation_items.size()) +
         inserted_recall_cells(candidate) + inserted_callsite_swap_cells(candidate) -
         (candidate.erased_helper_entry_recall_item.has_value() ? 1 : 0);
-    if (candidate.output_cells >= candidate.input_cells)
+    if (candidate.output_cells > candidate.input_cells ||
+        (candidate.output_cells == candidate.input_cells && !options.allow_size_neutral))
       add_reason(candidate, "recall hoist is not cell-profitable");
     candidate.proved = candidate.reasons.empty();
     return candidate;
@@ -1867,7 +1975,7 @@ rewrite_helper_invariant_recall_hoist(const std::vector<MachineItem>& items,
       candidate.push_back(items.at(item_index));
     }
     if (result.proof.insertion == HelperInvariantRecallInsertion::HelperRoot &&
-        item_index == result.proof.helper_label_item_index) {
+        item_index + 1U == result.proof.helper_body_begin_item_index) {
       candidate.push_back(hoisted);
       if (result.proof.preserve_entry_x) {
         MachineItem swap = MachineItem::op(0x14, "X<->Y");
@@ -1972,6 +2080,35 @@ optimize_helper_invariant_recall_hoist(const std::vector<MachineItem>& items,
     }
   }
   return best.applied > 0 ? std::move(best) : std::move(rejection);
+}
+
+std::vector<HelperInvariantRecallHoistResult>
+helper_invariant_recall_hoist_candidates(
+    const std::vector<MachineItem>& items,
+    const HelperInvariantRecallHoistOptions& options,
+    std::size_t maximum_candidates) {
+  std::vector<HelperInvariantRecallHoistResult> result;
+  if (maximum_candidates == 0) return result;
+  std::set<std::string> labels;
+  std::set<std::tuple<std::size_t,int,int,bool,bool>> identities;
+  for (const auto& item : items) {
+    if (item.kind != MachineItemKind::Label ||
+        (item.procedure_boundary && *item.procedure_boundary == "end") ||
+        !labels.insert(item.name).second) continue;
+    auto candidate = rewrite_helper_invariant_recall_hoist(items,item.name,options);
+    if (candidate.applied <= 0 || !candidate.proof.proved ||
+        !candidate.proof.final_artifact_proved) continue;
+    const auto& p = candidate.proof;
+    if (!identities.emplace(p.helper_body_begin_item_index,p.recall_opcode,
+            static_cast<int>(p.insertion),p.swap_return_operands,p.preserve_entry_x).second)
+      continue;
+    result.push_back(std::move(candidate));
+  }
+  std::stable_sort(result.begin(),result.end(),[](const auto& a,const auto& b){
+    return a.proof.output_cells < b.proof.output_cells;
+  });
+  if (result.size() > maximum_candidates) result.resize(maximum_candidates);
+  return result;
 }
 
 } // namespace mkpro::core

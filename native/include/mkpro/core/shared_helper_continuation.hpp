@@ -10,6 +10,8 @@
 
 namespace mkpro::core {
 
+struct AuthoritativePostLayoutControlFlow;
+
 // One direct or proved single-target indirect call in a complete three-call
 // helper family. Two calls are
 // ordinary entries whose first two continuation cells are byte-identical; the
@@ -48,6 +50,9 @@ struct SharedHelperContinuationOptions {
   // Opt-in for the atomic common-processor/dual-mode transaction. Wrapper-only
   // clients retain the original same-entry contract.
   bool allow_entry_prologues = false;
+  // Optional authoritative graph of these exact items. Only this complete,
+  // unpruned graph may certify unreachable padding before an entry prologue.
+  const AuthoritativePostLayoutControlFlow* exact_control = nullptr;
 };
 
 struct SharedHelperContinuationProof {

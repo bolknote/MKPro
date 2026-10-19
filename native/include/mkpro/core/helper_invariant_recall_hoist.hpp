@@ -1,6 +1,7 @@
 #pragma once
 
 #include "mkpro/core/ir.hpp"
+#include "mkpro/core/post_layout_control_flow.hpp"
 #include "mkpro/core/passes/helpers.hpp"
 
 #include <cstddef>
@@ -79,10 +80,16 @@ struct HelperInvariantRecallHoistOptions {
   // result against the original artifact. It never weakens either proof.
   bool prefer_before_return_plan = false;
 
-  // Try one independently proved caller-side swap when a plain tail recall
+  // Remove a redundant leading caller swap at a root or plain-tail ABI only
+  // after the same complete relational continuation proof. Also try one
+  // independently proved caller-side swap when a plain tail recall
   // cannot preserve a before-call operand's retained-Y continuation. Every
   // repair is charged to the final size and rechecked after relocation.
   bool allow_callsite_operand_swap = false;
+
+  // Independent joint-search axis only: equal-size proved ABIs may enable
+  // placement or another transformation. Growing ABIs remain rejected.
+  bool allow_size_neutral = false;
 
   // Optional proof input for an atomic composition: every listed call is
   // independently proved to enter with this direct-register value already in
@@ -110,6 +117,14 @@ struct HelperInvariantRecallHoistOptions {
   // rewrite preserves both the operand byte and target command identity.
   std::map<std::size_t, int> fixed_direct_address_targets;
   std::set<std::size_t> retargetable_direct_address_items;
+
+  // Complete-program opt-in for unreachable neutral padding before a helper.
+  // Build the graph from these exact items; no fallthrough/manual/return
+  // entry may bypass the complete proved call family.
+  std::optional<PostLayoutControlFlowOptions> complete_program_control;
+  // Optional complete encoded origins while final selector positions are pending.
+  // The owner must still discharge the unchanged equations before publication.
+  std::optional<std::map<std::string, int>> deferred_target_origins;
 };
 
 struct HelperInvariantRecallHoistProof {
@@ -170,5 +185,13 @@ rewrite_helper_invariant_recall_hoist(const std::vector<MachineItem>& items,
 HelperInvariantRecallHoistResult
 optimize_helper_invariant_recall_hoist(const std::vector<MachineItem>& items,
                                        const HelperInvariantRecallHoistOptions& options = {});
+
+// Enumerate independently proved helper families instead of prematurely
+// choosing one global ABI. No candidate is publishable without the caller
+// closing allocation/placement and comparing its complete final artifact.
+std::vector<HelperInvariantRecallHoistResult> helper_invariant_recall_hoist_candidates(
+    const std::vector<MachineItem>& items,
+    const HelperInvariantRecallHoistOptions& options = {},
+    std::size_t maximum_candidates = 4);
 
 } // namespace mkpro::core

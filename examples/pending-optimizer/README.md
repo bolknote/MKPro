@@ -15,7 +15,7 @@ with a raw listing: the goal is to make the high-level source fit.
 
 | File | Current | Target | Gap | Status |
 | --- | ---: | ---: | ---: | --- |
-| `tic-tac-toe-4x4.mkpro` | 129 | 105 | +24 | pending optimizer |
+| `tic-tac-toe-4x4.mkpro` | 125 | 105 | +20 | pending optimizer |
 | `nekromant.mkpro` | 138 | 105 | +33 | pending optimizer; +3 after correctness fixes |
 | `podvodnaya-lodka-lazarev.mkpro` | 246 | 105 | +141 | pending optimizer; continuous symbolic display |
 
@@ -393,3 +393,9 @@ order and the explicit keyboard-input protocol.
 на трёх состояниях поля с оригинальным листингом.
 
 Общее слияние `retained-operand-update-compare` сокращает корректный порт 4x4 с 184 до 164 ячеек. Оно использует сохранённый в Y операнд `К∧`, `К∨` или `К⊕` для сравнения состояния до и после обновления, сохраняя живые снимки и новые значения внутри ветвей. Ввод с маской из нескольких битов проверяется против оригинального листинга; проверка пересечения не подменяет сравнение старого и нового состояния. До лимита МК-61 остаётся 59 ячеек.
+
+`joint-contextual-copy-layout` combines register-web allocation, per-caller
+dead-or-fixed-point copy proofs and shared-prefix/jump placement. Its complete
+transaction reduces the unchanged 4x4 port from 127 to 125 cells; deleting the
+two copy cells alone would leave the same address-constrained padding. The
+ordinary coordinate normalization, two-phase input and report logic are unchanged.

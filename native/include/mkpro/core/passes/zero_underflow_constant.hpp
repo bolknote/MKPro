@@ -4,6 +4,8 @@
 #include "mkpro/core/opcodes.hpp"
 #include "mkpro/core/passes/register_coalesce.hpp"
 #include "mkpro/core/post_layout_control_flow.hpp"
+#include "mkpro/core/callee_hole_boundary_normalization.hpp"
+#include "mkpro/core/detail/cell_provenance.hpp"
 
 #include <algorithm>
 #include <deque>
@@ -257,6 +259,92 @@ inline PassResult rematerialize_zero_underflow_constant(
         " immutable constant read(s) through canonical zero and self-indexed R3; "
         "proved all call/return contexts, scratch liveness and exclusive pair entry. "
         "Released data uses may be rebound only by the independent final-layout proof."});
+  return result;
+}
+
+// Conditional counterpart for a long literal exposed after allocation. The
+// canonical zero comes from a normalized subtraction and its equality edge,
+// not from an arbitrary typed zero. Geometry and all selector equations remain
+// the caller's obligations; hidden entry-state equality is proved separately.
+inline PassResult deferred_zero_underflow_literal(
+    const std::vector<IrOp>& ops, const AuthoritativePostLayoutControlFlow& flow,
+    const std::vector<PreloadReport>& preloads, std::size_t maximum_work = 400000U) {
+  PassResult result{.ops=ops};
+  if (!flow.proved || flow.execution_states.size()!=flow.execution_successors.size() ||
+      flow.execution_states.size()!=flow.execution_edges.size()) return result;
+  const auto items=lower_ir_to_machine(ops);
+  const auto plain=[](const IrOp& op) {
+    return !op.meta.raw && !op.meta.manual_interaction && !op.meta.logical_register_analysis &&
+        !op.target_meta.formal_opcode && !op.procedure_boundary &&
+        !op.meta.tactic && op.meta.semantic_call_origins.empty() &&
+        std::all_of(op.meta.roles.begin(),op.meta.roles.end(),detail::is_cell_origin_provenance) &&
+        op.target_meta.roles.empty();
+  };
+  for(const auto& op:ops)if(op.meta.raw || op.meta.logical_register_analysis)return result;
+  std::map<int,std::size_t> by_address;int address=0;
+  for(std::size_t i=0;i<ops.size();++i){if(ops[i].kind!=IrKind::Label)by_address.emplace(address,i);address+=cells_per_op(ops[i]);}
+  std::vector<std::size_t> sites;
+  std::vector<std::vector<std::pair<std::size_t,PostLayoutExecutionEdgeKind>>> predecessors(flow.execution_states.size());
+  for(std::size_t s=0;s<flow.execution_states.size();++s){
+    const auto at=by_address.find(flow.execution_states[s].address);if(at==by_address.end())return result;
+    sites.push_back(at->second);
+    for(const auto& edge:flow.execution_edges[s]){if(edge.target_state>=predecessors.size())return result;
+      predecessors[edge.target_state].emplace_back(s,edge.kind);}
+  }
+  const auto external=[&](std::size_t s){return std::any_of(flow.external_entries.begin(),flow.external_entries.end(),
+      [&](const auto& entry){return post_layout_execution_matches_external_entry(flow.execution_states[s],entry);});};
+  LivenessOptions lifetime;lifetime.discover_toggle_projection_signs=true;
+  for(const auto& word:preloads)if(!word.setup_expression && !word.setup_expression_text && !word.setup_target_name)
+    lifetime.equal_entry_value_classes.emplace(word.register_name,"literal:"+word.value);
+  std::map<std::size_t,std::vector<IrOp>> replacements;
+  for(std::size_t first=2;first+9U<ops.size();++first){
+    const std::size_t store=first+9U;const auto& destination=ops[store];
+    if(destination.kind!=IrKind::Store || !plain(destination) || destination.opcode<0x40 || destination.opcode>0x4e ||
+        destination.register_name!=std::string(1,"0123456789abcde"[destination.opcode-0x40]))continue;
+    bool literal=true;for(std::size_t i=first;i<first+8U;++i)literal=literal && plain(ops[i]) && ops[i].kind==IrKind::Plain && ops[i].opcode==9;
+    literal=literal && plain(ops[first+8U]) && ops[first+8U].kind==IrKind::Plain && ops[first+8U].opcode==0x0b;
+    const auto& guard=ops[first-1U];const auto& difference=ops[first-2U];
+    if(!literal || !plain(guard) || guard.kind!=IrKind::CondJump || guard.opcode!=0x5e ||
+        !plain(difference) || difference.kind!=IrKind::Plain || difference.opcode!=0x11)continue;
+    bool reached=false,valid=true;std::vector<std::size_t> roots;
+    for(std::size_t s=0;s<sites.size();++s){
+      if(sites[s]<first-1U || sites[s]>store)continue;
+      if(external(s) || predecessors[s].empty()){valid=false;break;}
+      for(const auto& [before,kind]:predecessors[s])
+        if(sites[before]+1U!=sites[s] || kind!=PostLayoutExecutionEdgeKind::Fallthrough)valid=false;
+      if(sites[s]==first)reached=true;
+      if(sites[s]==store)roots.insert(roots.end(),flow.execution_successors[s].begin(),flow.execution_successors[s].end());
+    }
+    if(!reached || !valid || roots.empty())continue;
+    if(destination.register_name!="3"){
+      const GuardedOldWordQuery query{store,"3"};
+      const auto dead=analyze_dead_old_words(ops,flow,{query},lifetime,maximum_work);
+      if(dead.exhausted || !dead.dead_words.contains(query))continue;
+    }
+    // Literal entry and D3 have identical X/Y/Z/T and physical last-X, but
+    // their decimal shadow need not agree. It must die on every continuation.
+    if(!prove_post_layout_stack_state_equality(items,flow,roots,{{true,true,true,true},false,true},
+        {.refine_runtime_selectors=false,.numeric_entry_closed=true,
+         .transport_closed_entry_through_control=true,.use_indirect_store_entry_facts=true}))continue;
+    IrOp seed=make_store("3");seed.meta.source_line=destination.meta.source_line;
+    IrOp recall;recall.kind=IrKind::IndirectRecall;recall.register_name="3";recall.opcode=0xd3;
+    recall.meta.mnemonic=opcode_by_code(0xd3).name;recall.meta.source_line=destination.meta.source_line;
+    recall.meta.indirect_memory_targets=std::vector<int>{3};
+    std::vector<IrOp> replacement{std::move(seed),std::move(recall)};
+    if(destination.register_name!="3")replacement.push_back(destination);
+    replacements.emplace(first,std::move(replacement));++result.applied;
+    // Prove one producer at a time: another replaced literal must not serve
+    // as a spurious X2 convergence witness for this transaction.
+    break;
+  }
+  if(!result.applied)return result;
+  result.ops.clear();
+  for(std::size_t i=0;i<ops.size();++i)if(const auto at=replacements.find(i);at!=replacements.end()){
+    result.ops.insert(result.ops.end(),at->second.begin(),at->second.end());i+=9U;
+  }else result.ops.push_back(ops[i]);
+  result.optimizations.push_back({"deferred-zero-underflow-literal",
+      "Composed canonical-zero literal materialization with exact guarded scratch death and "
+      "stack/X1/X2 continuation proofs before binding selector geometry."});
   return result;
 }
 

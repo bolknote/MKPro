@@ -7,6 +7,7 @@
 #include <map>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace mkpro::core {
@@ -140,6 +141,30 @@ struct AuthoritativePostLayoutControlFlow {
   std::vector<std::string> reasons;
 };
 
+
+// External entry is an exact PC/return-frame context, not every execution of
+// its physical command. In particular, a called return at 00 is not Main.
+// Product graphs can repeat a context with different data rows; retain every
+// matching row conservatively instead of guessing its selector valuation.
+struct PostLayoutExternalEntryContexts {
+  std::vector<bool> external;
+  std::vector<bool> main;
+};
+
+bool post_layout_execution_matches_external_entry(
+    const PostLayoutExecutionState& execution,
+    const PostLayoutExternalEntryState& entry);
+std::optional<PostLayoutExternalEntryContexts>
+resolve_post_layout_external_entry_contexts(const AuthoritativePostLayoutControlFlow& control);
+
+// Control certificate only. The caller separately proves total pure execution
+// and non-observation of all changed stack/X1/X2 values on every continuation.
+struct PostLayoutReturnCompletion {
+  std::size_t old_return_item = 0;
+  // New consecutive pure command items, including their final plain V/O.
+  std::vector<std::size_t> body_items;
+};
+
 struct PostLayoutExecutionRelocationOptions {
   std::size_t maximum_state_pairs = 50000;
   // For ambiguous aliases of one physical target, a caller may supply the
@@ -169,6 +194,29 @@ struct PostLayoutExecutionRelocationOptions {
   // External/manual entries, fetched operands and non-fallthrough contexts
   // remain ineligible. Composing deletions requires one proof per deletion.
   std::optional<std::size_t> erased_stack_producer_item;
+  // Separately data-certified direct transfers may be stutters in the rooted
+  // control relation. Each maps to its retained fallthrough command. This is
+  // NOT a memory/stack certificate; the caller owns those and entry-mode proof.
+  // Fetched operands, external entries and noncanonical side paths reject.
+  std::vector<std::size_t> erased_data_effect_items;
+  // New direct BP bridges may stutter only with unchanged return frames,
+  // closed numeric entry on every invocation and independently proved X2
+  // non-observation. They must have no preserved command identity or external
+  // entry, and cannot form a chain. This composes with the old jump bypass.
+  std::vector<std::size_t> inserted_transparent_jump_items;
+  // Data certificates remain the caller's obligation. These direct recalls
+  // retain their operation/entry shape but read a separately proved equal word.
+  std::vector<std::size_t> retargeted_direct_recall_items;
+  // New, separately data/stack-certified Recall;Store prefixes. Return frames
+  // may name only the first command; the proof canonicalizes it to the retained
+  // continuation, never an arbitrary return address or a prefix interior.
+  std::vector<std::pair<std::size_t, std::size_t>> inserted_copy_prefixes;
+  // Explicit aliases of a plain V/O, indexed in the old and new artifacts.
+  // Both return commands, every formal path and all frames are rechecked.
+  // No frame address or external interaction is canonicalized by this list.
+  std::vector<std::pair<std::size_t, std::size_t>> equivalent_return_items;
+  std::vector<PostLayoutReturnCompletion> pure_return_completions;
+
 };
 
 struct PostLayoutExecutionRelocationProof {

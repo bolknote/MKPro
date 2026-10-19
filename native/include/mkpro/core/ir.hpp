@@ -28,7 +28,8 @@ inline constexpr const char* kResumableErrorPaddingRole = "resumable-error-paddi
 
 // Source-emitted show/read/halt observation contract. The public display and
 // preview are X/Y; Z/T are internal temporaries, not an implicit manual UI.
-// A consumer must still prove X1/X2 equality and all later uses after resume.
+// X1/X2 and deeper differences remain live until every resumed use is proved
+// unobservable; reaching a display is not a hidden-state equality reset.
 // Raw commands and untyped manual protocols never inherit this projection.
 // Compiler-typed entered() phases may transport deeper differences only when
 // the complete resumed continuation proves that they cannot become observable.

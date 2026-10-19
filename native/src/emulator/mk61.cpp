@@ -293,13 +293,15 @@ ParsedNumber parse_number_literal(std::string value) {
 
   std::vector<int> integer_nibbles = nibbles_from_text(integer_part);
   std::vector<int> fractional_nibbles = nibbles_from_text(fractional_part);
-  int exponent = exponent_text.empty() ? 0 : std::stoi(exponent_text);
-  const int integer_digits = static_cast<int>(integer_nibbles.size());
-  exponent += (integer_digits - 1) * (exponent_negative ? -1 : 1);
-  if (exponent_negative)
-    exponent = 100 - exponent;
-  if (exponent >= 100)
+  const int entered_exponent = exponent_text.empty() ? 0 : std::stoi(exponent_text);
+  const auto integer_digits = static_cast<long long>(integer_nibbles.size());
+  const auto signed_order = (exponent_negative ? -static_cast<long long>(entered_exponent)
+                                              : static_cast<long long>(entered_exponent)) +
+      integer_digits - 1;
+  if (signed_order < -99 || signed_order > 99)
     throw std::invalid_argument("number exponent is out of range");
+  exponent_negative = signed_order < 0;
+  const int exponent = static_cast<int>(exponent_negative ? 100 + signed_order : signed_order);
 
   std::vector<int> mantissa = std::move(integer_nibbles);
   mantissa.insert(mantissa.end(), fractional_nibbles.begin(), fractional_nibbles.end());

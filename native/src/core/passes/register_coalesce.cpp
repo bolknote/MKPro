@@ -339,8 +339,9 @@ public:
       nodes_.erase(node);
     }
     if (!greedy_seed()) {
-      if (options_.greedy_only)
+      if (options_.greedy_only && options_.maximum_recoloring_work == 0U)
         return std::nullopt;
+      bounded_search_ = options_.greedy_only;
       assignments_.clear();
       nodes_.clear();
       for (const auto& [node, neighbors] : graph_.neighbors) {
@@ -461,7 +462,10 @@ private:
   // conflicting values. Fixed hardware homes and list-color domains are part
   // of the certificate. The caller still proves its data/CFG rewrite.
   bool color_interchange(const std::string& node) {
-    const auto spend = [&] { return recoloring_work_ < options_.maximum_recoloring_work && ++recoloring_work_; };
+    // Keep every historical component-repair witness. A fresh search may use
+    // only work left after that unchanged attempt, never steal its budget.
+    const auto chain_limit = options_.maximum_recoloring_work;
+    const auto spend = [&] { return recoloring_work_ < chain_limit && ++recoloring_work_; };
     const auto allowed = [&](const std::string& name, int color) {
       const auto domain = options_.allowed_colors.find(name);
       return domain == options_.allowed_colors.end() || domain->second.contains(color);
@@ -548,9 +552,17 @@ private:
   bool search() {
     if (nodes_.empty())
       return true;
+    if (bounded_search_) {
+      if (recoloring_work_ >= options_.maximum_recoloring_work) return false;
+      ++recoloring_work_;
+    }
     const std::string node = select_node();
     nodes_.erase(node);
     for (const int color : candidate_colors(node, true)) {
+      if (bounded_search_) {
+        if (recoloring_work_ >= options_.maximum_recoloring_work) break;
+        ++recoloring_work_;
+      }
       assignments_[node] = color;
       if (search())
         return true;
@@ -566,6 +578,7 @@ private:
   std::map<std::string, int> assignments_;
   std::set<int> anchored_colors_;
   std::size_t recoloring_work_ = 0;
+  bool bounded_search_ = false;
 };
 
 std::map<std::string, std::string>

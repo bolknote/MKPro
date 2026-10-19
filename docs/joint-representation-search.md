@@ -1334,6 +1334,13 @@ This proof composes two existing ideas rather than weakening observers:
   existing typed interaction contract. Separate final CFG/binder checks remain
   mandatory.
 
+A preload of an unrelated, runtime-written selector is not a constant origin.
+Its unknown callback rows remain in the conditional graph, but do not disable
+independently grounded typed runtime-charge origins. The regression retains
+both declared destinations of that mutable family while relocating only a
+separately proved private charge; an observed charge remains pinned. The ROM
+comparison covers the remaining data reads, stack, X1 and decimal-entry shadow.
+
 The privacy result is cached only within the immutable PreparedJointProofInput,
 including its complete source, preloads and control policy. There is no global
 cross-program proof memo.

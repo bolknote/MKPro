@@ -29,6 +29,12 @@ struct SymbolicRegionLayout {
 struct SymbolicRegionProjection {
   std::vector<int> cell_widths; // One per IR operation; labels have width zero.
   std::map<std::string, std::pair<int, int>> target_bounds;
+  // Conditional command transport, not a preload/value proof. The owner
+  // must rebind every moved selector and independently certify its data uses.
+  bool defer_indirect_entries = false;
+  // Fallback only, after the unchanged gapless search fails. Padding is
+  // unreachable between closed fallthrough chains and is priced in full.
+  int maximum_padding_cells = 0;
 };
 
 struct DeferredStackProducerLimits {

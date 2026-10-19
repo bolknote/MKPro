@@ -19,6 +19,21 @@ struct RawSingleHexWord {
 // for C/D and an explicit 0x tag; emits unambiguous ASCII scientific spelling.
 std::optional<RawSingleHexWord> decode_raw_single_hex_word(std::string_view word);
 
+
+// Documented H-in-X multiplication law for a single A..D mantissa and an
+// ordinary normalized decimal in Y: the raw digit acts as 10, so its order
+// supplies this decimal scale. E/F, multi-digit raw mantissas, arbitrary raw Y
+// and reversed operands are NOT covered. This certifies only the product;
+// physical last-X remains the raw X operand and needs a separate live-state
+// proof. Normal decimal underflow/zero behavior is part of the ROM contract.
+struct RawRightDecimalScale {
+  int exponent = 0;
+  bool negative = false;
+  std::string last_x_word;
+};
+std::optional<RawRightDecimalScale> evaluate_raw_right_decimal_scale(
+    std::string_view right_word);
+
 struct RawPower10Product {
   int exponent = 0;
   bool negative = false;

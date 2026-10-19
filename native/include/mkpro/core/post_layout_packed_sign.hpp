@@ -33,4 +33,30 @@ PackedSignInputProof prove_post_layout_packed_sign_inputs(
     const std::vector<PreloadReport>* preloads = nullptr,
     std::size_t maximum_work = 100000);
 
+struct ToggleSignInputProof {
+  std::map<std::size_t, int> signs;
+  // Exact physical dependencies. A demand slice may reuse a sign only while
+  // leaving this closed carrier's transitions and definitions unchanged.
+  std::map<std::size_t, std::string> carriers;
+  std::size_t work = 0;
+  bool exhausted = false;
+  // Exact post-command values for small integral members of the same closed
+  // automaton. A fraction is not rounded into this component. The dependency
+  // is retained separately so a sliced guard cannot prove itself.
+  std::map<std::size_t, int> values;
+  std::map<std::size_t, std::string> value_carriers;
+};
+
+// Read-only finite-state certificate for a delivered nonzero scalar carrier
+// whose only writes are complete Recall/Negate/Store transitions. Derive each
+// queried immediate-recall or transition-store sign from Main and validated typed resumes, retaining
+// every branch and exact return context. Unknown rows, aliases, side entries,
+// untyped input and exhausted work export no assumptions or partial facts.
+ToggleSignInputProof prove_post_layout_toggle_sign_inputs(
+    const std::vector<MachineItem>& items,
+    const AuthoritativePostLayoutControlFlow& flow,
+    const std::vector<std::size_t>& requested_states,
+    const std::vector<PreloadReport>& preloads,
+    std::size_t maximum_work = 100000);
+
 } // namespace mkpro::core

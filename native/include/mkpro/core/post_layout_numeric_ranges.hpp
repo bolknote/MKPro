@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <map>
 #include <optional>
+#include <set>
 #include <string_view>
 #include <vector>
 
@@ -29,6 +30,18 @@ struct PostLayoutNumericRangeProof {
   // X immediately before an item, joined over every matched call context.
   // Absence means unknown, including unreachable or externally entered values.
   std::map<std::size_t, OrdinaryNumericRange> x_before;
+  // Same original execution-state IDs as the supplied authoritative graph.
+  // Keep distinct caller domains even when their physical item joins unknown.
+  // Optional expanded progress graphs never export their private state IDs.
+  std::map<std::size_t, OrdinaryNumericRange> x_before_state;
+  // Stronger word-shape fact, not inferred from integer interval endpoints.
+  std::set<std::size_t> canonical_small_integer_states;
+  // At these original direct-recall states the source MEMORY word itself
+  // is canonical, before recall normalization. Never inferred from X alone.
+  std::set<std::size_t> canonical_memory_load_states;
+  // Complete guarded definition/use proofs may exclude an execution state.
+  // This is distinct from an absent/unknown numeric value; no CFG is edited.
+  std::set<std::size_t> unreachable_states;
   std::size_t work = 0;
   bool exhausted = false;
 };

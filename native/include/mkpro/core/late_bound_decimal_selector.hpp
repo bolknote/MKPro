@@ -79,6 +79,20 @@ LateBoundDecimalSelectorResult
 bind_late_bound_decimal_selectors(const std::vector<MachineItem>& items,
                                   const LateBoundDecimalSelectorOptions& options = {});
 
+// Analysis of already encoded charges in an unplaced candidate. Each record
+// states the conditional equation address(target_label) == encoded word, NOT
+// that the current layout satisfies it. No items are rewritten and this type
+// cannot be mistaken for an executable binding. Grammar, digit ownership and
+// unique target existence use exactly the final binder's parser; missing,
+// ambiguous or contradictory origins fail atomically. Final publication must
+// still call the strict binder after placement.
+struct DeferredDecimalSelectorCharges {
+  std::vector<LateBoundDecimalSelectorProof> charges;
+  std::vector<Diagnostic> diagnostics;
+};
+DeferredDecimalSelectorCharges
+inspect_deferred_decimal_selector_charges(const std::vector<MachineItem>& items);
+
 // Re-resolve compiler-marked selector pairs after a separately proved layout
 // transformation. Pair adjacency is measured in emitted machine cells, so
 // zero-cell labels may sit between the two digits. Unlike the initial binder,

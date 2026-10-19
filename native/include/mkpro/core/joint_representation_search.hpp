@@ -16,6 +16,25 @@ std::optional<LayoutSearchArtifact> transport_layout_search_artifact(
     const LayoutSearchArtifact& artifact, FeatureProfile source_profile,
     FeatureProfile target_profile, std::string* rejection = nullptr);
 
+// Atomic data/allocation/layout edges for a complete runtime environment.
+// Also available to late finalization: a root already expanded by an older
+// search must not hide a newly enabled smaller closed artifact.
+std::vector<ProvedSearchTransition<LayoutSearchArtifact>>
+contextual_copy_layout_transactions(const LayoutSearchArtifact& artifact,
+                                    const CompileOptions& options);
+
+// Compose exact copy forwarding, caller-only materialization, register epochs,
+// finite preload encoding and final placement without a local-size commitment.
+std::vector<ProvedSearchTransition<LayoutSearchArtifact>>
+contextual_copy_transport_layout_transactions(const LayoutSearchArtifact& artifact,
+                                              const CompileOptions& options);
+
+// Encode a delivered finite-state initializer and close its selector/layout
+// obligations atomically. Existing initializer ownership must match exactly.
+std::vector<ProvedSearchTransition<LayoutSearchArtifact>>
+preloaded_finite_state_layout_transactions(const LayoutSearchArtifact& artifact,
+                                         const CompileOptions& options);
+
 // Reusable proof-valid edges; the compiler's existing complete-artifact
 // finalizer, not a local cell delta, decides whether to publish a candidate.
 std::vector<ProvedSearchTransition<LayoutSearchArtifact>>

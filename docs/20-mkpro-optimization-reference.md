@@ -5283,3 +5283,381 @@ for the unique command-identity graph used by relocation. Existing outlining
 and stack-transfer optimizations benefit without a game or formula recognizer.
 `MKPRO_NATIVE_TRACE_STACK_ENTRY_EQUALITY` reports pruned inconsistent edges;
 pruning alone is not reported as a reduction in delivered program cells.
+
+## Typed display observations and exact selector words
+
+Compiler-owned `show`/`read`/`halt` displays observe X/Y, not an implicit dump
+of hidden X1/X2. The stack and finite-mode product proofs preserve outstanding
+hidden-state differences through all validated resume/manual phases. A later
+read before overwrite still rejects the rewrite; raw and untyped interactions
+retain their full-state barriers. This is an observation rule, not an input
+range annotation or a numeric-entry-state reset.
+
+The selector product proves a fresh numeric buffer independently from
+automatic stack lift. Cx and Enter may begin an exact one/two-digit selector
+without promising a Y/Z/T shift or hidden-X2 equality. The proof starts unknown
+at every external entry and retains raw/manual barriers; it does not import
+cold-start assumptions from another value analysis. Unknown low-register
+recalls still retain every declared callback alternative.
+`mkpro.selector_entry_word_compiler_and_rom` covers both directions and ROM
+call/return behavior without any source-name or game-pattern recognition.
+
+### Computed finite images and closed selector geometry
+
+Finite-mode representation discovery accepts independently certified computed
+inputs, starting with `K sign`, as well as literal seeds. The packed-sign proof
+checks every matched call context. A demand marker supplies no value assumption;
+unknown/raw words, an independent entry into the following store, or an unproved
+producer invocation reject the image. Rows remain indexed by execution context
+rather than an arbitrary union of signs.
+
+The existing finite decoder grammar selects a stored encoding and prices the
+producer decoder together with all consumers. A binary decoder must have an
+independent automatic-entry-lift certificate. Its lost T, physical last-X and
+X2 stay unequal until independently killed. A new proved producer can begin
+another epoch after the previous carrier became private; its store reactivates
+the relation. No spare register, source rewrite, raw-BCD assumption or game
+recognizer is needed. A two-consumer compiler/ROM fixture shrinks 28 to 25 cells;
+this synthetic saving is not a size claim for a pending example. Negative cases
+observe X1/X2 or provide an uncertified raw input. Repeated epochs and both signs
+are covered separately.
+
+The closed and deferred selector products now transport a fresh integer buffer
+through the same independently certified stable indirect flow when a compiler-owned
+transported prefix requests that analysis. Closing geometry does not discard the
+fact. No fresh-entry fact is invented at an open digit, raw cell, unknown entry
+or unsupported edge. Cx/Enter remain value-only certificates, not automatic lift.
+The shared closer table additionally records `K sign`; 25 ROM entry-prefix/sign
+cases pin its next-digit lift, visible stack, last-X and decimal-entry shadow.
+
+## Context-exact external-entry facts
+
+External entry is identified by command identity, encoded PC and the complete
+physical/formal return stack. A called instruction at the same physical cell
+as Main or a manual resume is not another external entry. The shared resolver
+fails closed if an advertised entry has no matching execution context; data
+products retain all matching rows conservatively.
+
+Finite-image reaching definitions, relational/epoch roots, numeric bounds,
+fresh-entry propagation, packed-sign origins and guarded liveness use this
+context distinction. It preserves genuine input invalidation without injecting
+unknown register values into an ordinary call through a shared startup return.
+The independent compiler/ROM fixture shrinks from 31 to 28 cells, including
+full register, stack, last-X and entry-shadow comparisons. Negative cases retain
+real resume invalidation and reject mismatched encoded PCs/return frames.
+This fact does not authorize moving a dark entry, changing its instruction
+route, retuning a data word or discarding a future observation.
+
+## Joint contextual copy elimination and prefix placement
+
+`joint-contextual-copy-layout` requests equal register homes for direct copies
+from the same producer, then uses the ordinary interference/entry proof. It
+does not identify source functions or games. Complete delivered initial values
+are analysis facts, not immutable constant-pool ownership. A source-location
+annotation alone does not turn a scalar initializer into a generated expression.
+
+For each shared copy, exact PC/return contexts independently prove one of:
+
+- The stored word cannot be observed before a definite overwrite or private exit.
+- The incoming old register domain is finite and integral, and exact decimal
+  replay proves the producer path a fixed point for every admitted value.
+- Every member of the complete reaching-definition set is excluded by the
+  existing guarded demand proof; no external entry or possible alias is omitted.
+
+Only these alternatives together authorize removal of the store. The preceding
+recall requires separate stack/X1/X2 non-observation and already-closed numeric
+entry in the retained predecessor. Typed input and public X/Y observations
+remain boundaries; untyped stops, unknown aliases, raw cells and unknown proof
+roles fail closed. Oversized logical code is not additional stock memory.
+
+If deleting two cells opens a hole before a fixed target, the layout alternative
+may interchange an unconditional BP with a bounded prefix of unchanged direct
+register transfers. All other callers enter that same moved prefix. The old BP
+can disappear only after its X2 effect is hidden; the new BP needs closed entry
+on every invocation and an independent X2 continuation proof. Rooted labelled
+CFG transport verifies every removed transfer, extra bridge, input phase,
+canonical/formal path, operand and return frame. All unchanged indirect entries
+keep their exact positions, and final selector binding is re-proved before
+publication. A locally smaller but unplaceable candidate is not accepted.
+
+Only after ordinary ABI, profile and representation-root exploration is
+complete does a dedicated lane close retained artifacts. It cannot alter
+earlier pruning or spend an older beam. Each root carries its real lowering
+options; emitted PCs are proved under the delivered memory model. The lane
+regenerates setup/listing and runs the ordinary static gate. Budget-only
+failures can be rescued only by a proved artifact fitting the requested limit;
+unrelated errors and non-fitting results are never relabelled successful.
+Independent cases cover 19 to 17, stock 107 to 105 and expanded 114 to 112;
+the stock result runs in ROM, and the expanded model cannot leak into stock.
+Closed numeric-entry transport through BP and matched returns is explicit in
+this lane; older greedy clients retain their independent conservative policy.
+When the matching selector-entry store moves before its old tail transfer,
+that BP becomes an internal continuation, not a second charge site. Only
+matching proof/selector fields authorize this annotation transport; missing,
+conflicting or duplicated fields remain obligations for the final gate. The
+store and its incoming literal/call/fallthrough proofs are never removed.
+An unrelated 22-to-20-cell ROM fixture covers matching and rejected metadata.
+Exact-term evaluation rejects unsupported Rf or malformed registers rather
+than throwing or assuming an extra stock-machine register. The complete physical
+register/effect/preload domain is checked, including agreement between an opcode
+and its register name. Shared cell origins recognize only complete numeric
+`finalization-cell-origin:N` and `shared-helper-dual-mode-G:origin:N` schemas.
+Malformed or extended role
+prefixes remain semantic barriers; they are never silently erased.
+
+The unrelated compiler/ROM fixture establishes a 19-to-17-cell baseline with
+one dead and one fixed-point caller of the same store. Negative cases retain
+non-fixed-point domains, raw/opaque cells, observable physical state, open
+numeric entry, live X2 and malformed bridge declarations. Separate nonlocal
+ROM facts cover direct predicates and stable R7..Re indirect predicates with
+open mantissas/exponents and both outcomes. Work and candidate limits fail
+closed; no partial guarded or numeric iterate is a certificate.
+
+## Preloaded finite-state representation
+
+A delivered literal Main initializer can seed a closed two-row negation
+automaton. The complete-artifact lane chooses an exact ordinary-decimal
+encoding from its product consumers, synthesizes every remaining decoder and
+transition, and prices their complete code before placement. It does not select
+source names, games, hand-picked initial values or raw BCD templates.
+
+The initializer is replaced only with a complete before/after ownership snapshot.
+Generated setup, ambiguous owners, Rf, signed zero, unproved writes, indirect
+aliases and unprojected observations reject the candidate. The value encoding
+updates data provenance only under this relational certificate; ordinary address
+rebinding still cannot retune an immutable arithmetic constant.
+
+The proof starts the encoded relation at actual Main contexts only. Validated
+compiler-typed input/resume edges transport the private register relation, not
+a fresh setup assumption. X/Y observations and every subsequent memory,
+stack/X1/X2 and entry-state use retain their independent obligations. Untyped
+resumes and side entries into transformed command groups remain barriers.
+
+Final layout, unchanged selector equations, setup regeneration and the existing
+static gate run before publication. This separate post-root lane cannot spend
+an older search beam or replace its equal-size incumbent. Synthetic compiler/ROM
+contracts cover three products, repeated phases, typed multi-part input and
+negative ownership/alias/hidden-state cases. This is not itself a claim that a
+pending game has become smaller.
+
+A transition may separately decode its result in X after storing the encoded
+carrier. This preserves implicit current-X consumers without restoring memory;
+each exact inverse table, additional command and hidden-state effect is charged.
+Literal powers with integral exponents -7 through 7 can participate as exact
+ordinary decimal operands. Setup regeneration does not establish an equal entry
+stack: every Main proof starts with X/Y/Z/T/X1/X2 unequal and must hide those
+differences before all observations and future reads.
+
+
+### Context-qualified copy transport and joint placement
+
+A copied word does not make its destination's entire lifetime equal to the
+source. The transport lane proves equality separately at every matched
+execution context, forwards only universally equal static reads, and sinks a
+remaining definition past a return only where that caller still observes it.
+Unknown aliases, source changes, manual entries and unobserved-looking cycles
+are checked explicitly. A possible write is not an old-word kill.
+
+New Recall/Store return prefixes have a bounded, explicit relocation
+certificate. Only the first command can be a return address; interiors,
+external entries, formal aliases and changed frame depth reject. The data
+proof separately checks the copied word and non-observation of every changed
+stack, last-X and entry-shadow slot through all actual continuations.
+
+The independent complete-artifact lane combines those deferred definitions
+with interference-checked cursor/FL epoch anchors and finite preload codecs
+before solving placement. Equal delivered initial words may share a home;
+a new initial word needs a dead-entry certificate and a setup-stack proof.
+Hardware anchors and immutable constant-pool ownership remain constraints.
+All decoder, reload and store cells count. Neither a smaller leaf nor a larger
+ABI root can displace the incumbent without a smaller, fully closed artifact.
+The historical searches retain their own budgets and candidate order.
+
+### Closed-value and allocation feedback
+
+A proved closed toggle can supply a sign after its preserving Store as well as
+after Recall. Small exact integral images are separate facts: a fractional
+carrier never acquires an integer value by rounding. Sliced guard proofs retain
+the carrier dependency and cannot use their own payload as an assumption.
+
+Equal-size allocation is revisited after encoding. Hardware demands, ordinary
+equalities and their diagonal products have separate bounded portfolios;
+filling the ordinary request budget must not suppress every compound request.
+A newly exposed copy Store can be removed before geometry freezes only after
+its data/entry proof and an independent rooted relocation certificate. The
+Recall stays unless a separate stack/X1/X2 proof removes it.
+
+An initializer home is retired only when its original epoch was actually used
+and then moved or eliminated, the final program has no direct/indirect effect
+on that home, every initializer is an ordinary literal, and Main setup effects
+are unobservable. Typed private terminal observations are required. An arbitrary
+unused source owner is not free constant-pool storage.
+
+### Guarded reaching-value recovery
+
+The range analysis can reuse a proved old-word cut after an arbitrary Store.
+When walking backwards from an actual Recall, that cut closes only paths on
+which the previous word cannot be read before another definition. Every other
+path, possible alias and Main entry remains an obligation. Surviving direct
+stores contribute their incoming numeric ranges, over exact call contexts.
+
+If every reaching possibility of one context is excluded, only that complete
+context is unreachable in the optional data-analysis graph. This is not an
+executable CFG rewrite or permission to remove an unrelated branch. Unknown
+selected outputs, skipped copies and alias writes retain the old value. Known
+indirect writes to other registers no longer disable the entire refinement.
+Guarded query batches respect the solver's 64-demand limit and share one work
+budget; exhaustion exports no partial refinement.
+
+### Idempotent common entry prologues
+
+A typed two-part input may already run a pure leaf on each argument before
+calling a shared helper. Another caller may omit those calls. The compiler can
+share the first prologue only when the second caller's complete integer input
+image is small and exact evaluation proves identical operations and full
+register/stack/X1/X2 state for every pair. The normalizer is discovered from
+call identities, not its source name or a particular formula.
+
+The moved pure leaf must additionally be total on an ordinary unbounded keyboard
+argument; identity on a few small inputs is insufficient. Raw/opaque operations,
+unknown input images, live last-X observations and foreign interior entries
+reject. Only the validated ContinuousResume anchor moves to the new outer call;
+the preceding single-step input and its protocol stay intact.
+
+A third entry may bypass the initial parameter Store only when its adjacent
+Recall proves a self-copy. Added selector accesses require whole-word-preserving
+writeback, not floating equality. Complete final call/return depth and input
+boundaries are checked before the deferred alternative reaches placement.
+The existing two-plus-one ordinary/dark-entry layout solver then prices the
+combined prologue and body widths. Unreachable NOP padding before that prologue
+needs the exact unpruned CFG; a real entry into the padding remains a barrier.
+
+### Changed-ABI allocation and completed-result reuse
+
+When an ABI changes, old sharing groups are not proofs. A separate collection
+probe may treat their colors as preferences on the newly generated logical
+graph, respecting hardware instruction-class domains. It uses bounded coloring,
+then regenerates under ordinary hard assignments and rechecks interference.
+The preserved and singleton-fallback roots remain independent alternatives.
+
+Reaching-definition identities use dense bit rows internally. This changes
+representation and allocation cost, not union, kill, ordering or interference
+semantics; ROM tests cover identities beyond the first 64-bit row.
+
+Completed public compilations have a separate eight-entry, mutex-protected
+cache keyed by the same complete source/options key as profile compilation.
+Only finished results are inserted; immutable continuation snapshots, proofs
+and root reports are preserved. A profile-cache hit alone must not repeat the
+outer ABI/layout search. MKPRO_NATIVE_COMPILE_CACHE=0 disables both caches.
+
+These mechanisms compete on final proved size. Their individual synthetic or
+intermediate savings are not a claim that a pending example fits hardware.
+
+The idempotent entry-prologue transaction considers both one-X and memory-backed
+expression entries. A trailing parameter store remains a real memory effect in
+the exact equivalence proof. The memory-backed ABI is independently regenerated
+after phase/lifetime changes and keeps a separate layout root; no local call-site
+size preference can discard it before common entry and side-entry placement.
+
+Changed-ABI collection does not apply old physical aliases during lowering.
+It passes their colors only through logical preference metadata, preserving
+source-required hardware/bank constraints. Old physical-share directives are
+not replayed in this internal collection mode. Outside collection, all requested
+hard assignments retain their normal semantics and validation.
+
+### Bounded list-color repair
+
+Changed-ABI allocation can escape greedy color choices even when a two-color
+component swap cannot repair them. The existing repair work cap is shared:
+component interchange keeps its complete historical work allowance, then deterministic constrained-domain/DSATUR uses only the unspent remainder
+search uses the remainder. Hardware pins, instruction domains and every
+interference edge remain hard obligations. Exhaustion returns no assignment,
+never a partial witness or an invented extra register. Existing successful
+greedy choices and the zero-budget legacy exact path remain unchanged.
+
+### Proven nonwinning layout checkpoints
+
+A complete joint-search callback may materialize an equal-size or temporarily
+larger layout inside the existing four-cell path debt. This is distinct from
+publication: ordinary materialization still requires a strict size improvement.
+Every intermediate refreshes address/proof annotations, resolves actual steps,
+rebuilds setup and passes the same static gates. It carries its real length; no
+fake step counts, widened hardware address space or weakened input contract are
+used. The joint frontier still owns cumulative growth, and only an independently
+proved winning descendant may replace the incumbent.
+
+### ABI-to-allocation feedback before placement
+
+A moved input prologue introduces new argument definitions which kill the
+old caller parameter before the shared body reads it. Recompute exact reaching
+webs at that point: the argument can share a chosen output epoch without
+forcing the persistent helper field into the same register. The independent
+bounded feedback lane composes copy coalescing, typed-input/hardware anchors
+and newly available literal storage while addresses are still equations.
+All original roots remain candidates; only final proved layout size selects.
+
+### Coupled epoch, helper ABI and layout frontier
+
+The independent coupled frontier revisits finite representation, exact definition-web copy coalescing, paired-input entry factoring and invariant-operand helper ABIs as graph edges, not a fixed pass order. Complete delivered preloads enable guarded lifetime cuts and typed observations; they never remove hardware, selector or immutable-pool constraints. A typed unit projection or paired-input entry shape keeps this frontier reachable after producer normalization has erased a literal call prefix. Every candidate retains command-identity selector equations until final placement. The original search budget and incumbent remain independent, all temporary growth is charged to the unchanged root, and only a smaller completely closed artifact may replace it.
+
+### Reversible dual-mode continuation layout
+
+A compiler-owned dual-mode tail may be reopened as a deferred search node. The inverse rechecks the exact stock-MK-61 side discontinuity, all three caller identities, the straight-line body, independent entries, matched return depth and the existing commutative continuation/X2 law on the expanded graph. Every duplicated tail cell counts against the unchanged root. Encoded selectors remain command-identity equations, not newly assumed physical addresses. A separate bounded frontier composes conditional-region exchange, lifetime and ABI changes before placement; it cannot publish the larger intermediate or displace the independent folded incumbent on a tie. Raw code, another frozen formal entry, missing provenance or a later X2 observation fail closed.
+
+### Composition-depth scheduling
+
+The independent coupled frontier may prioritize deeper proved continuations instead of spending every expansion on a different seed family. At equal depth semantic transformations precede closure-only edges, followed by cell count and deterministic discovery order. Expansion, candidate, depth and immutable-root growth budgets remain unchanged. The historical breadth policy is the default and its incumbent remains independent. Neither scheduling policy may publish an incomplete, unproved or oversized transaction.
+
+### Exact finalizer reuse
+
+A joint-search invocation memoizes up to sixteen complete queries per finalizer policy. Equality includes all executable, typed proof, source, selector and preload fields and the complete optimization report, since static gates may inspect it. Root/options and callbacks are immutable for that invocation; strict and intermediate policies have separate caches. Successful results are copied, complete failures are reusable, and FIFO eviction merely recomputes a query. This changes neither search bounds nor publication proofs.
+
+### Neutral helper ABI frontier
+
+The independent coupled search may retain a complete, relationally proved helper ABI with exactly the original cell count. The ordinary greedy ABI optimizer remains strictly size-reducing. Candidate enumeration keeps distinct eligible helper families, not just one local winner, while bounded selection and all alias, entry, stack/X1/X2 and matched-return proofs remain unchanged. Equal size is not permission for growth or standalone publication; the complete composed layout still has to beat the independent incumbent.
+
+### Raw single-digit decimal scale alternatives
+
+The documented `H * Y` law for a single raw A..D digit in X supplies a decimal power scale for an ordinary normalized Y. Operand order is essential; E/F, multi-digit raw words and an arbitrary raw left operand are not admitted. The ROM boundary matrix covers 3360 signed mantissa/order/zero cases, visible stack, display and continuation; physical last-X is deliberately unequal. See [the primary hardware table](https://sergeanvarov.github.io/russian/mk61/uf/hex.html#id_h_mult_y).
+
+A delivered closed sign orbit can retain all four synthesized raw coefficient alternatives alongside its ordinary encoding. Only a complete normal-exponentiation producer on every incoming context authorizes the product observation; no input range or integer-coordinate assumption is inferred. Direct identity products and explicit decimal projections use the same representation mechanism. Other observations need a certified decoder; aliases, opaque producers, untyped input and observable raw last-X fail closed. Initializer ownership, stack/X1/X2, transitions, selector equations and complete final placement remain independent obligations. The independent coupled frontier retains the existing ordinary choices plus the four arithmetic-equivalent raw word choices; it cannot publish a neutral/larger representation.
+
+### Context-qualified redundant copy stores
+
+A copy store may be erased when every exact call/return context proves either that its destination dies before any later observation, or that X is already the destination's complete machine word. A grounded must-equivalence partition follows direct register and stack copies; typed input forgets incoming stack/hidden words while transporting only certified memory. Unknown writes, extended registers, opaque entry geometry and incomplete graphs fail closed.
+
+Separately, a straight-line pure leaf may certify an identity on the complete finite domain of an actual caller. Demand-driven ranges retain per-execution-state domains even when another caller makes the joined physical item unknown. Identity evaluation is exhaustive exact decimal evaluation, not sampled floating point or a source/formula recognizer. Only canonical positive one-digit input words and a normalizing final arithmetic command are admitted; numeric interval endpoints alone do not certify word equality, and raw, fractional, denormalized, non-total or observable arithmetic supplies no identity. Budget exhaustion exports no partial fact.
+
+The transformation removes only a closed-entry store and independently transports the original full rooted CFG and all return frames. It remains a separate candidate alongside copy forwarding, coefficient encoding, allocation and helper ABI choices; command-identity selector equations and final placement must still close before publication.
+
+### Normalizing-load value numbering
+
+Memory words and their direct-recall views are distinct value-number slots. In particular, FL and indirect counter updates write eight-digit denormalized integers; a direct recall normalizes an ordinary positive one-digit integer in X without modifying memory. The ROM matrix checks all eight nonzero mantissa positions for digits 1..9 across all fifteen stock registers, including a subsequent store, not merely display formatting. Interval endpoints never imply canonical memory.
+
+Grounded contextual GVN transports exact raw copies and separate recall-view congruences. A copied store may preserve only its recall view when its current X is certified canonical and every future use before an overwrite is a direct recall. A possible selector, FL, indirect alias, opaque observation or unknown value blocks this alternative. Pure-helper summaries attach only to their actual caller's canonical input domain; a load may certify that input even when its source memory is denormalized. Hidden stack/X1/X2 and numeric-entry operations are unchanged, the original full CFG and return frames are independently transported, and final allocation/layout still decides whether to publish the saving.
+
+### OR-payload selector range transport
+
+The numeric interpreter retains the same ROM-certified positive `8.<seven BCD payload nibbles>` class used by indirect-selector seed reuse. It is independent of ordinary-decimal bounds: payload digits may be hexadecimal. A stock predecrementing memory selector R0..R3 truncates this exact class and writes the denormalized integer 7; later certified counter accesses continue as 6,5,4. Possible self-stores join the written X rather than pretending the counter survives, and another bitwise opcode, opaque producer, unknown class, unsupported selector or incomplete proof supplies no fact. These facts feed ordinary range, helper-identity and allocation/layout analyses; they do not change a command or waive any alias/CFG proof.
+
+### Transitive value-origin allocation preferences
+
+An independent bounded lane proposes equal homes for a copied destination and earlier producer definitions reached through copy/helper-argument chains. It fairly enumerates destination families rather than exhausting its budget on the first scalar's definition history. A helper may transform its input: provenance is only a preference, never an equality theorem. Complete definition-web allocation independently proves noninterference, hardware classes, aliases and typed phases; contextual normalizing GVN then proves any enabled store deletion, and complete selector/layout closure selects the final artifact. All historical allocation candidates retain their own portfolio.
+
+### Guarded memory-shape feedback
+
+Demand-driven numeric proofs export a separate canonical-source fact for a direct load, before normalization. Completed guarded reaching-definition refinements may establish it even when the unconstrained physical register joins an obsolete definition. GVN uses that independently proved invariant to equate a raw memory word with its recall view at the exact original execution state. Canonical X alone never implies canonical memory; counter writeback and possible alias/skipped-output cases remain negative tests. Private progress-product state IDs are not exported, and no partial or exhausted proof becomes a word equality.
+
+Completed guarded definition/use proofs also export explicit unreachable execution states, separately from unknown numeric values. Only exclusion of a complete reaching-definition set, followed by reachability from every external root, can supply this certificate. Contextual GVN may omit those data-analysis contexts, but keeps the original complete CFG for independent relocation and return-frame validation. Missing ranges, unknown inputs, partial alias information and budget exhaustion never imply unreachability. Positive and negative shared-helper tests distinguish an impossible old-word caller from unknown and genuinely reachable callers.
+
+When a shared store is equal in some callers but still live in others, the unresolved callers receive exact-context definition/use demands for every possible observation of the destination. The existing guarded lifetime solver must exclude all of them before that caller counts as dead. Unknown guards, indirect aliases and opaque observations remain demands, not assumptions. The combined word/guard proof shares one bounded work budget; only its completed certificate can authorize erasure, and the original full CFG is still independently relocated.
+
+Guarded demands discover ordinary direct-register zero/sign checks independently of max-selection windows. This merely selects scalar guard facts for exact bounded propagation; it never assumes the branch outcome. Main numeric-entry uncertainty, unknown inputs and writes still forget facts, and conditional max retention still requires its separate selected-definition cut.
+
+### Finite-orbit return selector reuse
+
+A delivered ordinary finite carrier whose only writes are independently checked self-negations can supply a return selector as well as data. The compiler proves a canonical definition on every path to each new use, checks both complete machine words and their stable zero-address writeback, and rejects aliases, raw/unknown definitions and pre-existing selector families. It batches eligible conditional return operands without adding a register or initializer. Explicit identical-`В/О` aliases are validated in the complete rooted control transport, with unchanged labelled interactions, canonical formal paths and every return frame. Both X2 continuations retain their independent proof; numeric equality alone is insufficient. The joint frontier carries new selector origins into allocation and placement rather than freezing the local saving.
+
+### Quantized pure return completion
+
+An ignored return may share the final `В/О` of an existing pure helper. The compiler derives ordinary per-context input bounds, uses an initial integer quantizer to obtain a complete finite image, and exhaustively proves the remaining arithmetic total without unknown operand/last-X/X2 reads. It separately proves all changed stack/X1/X2 values unobservable and both numeric-entry boundaries closed. The helper is moved, not copied; incoming branch labels still skip to its retained final return, while physical fallthrough alone executes the extra pure body. Exact rooted control transport accounts for the additional execution without inventing a frame or altering a saved continuation. Every original data/address equation remains pending until joint placement. Unknown domains, traps, memory effects, observed results, noncanonical/external paths and exhausted proofs fail closed.
