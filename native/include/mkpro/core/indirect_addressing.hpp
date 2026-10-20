@@ -57,6 +57,12 @@ std::optional<IndirectAddressEvaluation> evaluate_indirect_address(
     std::string_view selector, std::string_view value, IndirectOperationKind operation,
     AddressSpaceModel model = AddressSpaceModel::Standard);
 
+// Exact canonical word after ordinary arithmetic normalization. This does NOT
+// describe the original literal's memory shape: a caller must independently
+// prove the normalization before using it. Reject zero, raw/rounded mantissas
+// and out-of-range orders. No host floating point is used.
+std::optional<std::string> normalized_finite_ordinary_word(const std::string& spelling);
+
 // Required before an immutable data literal can also supply a flow address.
 // Stable excludes counter updates, but does not establish this property.
 // Fractional/sign-filled write-back is never justified by floating equality.
@@ -66,7 +72,8 @@ bool indirect_writeback_preserves_literal_value(
 // Stronger certificate for adding a previously absent selector access.
 // Numeric equality is insufficient: e.g. ordinary 7 becomes denormalized
 // 00000007. This bounded grammar certifies the literal's stored word, including
-// its mantissa/order shape; unsupported raw encodings fail closed.
+// its mantissa/order shape. Single A..D words with orders -1..-3 have
+// their own exact fixed-point certificate; other raw encodings fail closed.
 bool indirect_writeback_preserves_literal_word(
     const IndirectAddressEvaluation& evaluation, std::string_view original_value);
 

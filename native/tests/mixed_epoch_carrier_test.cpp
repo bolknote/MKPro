@@ -1,9 +1,14 @@
 #include "mkpro/core/callee_hole_boundary_normalization.hpp"
 #include "mkpro/core/emit/machine_emitter.hpp"
 #include "mkpro/core/joint_representation_search.hpp"
+#include "mkpro/core/indirect_addressing.hpp"
 #include "mkpro/core/passes/finite_mode_representation.hpp"
 #include "mkpro/core/passes/liveness_analysis.hpp"
+#include "mkpro/core/passes/contextual_copy_transport.hpp"
+#include "mkpro/core/passes/semantic_region_folding.hpp"
+#include "mkpro/core/passes/zero_underflow_constant.hpp"
 #include "mkpro/core/post_layout_numeric_ranges.hpp"
+#include "mkpro/core/post_layout_packed_sign.hpp"
 #include "mkpro/core/stable_register_value_flow.hpp"
 #include "mkpro/emulator/mk61.hpp"
 
@@ -137,12 +142,12 @@ int cells(const std::vector<MachineItem>& items) {
 }
 std::vector<passes::PassResult> candidates(
     const std::vector<MachineItem>& items,
-    const std::vector<PreloadReport>* preloads = nullptr) {
+    const std::vector<PreloadReport>* preloads = nullptr, bool sign_cuts = false) {
   CompileOptions options;
   options.defer_return_suffix_until_callee_hole = true;
   return passes::finite_mode_representation_candidates(
       raise_machine_to_ir(items), {options},
-      {.maximum_candidates = 32, .runtime_preloads = preloads});
+      {.maximum_candidates = 32, .runtime_preloads = preloads, .nonnegative_max_cuts = sign_cuts});
 }
 bool mixed(const passes::PassResult& result) {
   return std::any_of(result.optimizations.begin(), result.optimizations.end(),
@@ -1037,6 +1042,505 @@ bool literal_recovered(const passes::PassResult& result) {
       [](const auto& report) { return report.name == "finite-mode-boundary-rematerialization"; });
 }
 
+
+bool nonnegative_cut(const passes::PassResult& result) {
+  return std::any_of(result.optimizations.begin(), result.optimizations.end(),
+      [](const auto& report) { return report.name == "nonnegative-max-coefficient-state-carrier"; });
+}
+
+void nonnegative_max_cut_contracts() {
+  for (const int reg : {2, 8}) {
+    auto source = fixture(Variant::Unknown, reg);
+    source.insert(source.begin() + 2, MachineItem::op(0x0b, "negative initial mode"));
+    const auto graph = build_post_layout_control_flow(source);
+    const auto entry = analyze_post_layout_automatic_entry_lift(source, graph, 100000);
+    require(entry.has_value(), "sign-cut entry contexts prove");
+    const auto at = boundary_item(source);
+    const auto facts = prove_post_layout_numeric_ranges(source, graph, *entry, {at});
+    require(!facts.exhausted && !facts.x_before.contains(at) &&
+                facts.nonnegative_words_before.contains(at),
+            "an unbounded square gets only a sign-byte fact, not an ordinary interval");
+    const auto limited = prove_post_layout_numeric_ranges(source, graph, *entry, {at}, nullptr, 1);
+    require(limited.exhausted && limited.nonnegative_words_before.empty() &&
+                limited.nonnegative_words_before_state.empty(), "partial sign facts never escape exhaustion");
+    const auto results = candidates(source, nullptr, true);
+    const auto found = std::find_if(results.begin(), results.end(), nonnegative_cut);
+    require(found != results.end(), "negative finite modes must be absorbed by a nonnegative square");
+    const auto after = lower_ir_to_machine(found->ops);
+    require(cells(after) == cells(source) - 7, "a row-qualified sign cut retains all seven saved cells");
+    require(build_post_layout_control_flow(after).proved, "sign-cut final return contexts prove");
+    for (const char* input : {"-7", "0", "0.125", "13", "9999"})
+      require(observe(source, input) == observe(after, input),
+              "zero, fractional and large scores preserve registers, full stack, last-X and decimal shadow");
+    auto zero = fixture(Variant::Zero, reg);
+    zero.insert(zero.begin() + 2, MachineItem::op(0x0b, "negative initial mode"));
+    const auto zero_results = candidates(zero, nullptr, true);
+    const auto zero_cut = std::find_if(zero_results.begin(), zero_results.end(), nonnegative_cut);
+    require(zero_cut != zero_results.end(), "zero also absorbs a strictly negative finite row");
+    require(observe(zero, "13") == observe(lower_ir_to_machine(zero_cut->ops), "13"),
+            "the zero case retains complete ROM observations");
+  }
+  for (const auto variant : {Variant::Unknown, Variant::Negative,
+                             Variant::LastX, Variant::LiveZ, Variant::MixedProduct}) {
+    auto source = fixture(variant);
+    if (variant != Variant::Unknown)
+      source.insert(source.begin() + 2, MachineItem::op(0x0b, "negative initial mode"));
+    const auto results = candidates(source, nullptr, true);
+    require(std::none_of(results.begin(), results.end(), nonnegative_cut),
+            "unknown/negative operands, positive modes and observable state forbid sign-cut admission");
+  }
+}
+
+// A small executable core followed by unreachable analysis-space cells. This
+// separates formal hardware entries from the compiler's parallel logical tail;
+// ROM loads below include only its proved reachable official window.
+std::vector<MachineItem> formal_epoch_fixture(bool product_frame = false) {
+  auto core = fixture(Variant::Unknown, 8);
+  core.insert(core.begin() + 2, MachineItem::op(0x0b, "negative initial mode"));
+  std::vector<MachineItem> body;
+  std::string entry;
+  if (product_frame) {
+    entry = "formal-product";
+    auto begin = std::find_if(core.begin(), core.end(), [](const auto& item) {
+      return item.kind == MachineItemKind::Label && item.name == "products";
+    });
+    require(begin != core.end(), "formal fixture has its product region");
+    const auto first = static_cast<std::size_t>(begin - core.begin()) + 1U;
+    body.assign(core.begin() + static_cast<std::ptrdiff_t>(first),
+                core.begin() + static_cast<std::ptrdiff_t>(first + 7U));
+    body.push_back(MachineItem::op(0x52, "formal product return"));
+    core.erase(core.begin() + static_cast<std::ptrdiff_t>(first),
+               core.begin() + static_cast<std::ptrdiff_t>(first + 7U));
+    core.insert(core.begin() + static_cast<std::ptrdiff_t>(first),
+        {MachineItem::op(0x53, "formal product call"), MachineItem::address(entry)});
+  } else {
+    entry = "square";
+    auto begin = std::find_if(core.begin(), core.end(), [](const auto& item) {
+      return item.kind == MachineItemKind::Label && item.name == "square";
+    });
+    require(begin != core.end(), "formal fixture has its square region");
+    body.assign(begin + 1, core.end());
+    core.erase(begin, core.end());
+  }
+  std::vector<MachineItem> source;
+  target(source, 0x51, "formal-main");
+  source.push_back(MachineItem::label(entry));
+  source.insert(source.end(), body.begin(), body.end());
+  source.push_back(MachineItem::label("formal-main"));
+  source.insert(source.end(), core.begin(), core.end());
+  for (auto& item : source)
+    if (item.kind == MachineItemKind::Address &&
+        std::get_if<std::string>(&item.target) && std::get<std::string>(item.target) == entry)
+      item.formal_opcode = 0x02;
+  source.push_back(MachineItem::label("layout-alpha"));
+  append(source, {0x52});
+  source.push_back(MachineItem::label("layout-beta"));
+  append(source, {0x54, 0x52});
+  while (cells(source) < 130) append(source, {0x54});
+  return source;
+}
+
+std::vector<std::string> observe_official_reachable_window(
+    const std::vector<MachineItem>& items, const std::string& input) {
+  PostLayoutControlFlowOptions control; control.empty_return_target = 1;
+  const auto flow = build_post_layout_control_flow(items, control);
+  require(flow.proved && std::all_of(flow.execution_states.begin(), flow.execution_states.end(),
+      [](const auto& state) { return state.address >= 0 && state.address <= 104; }),
+      "the truncated ROM fixture must have no reachable logical tail");
+  const auto program = resolve_machine_items(items);
+  require(program.diagnostics.empty(), "formal epoch fixture resolves");
+  std::vector<int> bytes;
+  for (const auto& step : program.steps) if (bytes.size() < 105U) bytes.push_back(step.opcode);
+  emulator::MK61 calc;
+  require(calc.load_program(bytes).diagnostics.empty(), "proved official window fits stock ROM");
+  for (int reg = 0; reg < 15; ++reg)
+    calc.set_register(std::string(1, "0123456789abcde"[reg]), std::to_string(reg + 2));
+  calc.set_register("b", input);
+  calc.press_sequence({"В/О", "С/П"});
+  require(calc.run_until_stable(15000, 8).stopped, "formal epoch fixture stops");
+  std::vector<std::string> values{calc.display_text(true)};
+  for (const char* reg : {"X", "Y", "Z", "T", "X1"}) values.push_back(calc.read_register(reg));
+  for (int reg = 0; reg < 15; ++reg)
+    values.push_back(calc.read_register(std::string(1, "0123456789abcde"[reg])));
+  calc.press("."); values.push_back(calc.display_text(true));
+  return values;
+}
+
+std::vector<MachineItem> underflow_return_fixture() {
+  std::vector<MachineItem> source;
+  append(source,{0x52});source.push_back(MachineItem::label("underflow-prompt"));
+  append(source,{0x62,0x63,0x50});
+  source.back().stop_disposition=StopDisposition::Resumable;
+  source.back().roles.push_back(kTypedDisplayObservationRole);
+  source.back().manual_interaction=ManualInteractionAnchor{71,-1,ManualInteractionAnchorKind::PromptStop};
+  append(source,{0x46});source.back().manual_interaction=ManualInteractionAnchor{71,0,ManualInteractionAnchorKind::SingleStepCommand};
+  append(source,{0x42});source.back().manual_interaction=ManualInteractionAnchor{71,1,ManualInteractionAnchorKind::ContinuousResume};
+  append(source,{0x66,0x6b,0x11});target(source,0x57,"underflow-retry");
+  append(source,{7,0x50});source.back().stop_disposition=StopDisposition::Terminal;
+  source.back().roles.push_back(kTypedDisplayObservationRole);
+  while(cells(source)<97)append(source,{0x54});
+  source.push_back(MachineItem::label("underflow-retry"));
+  append(source,{0x43,0xd3});source.back().indirect_memory_targets=std::vector<int>{3};
+  append(source,{0x52,0x54,0x52});
+  require(cells(source)==102,"conditional underflow source baseline");return source;
+}
+std::vector<std::string> play_underflow_return(const LayoutSearchArtifact& artifact,
+                                              const std::string& x) {
+  const auto program=resolve_machine_items(artifact.items);
+  require(program.diagnostics.empty(),"conditional underflow fixture resolves");
+  std::vector<int> bytes;for(const auto& step:program.steps)bytes.push_back(step.opcode);
+  emulator::MK61 calc;require(calc.load_program(bytes).diagnostics.empty(),"conditional underflow fixture fits stock ROM");
+  for(const auto& word:artifact.preloads)calc.set_register(word.register_name,word.value);
+  calc.press_sequence({"В/О","С/П"});require(calc.run_until_stable(5000,8).stopped,"initial typed prompt");
+  calc.input_number(x,true);calc.press("ПП");require(calc.run_until_stable(5000,8).stopped,"single-step input");
+  calc.input_number("2",true);calc.press("С/П");require(calc.run_until_stable(5000,8).stopped,"conditional return reaches its typed observation");
+  std::vector<std::string> values{calc.display_text(true)};
+  for(const char* reg:{"X","Y","X1","2","6"})values.push_back(calc.read_register(reg));
+  if(x=="0")values.push_back(calc.read_register("3"));
+  calc.press(".");values.push_back(calc.display_text(true));
+  return values;
+}
+void underflow_conditional_return_contracts() {
+  const auto source=underflow_return_fixture();
+  LayoutSearchArtifact before{.items=source,.preloads={{.register_name="2",.value="0"},
+      {.register_name="3",.value="0"},{.register_name="b",.value="0"}}};
+  CompileOptions options;options.analysis=true;
+  const auto results=zero_underflow_conditional_return_layout_transactions(before,options);
+  require(!results.empty(),"conditional branch, materialization and absolute return placement compose");
+  const auto& after=results.front().node;
+  require(cells(after.items)==100,"conditional underflow final baseline: 102 -> 100");
+  PostLayoutControlFlowOptions control;control.empty_return_target=1;
+  const auto graph=build_post_layout_control_flow(after.items,control);
+  require(graph.proved && graph.maximum_observed_return_depth==0,"final empty-return contexts prove");
+  bool found=false;
+  for(const auto& [at,targets]:graph.indirect_flow_targets)
+    if(after.items[at].opcode==0x73){found=true;require(targets.size()==1U && targets.front().address==99,
+        "zero underflow must address the actual final return at physical 99");}
+  require(found,"one-cell conditional underflow command is emitted");
+  for(const char* x:{"0","-7","13"})require(play_underflow_return(before,x)==play_underflow_return(after,x),
+      "typed X:Y, retry sentinel, last-X, future inputs and decimal shadow agree in ROM");
+  auto live=before;
+  int pc=0;for(auto& item:live.items)if(item.kind!=MachineItemKind::Label){if(pc==11)item=MachineItem::op(0x63,"observe old R3");++pc;}
+  require(zero_underflow_conditional_return_layout_transactions(live,options).empty(),
+      "an observed old R3 on the normal branch forbids the hoisted store");
+  auto shadow=before;pc=0;
+  for(auto& item:shadow.items)if(item.kind!=MachineItemKind::Label){if(pc==11)item=MachineItem::op(0x0a,"observe entry shadow");++pc;}
+  require(zero_underflow_conditional_return_layout_transactions(shadow,options).empty(),
+      "both branch continuations must prove the hidden conditional effects unobserved");
+  auto opaque=before;
+  for(auto& item:opaque.items)if(item.manual_interaction && item.manual_interaction->kind==ManualInteractionAnchorKind::PromptStop)item.roles.clear();
+  require(zero_underflow_conditional_return_layout_transactions(opaque,options).empty(),
+      "opaque stops cannot hide changed stack values");
+}
+
+void contextual_formal_frame_contracts() {
+  const auto make=[](bool copy_before_frame){
+    std::vector<MachineItem> v;append(v,{0x52,0x6b});target(v,0x53,"formal-copy-helper");
+    v.back().formal_opcode=0xf1;
+    const auto copy=[&]{append(v,{0x61,0x42,0x62,0x44,0x0d,0x42});finish(v);};
+    if(copy_before_frame)copy();else target(v,0x51,"formal-copy-main");
+    while(cells(v)<39)append(v,{0x54});
+    v.push_back(MachineItem::label("formal-copy-helper"));append(v,{0x22});
+    while(cells(v)<48)append(v,{0x54});append(v,{0x52,0x54});
+    if(!copy_before_frame){v.push_back(MachineItem::label("formal-copy-main"));copy();}
+    while(cells(v)<130)append(v,{0x54});return v;
+  };
+  const auto source=make(false);const auto ops=raise_machine_to_ir(source);
+  const auto origins=[&](const auto& items){std::map<std::string,int> out;int pc=0;
+    for(const auto& item:items)if(item.kind==MachineItemKind::Label)out.emplace(item.name,pc);else ++pc;
+    return out;};
+  const auto labels=origins(source);PostLayoutControlFlowOptions control;control.empty_return_target=1;
+  const std::vector<PreloadReport> words;CompileOptions options;options.defer_return_suffix_until_callee_hole=true;
+  passes::ContextualCopyTransportOptions limits{.maximum_candidates=8,.control=&control,
+      .encoded_target_origins=&labels,.runtime_preloads=&words};
+  require(passes::contextual_copy_transport_candidates(ops,{options},limits).empty(),
+      "ordinary contextual clients still reject a formal entry without opt-in");
+  limits.preserve_formal_execution_frames=true;
+  const auto candidates=passes::contextual_copy_transport_candidates(ops,{options},limits);
+  const auto smaller=std::find_if(candidates.begin(),candidates.end(),[&](const auto& p){
+    return cells(lower_ir_to_machine(p.transformation.ops))<cells(source);});
+  require(smaller!=candidates.end(),"a disjoint copy may shrink under exact formal return-context transport");
+  const auto after=lower_ir_to_machine(smaller->transformation.ops);
+  require(cells(source)==130 && cells(after)==129,"disjoint formal copy baseline: 130 -> 129");
+  for(const char* input:{"-7","0","0.125","13"})
+    require(observe_official_reachable_window(source,input)==observe_official_reachable_window(after,input),
+        "the real F1 window, wraparound V/O, full stack/registers and decimal shadow agree in ROM");
+  const auto joint=search_joint_representation_constraints({.items=source},options,{},
+      {.maximum_expansions=2,.maximum_candidates=8,.maximum_depth=2,.maximum_growth_cells=4});
+  require(joint.incumbent && cells(joint.incumbent->items)<=129,
+      "the independent production frontier must retain the formal copy saving");
+  const auto again=search_joint_representation_constraints({.items=source},options,{},
+      {.maximum_expansions=2,.maximum_candidates=8,.maximum_depth=2,.maximum_growth_cells=4});
+  require(again.incumbent && same_layout_search_artifact(*joint.incumbent,*again.incumbent),
+      "independent formal composition is deterministic");
+  const auto before_frame=make(true);const auto before_labels=origins(before_frame);
+  limits.encoded_target_origins=&before_labels;
+  const auto blocked=passes::contextual_copy_transport_candidates(raise_machine_to_ir(before_frame),{options},limits);
+  require(std::none_of(blocked.begin(),blocked.end(),[&](const auto& p){
+      return cells(lower_ir_to_machine(p.transformation.ops))<cells(before_frame);}),
+      "erasing a prefix cannot silently move the fixed hardware F1 window");
+  limits.encoded_target_origins=nullptr;
+  require(passes::contextual_copy_transport_candidates(ops,{options},limits).empty(),
+      "formal-context opt-in requires a complete encoded-origin environment");
+}
+
+void preloaded_control_observer_contracts() {
+  std::vector<MachineItem> source;source.push_back(MachineItem::label("control-return-zero"));
+  append(source,{0x52,0x6b,0x6b,0x6b,0x6b,0x10,0x45,0x6c,0x0b,0x4c});
+  for(int i=0;i<3;++i)append(source,{0x6b,0x6c,1,0,0x13,0x12,0x4a});
+  append(source,{0xac});source.back().indirect_flow_targets=std::vector<IrTarget>{"control-return-zero"};
+  finish(source);
+  const std::vector<PreloadReport> words{{.register_name="c",.value="0.1"},
+      {.register_name="b",.value="10"}};
+  const std::map<std::string,int> origins{{"control-return-zero",0}};
+  CompileOptions options;options.defer_return_suffix_until_callee_hole=true;
+  const auto discover=[&](const auto& items){return passes::deferred_finite_mode_representation_candidates(
+      raise_machine_to_ir(items),{options},{.maximum_growth_cells=4,.maximum_candidates=32,
+          .runtime_preloads=&words,.preserve_compiler_selector_charges=true,
+          .assumed_target_addresses=&origins,.encode_preloaded_state=true,.precise_entry_facts=true});};
+  const auto proposals=discover(source);
+  require(!proposals.empty(),"a normalized finite carrier may preserve existing control observations");
+  const auto& proposal=proposals.front();const auto after=lower_ir_to_machine(proposal.transformation.ops);
+  require(cells(source)==39 && cells(after)==33,"combined arithmetic/control baseline: 39 -> 33");
+  require(proposal.required_target_addresses.at("control-return-zero")==0,
+      "the unchanged runtime entry is still an explicit final-layout equation");
+  auto delivered=words;
+  for(const auto& replacement:proposal.preload_replacements)
+    for(auto& word:delivered)if(word.register_name==replacement.before.register_name)word=replacement.after;
+  require(delivered.front().value=="0.01","the finite table actually changes the arithmetic representation");
+  for(const char* input:{"-7","0","13"}){
+    auto old=observe(source,input,&words),now=observe(after,input,&delivered);
+    emulator::MK61 expected;expected.set_register("c","-1E-1");
+    require(old[7U+12U]==expected.read_register("c"),"the reference orbit is canonical after its update");
+    expected.set_register("c","-1E-2");
+    require(now[7U+12U]==expected.read_register("c"),"the encoded private word is exactly the certified orbit");
+    // C is private encoded storage, not a physical-register equality claim.
+    // Its later source recall is decoded in finish(): Z/T, every other
+    // register, the displayed value, X1 and decimal shadow must still agree.
+    old.erase(old.begin()+19);now.erase(now.begin()+19);
+    require(old==now,"all future source reads and remaining full ROM observations agree");
+  }
+  auto memory_observed=source;
+  const auto call_at=std::find_if(memory_observed.begin(),memory_observed.end(),[](const auto& item){return item.opcode==0xac;});
+  auto read=MachineItem::op(0xdc,"independent memory-index observation");read.indirect_memory_targets=std::vector<int>{0};
+  memory_observed.insert(call_at,read);
+  require(discover(memory_observed).empty(),"a joint control flag cannot authorize an uncertified memory selector");
+  auto changed_target=source;
+  for(auto& item:changed_target)if(item.kind==MachineItemKind::Op && item.opcode==0x13)item.opcode=0x12;
+  require(discover(changed_target).empty(),"an arithmetic codebook that changes a flow target is rejected");
+  auto before_normalization=source;
+  auto call=std::find_if(before_normalization.begin(),before_normalization.end(),[](const auto& item){return item.opcode==0xac;});
+  const auto early=*call;before_normalization.erase(call);
+  before_normalization.insert(before_normalization.begin()+2,early);
+  require(discover(before_normalization).empty(),"an initial decimal spelling is not a normalized memory word");
+  auto setup_observed=source;setup_observed.erase(setup_observed.begin()+2,setup_observed.begin()+7);
+  require(discover(setup_observed).empty(),"changed setup X cannot be hidden by a control certificate");
+  require(normalized_finite_ordinary_word("-0.0012300")==std::optional<std::string>{"-1.2300000e-3"} &&
+      !normalized_finite_ordinary_word("0") && !normalized_finite_ordinary_word("123456789") &&
+      !normalized_finite_ordinary_word("1E100"),"normalization is exact, bounded and never a rounding assumption");
+}
+
+void guarded_reference_epoch_contracts() {
+  const auto make_fixture=[](bool live_old_word) {
+    const auto prefix=underflow_return_fixture();
+    std::vector<MachineItem> items(prefix.begin(),prefix.begin()+7);
+    append(items,{0x69,1,0x38,0x49,0x11});
+    target(items,0x57,"guarded-retry");
+    append(items,{0x32});items.back().roles.push_back(std::string(kUnitProjectionDemandRole));
+    if(live_old_word)append(items,{0x0b});
+    append(items,{0x48,2});if(live_old_word)append(items,{0x0b});
+    append(items,{0x68,0x36,0x48,0x11});
+    target(items,0x5e,"guarded-keep");
+    append(items,{9,0x43});
+    items.push_back(MachineItem::label("guarded-keep"));append(items,{0x68});
+    target(items,0x5c,"guarded-old-read");
+    append(items,{0,0x50});items.back().stop_disposition=StopDisposition::Terminal;
+    items.back().roles.push_back(kTypedDisplayObservationRole);
+    // The successful path returns to the typed prompt; the strict OR
+    // progress certificate is an invariant of this actual game loop.
+    items.push_back(MachineItem::label("guarded-old-read"));append(items,{0x63,0x52});
+    while(cells(items)<97)append(items,{0x54});
+    items.push_back(MachineItem::label("guarded-retry"));append(items,{0x43,0xd3});
+    items.back().indirect_memory_targets=std::vector<int>{3};append(items,{0x52,0x54,0x52});
+    return items;
+  };
+  LayoutSearchArtifact before{.items=make_fixture(false),.preloads={
+      {.register_name="2",.value="0",.setup_source_line=11},
+      {.register_name="3",.value="0",.setup_source_line=12},
+      {.register_name="9",.value="0",.setup_source_line=13}}};
+  CompileOptions options;options.analysis=true;
+  const auto results=zero_underflow_conditional_return_layout_transactions(before,options);
+  require(!results.empty(),"source-owned entry facts and pre-divergence sign proofs compose");
+  require(cells(results.front().node.items)==100,"guarded materialization baseline: 102 -> 100");
+  for(const char* input:{"0","-7","13"})
+    require(play_underflow_return(before,input)==play_underflow_return(results.front().node,input),
+        "guarded entry transport preserves typed display, last-X and decimal shadow in ROM");
+  auto live=before;live.items=make_fixture(true);
+  require(zero_underflow_conditional_return_layout_transactions(live,options).empty(),
+      "a retained positive guard must not borrow a later global fact to hide a real old-word read");
+  auto ungrounded=before;ungrounded.preloads.pop_back();
+  require(zero_underflow_conditional_return_layout_transactions(ungrounded,options).empty(),
+      "an ungrounded progress carrier cannot supply a sign certificate");
+}
+
+void permuted_pooled_materialization_contracts() {
+  std::vector<MachineItem> source;
+  append(source, {0x68, 0x42, 4, 0x43, 0x6b, 0xb7});
+  source.back().indirect_memory_targets=std::vector<int>{4};
+  append(source, {0x0d,0x6c,0x48,0x63,2,0x10,0x40});
+  finish(source); source.back().roles.push_back(kTypedDisplayObservationRole);
+  const std::vector<PreloadReport> words{{.register_name="7",.value="4"},
+      {.register_name="8",.value="5"},{.register_name="c",.value="-99999999"}};
+  PostLayoutControlFlowOptions control;
+  const auto result=passes::permuted_zero_underflow_constant(raise_machine_to_ir(source),words,control);
+  require(result.applied==1 && !result.preloads.empty() && result.preloads.front().register_name=="3",
+      "a direct-only permutation delivers the old initialized word in its new home");
+  const auto after=lower_ir_to_machine(result.ops);
+  require(cells(after)==cells(source), "home permutation plus D3 is a neutral enabling edge");
+  auto delivered=words;delivered.insert(delivered.end(),result.preloads.begin(),result.preloads.end());
+  for(const char* input:{"-7","0","13"}) {
+    auto old=observe(source,input,&words);auto now=observe(after,input,&delivered);
+    // observe emits display, decimal shadow, five stack values, then R0..Re.
+    std::swap(now[7U+3U],now[7U+8U]);
+    require(old==now,"a physical-home bijection preserves logical registers, full stack, X1 and entry shadow in ROM");
+  }
+  auto public_bank=source;public_bank.back().roles.clear();
+  require(passes::permuted_zero_underflow_constant(raise_machine_to_ir(public_bank),words,control).applied==0,
+      "untyped/public register-bank observations forbid home permutation");
+  auto alias=source;alias[5].indirect_memory_targets=std::vector<int>{3};
+  require(passes::permuted_zero_underflow_constant(raise_machine_to_ir(alias),words,control).applied==0,
+      "indirect memory aliases do not follow a direct-only home permutation");
+  auto reserved=words;reserved.push_back({.register_name="3",.value="0"});
+  require(passes::permuted_zero_underflow_constant(raise_machine_to_ir(source),reserved,control).applied==0,
+      "a reserved initializer cannot be silently taken over");
+}
+
+void pooled_materialization_contracts() {
+  for (const int destination : {3, 8}) {
+    std::vector<MachineItem> source;
+    append(source, {0x6b, 0xb7}); source.back().indirect_memory_targets = std::vector<int>{4};
+    append(source, {0x0d, 0x6c, 0x40 + destination});
+    if (destination != 3) append(source, {0x0d, 0x43});
+    finish(source);
+    const std::vector<PreloadReport> words{{.register_name="7",.value="4"},
+        {.register_name="c",.value="-99999999"}};
+    const auto ops = raise_machine_to_ir(source);
+    const auto flow = build_post_layout_control_flow(source);
+    const auto result = passes::rematerialize_zero_underflow_constant(
+        ops, {{"c", "-99999999"}}, AddressSpaceModel::Standard, &flow);
+    require(result.applied == 1, "precise unrelated indirect stores must not pin a pooled constant");
+    const auto after = lower_ir_to_machine(result.ops);
+    require(cells(after) == cells(source) + (destination == 3 ? 0 : 1),
+        "neutral materialization and borrowed-scratch growth are charged exactly");
+    for (const char* input : {"-7", "0", "13"})
+      require(observe(source, input, &words) == observe(after, input, &words),
+          "pooled materialization retains every register, stack/X1/X2 and entry shadow in ROM");
+    auto alias = source;
+    alias[1].indirect_memory_targets = std::vector<int>{12};
+    const auto alias_flow = build_post_layout_control_flow(alias);
+    require(passes::rematerialize_zero_underflow_constant(raise_machine_to_ir(alias),
+                {{"c", "-99999999"}}, AddressSpaceModel::Standard,
+                &alias_flow).applied == 0,
+        "an actual indirect write to the pooled home prevents rematerialization");
+  }
+}
+
+void epoch_qualified_selector_contracts() {
+  auto source = fixture(Variant::Unknown, 3);
+  source.insert(source.begin() + 2, MachineItem::op(0x0b, "negative initial mode"));
+  std::vector<MachineItem> prefix;
+  append(prefix, {0x0d, 0x43, 0xd3});
+  prefix.back().indirect_memory_targets = std::vector<int>{3};
+  source.insert(source.begin(), prefix.begin(), prefix.end());
+  CompileOptions options; options.defer_return_suffix_until_callee_hole = true;
+  const std::vector<PreloadReport> preloads;
+  auto limits = passes::FiniteModeCandidateOptions{
+      .maximum_candidates = 32, .runtime_preloads = &preloads,
+      .precise_entry_facts = true, .nonnegative_max_cuts = true};
+  const auto results = passes::deferred_finite_mode_representation_candidates(
+      raise_machine_to_ir(source), {options}, limits);
+  require(!results.empty(), "an equal scratch-selector epoch before the finite seed may coexist");
+  const auto after = lower_ir_to_machine(results.front().transformation.ops);
+  require(cells(after) == cells(source) - 7, "disjoint selector epochs preserve all seven saved cells");
+  for (const char* input : {"-7", "0", "0.125", "13"})
+    require(observe(source, input) == observe(after, input),
+        "the hardware scratch write, stack/X1/X2 and later encoded epoch agree in ROM");
+  auto live = fixture(Variant::Unknown, 3, 4);
+  auto product = std::find_if(live.begin(), live.end(), [](const auto& item) {
+    return item.kind == MachineItemKind::Label && item.name == "products";
+  });
+  require(product != live.end(), "live selector fixture has products");
+  const auto at = static_cast<std::size_t>(product - live.begin()) + 1U;
+  auto destructive = MachineItem::op(0xd3, "live self-decrementing mode");
+  destructive.indirect_memory_targets = std::vector<int>{3};
+  live.insert(live.begin() + static_cast<std::ptrdiff_t>(at), destructive);
+  require(passes::deferred_finite_mode_representation_candidates(
+              raise_machine_to_ir(live), {options}, limits).empty(),
+      "a destructive selector cannot read or overwrite a live encoded version");
+  auto alias = source;
+  auto products = std::find_if(alias.begin(), alias.end(), [](const auto& item) {
+    return item.kind == MachineItemKind::Label && item.name == "products";
+  });
+  auto indirect = MachineItem::op(0xd7, "observe a live mode through an independent selector");
+  indirect.indirect_memory_targets = std::vector<int>{3};
+  alias.insert(products + 1, {indirect, MachineItem::op(0x4a, "observe raw carrier")});
+  require(passes::deferred_finite_mode_representation_candidates(
+              raise_machine_to_ir(alias), {options}, limits).empty(),
+      "an indirect memory read still observes a live encoded version");
+}
+
+void preserved_formal_epoch_contracts() {
+  const auto source = formal_epoch_fixture();
+  const auto ops = raise_machine_to_ir(source);
+  CompileOptions options; options.defer_return_suffix_until_callee_hole = true;
+  auto limits = passes::FiniteModeCandidateOptions{
+      .maximum_candidates = 32, .preserve_compiler_selector_charges = true,
+      .nonnegative_max_cuts = true};
+  require(passes::deferred_finite_mode_representation_candidates(ops, {options}, limits).empty(),
+      "legacy IR clients still refuse unowned formal geometry");
+  limits.preserve_formal_execution_frames = true;
+  const auto candidates = passes::deferred_finite_mode_representation_candidates(ops, {options}, limits);
+  require(!candidates.empty(), "a frozen unrelated formal callee must not block finite encoding");
+  const auto after = lower_ir_to_machine(candidates.front().transformation.ops);
+  require(cells(after) == cells(source) - 7, "disjoint formal-frame baseline saves seven cells");
+  for (const char* input : {"-7", "0", "0.125", "13"})
+    require(observe_official_reachable_window(source, input) ==
+                observe_official_reachable_window(after, input),
+        "formal frames preserve full ROM state and future entry shadow");
+  const auto origins = [&] {
+    std::map<std::string, int> result; int pc = 0;
+    for (const auto& item : source) if (item.kind == MachineItemKind::Label)
+      result.emplace(item.name, pc); else ++pc;
+    return result;
+  }();
+  PostLayoutControlFlowOptions control; control.empty_return_target = 1;
+  const auto flow = build_post_layout_control_flow(source, control);
+  const auto product = build_deferred_selector_consistent_execution_graph(source, flow, origins, 20000, true);
+  require(product.execution.proved, "direct formal counters retain their exact product contexts");
+  passes::SymbolicRegionProjection projection;
+  for (const auto& op : ops) projection.cell_widths.push_back(passes::cells_per_op(op));
+  projection.preserve_formal_execution_frames = true;
+  const auto layout = passes::layout_symbolic_regions(ops,
+      {{"layout-alpha", origins.at("layout-alpha") + 2}}, {options}, 20000, &control, true, &projection);
+  require(layout && layout->changed, "unrelated components may move around an unchanged formal callee");
+  for (const char* input : {"-7", "13"})
+    require(observe_official_reachable_window(source, input) ==
+                observe_official_reachable_window(lower_ir_to_machine(layout->ops), input),
+        "component movement must preserve exact formal returns and full ROM state");
+  require(!passes::layout_symbolic_regions(ops, {{"square", 3}}, {options},
+              20000, &control, true, &projection),
+      "the same layout cannot move the formal callee away from its hardware address");
+  auto projected = projection;
+  for (std::size_t at = 0; at < ops.size(); ++at)
+    if (ops[at].kind == IrKind::Plain && ops[at].opcode == 0x22) projected.cell_widths[at] = 0;
+  require(!passes::layout_symbolic_regions(ops, {}, {options}, 20000, &control, true, &projected),
+      "a pending width rewrite inside a formal component fails closed");
+  const auto live_frame = formal_epoch_fixture(true);
+  require(passes::deferred_finite_mode_representation_candidates(
+              raise_machine_to_ir(live_frame), {options}, limits).empty(),
+      "a codec cannot rewrite a projected product fetched under a formal counter");
+}
+
 void literal_boundary_recovery_contracts() {
   for (const auto variant : {Variant::Unknown, Variant::UnknownJoin, Variant::Zero,
                              Variant::Negative, Variant::TooSmall, Variant::Overflow}) {
@@ -1103,6 +1607,15 @@ void literal_boundary_recovery_contracts() {
 
 int main() {
   try {
+    underflow_conditional_return_contracts();
+    guarded_reference_epoch_contracts();
+    preloaded_control_observer_contracts();
+    contextual_formal_frame_contracts();
+    permuted_pooled_materialization_contracts();
+    pooled_materialization_contracts();
+    epoch_qualified_selector_contracts();
+    preserved_formal_epoch_contracts();
+    nonnegative_max_cut_contracts();
     literal_boundary_recovery_contracts();
     typed_input_seed_preload_contracts();
     manual_epoch_lifetime_contracts();

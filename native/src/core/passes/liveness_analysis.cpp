@@ -288,6 +288,10 @@ GuardedLifetimeProof guarded_register_lifetimes(
     std::map<std::string, int> memory;
     std::optional<int> x;
     Entry entry = Entry::Unknown;
+    // A demand starts in a real reference execution. Global certificates remain
+    // valid until a select-store is hypothetically retained by the slice.
+    // Once a path diverges, only explicit unaffected-carrier facts may return.
+    bool reference_execution = true;
     bool operator==(const Facts&) const = default;
   };
   const auto small_integer = [](const std::string& value) -> std::optional<int> {
@@ -317,6 +321,7 @@ GuardedLifetimeProof guarded_register_lifetimes(
     if (op.kind == IrKind::Store) {
       if (guards.contains(op.register_name)) {
         if (retain_selector) {
+          state.reference_execution = false;
           if (const auto old = old_memory.find(op.register_name); old != old_memory.end())
             state.memory[op.register_name] = old->second;
         } else if (state.x.has_value()) {
@@ -355,7 +360,7 @@ GuardedLifetimeProof guarded_register_lifetimes(
         // following digit starts a new mantissa rather than continuing input.
         state.entry = Entry::Unknown;
       } else if (op.opcode == 0x32 && exact_signs && exact_signs->contains(id) &&
-          (global_path || (sliced_payload && stable_sign_carriers && stable_sign_carriers->contains(id) &&
+          (global_path || state.reference_execution || (sliced_payload && stable_sign_carriers && stable_sign_carriers->contains(id) &&
               !sliced_payload->contains(stable_sign_carriers->at(id)) &&
               !guards.contains(stable_sign_carriers->at(id))))) {
         state.x=exact_signs->at(id);
@@ -383,7 +388,7 @@ GuardedLifetimeProof guarded_register_lifetimes(
     if(exact_signs && exact_signs->contains(id) &&
         (op.kind==IrKind::Recall || op.kind==IrKind::Store ||
          (op.kind==IrKind::Plain && op.opcode==0x0b)) &&
-        (global_path || (sliced_payload && stable_sign_carriers && stable_sign_carriers->contains(id) &&
+        (global_path || state.reference_execution || (sliced_payload && stable_sign_carriers && stable_sign_carriers->contains(id) &&
             !sliced_payload->contains(stable_sign_carriers->at(id)) &&
             !guards.contains(stable_sign_carriers->at(id))))){
       state.x=exact_signs->at(id);
@@ -436,6 +441,7 @@ GuardedLifetimeProof guarded_register_lifetimes(
           else
             ++item;
         }
+        next.reference_execution = next.reference_execution && incoming.reference_execution;
         if (next.x != incoming.x)
           next.x.reset();
         if (next.entry != incoming.entry)

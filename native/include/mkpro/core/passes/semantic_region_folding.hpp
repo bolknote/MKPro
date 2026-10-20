@@ -35,6 +35,10 @@ struct SymbolicRegionProjection {
   // Fallback only, after the unchanged gapless search fails. Padding is
   // unreachable between closed fallthrough chains and is priced in full.
   int maximum_padding_cells = 0;
+  // Freeze whole fallthrough components reached under direct formal counters.
+  // No projected width may change there; rooted hardware CFG/return transport
+  // must independently validate every other component permutation.
+  bool preserve_formal_execution_frames = false;
 };
 
 struct DeferredStackProducerLimits {

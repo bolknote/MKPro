@@ -295,7 +295,10 @@ DeferredSelectorExecutionGraph build_deferred_selector_consistent_execution_grap
     const std::vector<MachineItem>& items,
     const AuthoritativePostLayoutControlFlow& control,
     const std::map<std::string, int>& encoded_target_origins,
-    std::size_t maximum_states = 20000);
+    std::size_t maximum_states = 20000,
+    // Caller separately preserves every direct formal execution frame.
+    // Ordinary clients retain the opaque-formal rejection.
+    bool preserve_direct_formal_contexts = false);
 
 PostLayoutBorrowedSelectorProof
 prove_post_layout_borrowed_entry_selectors(const std::vector<MachineItem>& items,

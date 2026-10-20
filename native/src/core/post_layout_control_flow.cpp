@@ -1206,7 +1206,8 @@ void prove_one_borrowed_register(const std::vector<MachineItem>& items,
 static SelectorConsistentExecutionGraph build_selector_execution_graph_impl(
     const std::vector<MachineItem>& items,
     const AuthoritativePostLayoutControlFlow& control,
-    std::size_t maximum_states, const std::map<std::string, int>* bindings) {
+    std::size_t maximum_states, const std::map<std::string, int>* bindings,
+    bool preserve_direct_formal_contexts = false) {
   SelectorConsistentExecutionGraph result;
   const std::size_t count = control.execution_states.size();
   if (!control.proved || count == 0 || count > maximum_states ||
@@ -1220,7 +1221,14 @@ static SelectorConsistentExecutionGraph build_selector_execution_graph_impl(
     std::vector<std::string> pending;
     for (std::size_t i = 0; i < items.size(); ++i) {
       const auto& item = items[i];
-      if (item.formal_opcode || item.indirect_flow_formal_targets)
+      // Direct formal counters already belong to the authoritative source CFG
+      // and remain distinct in ExactState below. A deferred binding changes
+      // only stable indirect choices, never such a direct counter. Indirect
+      // aliases still reject: replacing them by a canonical binding would
+      // erase their hardware entry mode.
+      if ((item.formal_opcode &&
+           (!preserve_direct_formal_contexts || item.kind != MachineItemKind::Address)) ||
+          item.indirect_flow_formal_targets)
         return {};
       if (item.kind == MachineItemKind::Label) {
         pending.push_back(item.name);
@@ -1497,9 +1505,10 @@ SelectorConsistentExecutionGraph build_selector_consistent_execution_graph(
 DeferredSelectorExecutionGraph build_deferred_selector_consistent_execution_graph(
     const std::vector<MachineItem>& items,
     const AuthoritativePostLayoutControlFlow& control,
-    const std::map<std::string, int>& encoded_target_origins, std::size_t maximum_states) {
+    const std::map<std::string, int>& encoded_target_origins, std::size_t maximum_states,
+    bool preserve_direct_formal_contexts) {
   auto execution = build_selector_execution_graph_impl(
-      items, control, maximum_states, &encoded_target_origins);
+      items, control, maximum_states, &encoded_target_origins, preserve_direct_formal_contexts);
   if (!execution.proved)
     return {};
   return {std::move(execution), encoded_target_origins};
@@ -1706,8 +1715,10 @@ PostLayoutExecutionRelocationProof prove_post_layout_execution_relocation(
     if(item.kind!=MachineItemKind::Op || item.raw || item.manual_interaction || item.procedure_boundary ||
         !item.semantic_call_origins.empty())return false;
     const int code=item.opcode;
+    // A direct recall has no memory write. Its word, total numeric use and
+    // all changed stack slots are still obligations of the separate data proof.
     return (code>=0&&code<=0x0e) || (code>=0x10&&code<=0x15) || code==0x22 || code==0x25 ||
-        (code>=0x30&&code<=0x35);
+        (code>=0x30&&code<=0x35) || (code>=0x60&&code<=0x6e);
   };
   for(const auto& completion:options.pure_return_completions){
     const auto source=completion.old_return_item;

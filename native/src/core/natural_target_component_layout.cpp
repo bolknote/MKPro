@@ -3468,16 +3468,20 @@ bool rebind_preloads(
     if (relocation_selector != nullptr && relocation_selector->rebindable_address) {
       if (register_has_nonflow_use(original_items, reg))
         return reject("an address-only selector has a non-flow use");
-      const std::string rebound = std::to_string(new_target->second);
-      if (!preload_value_targets(name, rebound, new_target->second, model))
-        return reject("rebound address-only preload R" + name + "=" + rebound +
+      const std::optional<std::string> rebound = new_target->second > 99
+          ? rebind_stable_preloaded_indirect_flow_selector(
+                original_items,original_preloads.at(preload->second),original_flow,
+                old_target->second,new_target->second,model,&original_preloads)
+          : std::optional<std::string>{std::to_string(new_target->second)};
+      if (!rebound || !preload_value_targets(name, *rebound, new_target->second, model))
+        return reject("rebound address-only preload R" + name + "=" + rebound.value_or("<unencodable>") +
                       " does not decode to target " +
                       std::to_string(new_target->second));
-      preloads.at(preload->second).value = rebound;
+      preloads.at(preload->second).value = *rebound;
       rewrites.push_back(NaturalTargetPreloadRewrite{
           .register_name = name,
           .old_value = old_value,
-          .new_value = rebound,
+          .new_value = *rebound,
           .fractional_projection_only = false,
       });
       continue;
@@ -3550,8 +3554,11 @@ bool rebind_preloads(
                     std::to_string(old_target->second) + " new-target=" +
                     std::to_string(new_target->second));
     }
-    const std::optional<std::string> rebound =
-        rebind_stable_decimal_value(old_value, new_target->second);
+    const std::optional<std::string> rebound = new_target->second > 99
+        ? rebind_stable_preloaded_indirect_flow_selector(
+              original_items, original_preloads.at(preload->second), original_flow,
+              old_target->second, new_target->second, model, &original_preloads)
+        : rebind_stable_decimal_value(old_value, new_target->second);
     if (!rebound.has_value() ||
         !preload_value_targets(name, *rebound, new_target->second, model))
       return reject("stable decimal preload cannot be rebound to its target");
@@ -5227,8 +5234,9 @@ std::optional<CandidateArtifact> try_candidate(
         });
       }
     }
-    if (!preserved_jump_command.has_value()) {
+    {
       for (const DisplacedIndirectFlowRewrite& displaced : displaced_flows) {
+        if (preserved_jump_command && displaced.command_origin != *preserved_jump_command) continue;
         if (displaced.direct_opcode == kJumpOpcode) {
           fold_candidates.push_back(TransparentFallthroughJumpFold{
               .command_origin = displaced.command_origin,
@@ -5239,7 +5247,8 @@ std::optional<CandidateArtifact> try_candidate(
       }
       for (const auto& [command_origin, targets] :
            control_flow.indirect_flow_targets) {
-        if (command_origin >= items.size() || targets.size() != 1U)
+        if (command_origin >= items.size() || targets.size() != 1U ||
+            (preserved_jump_command && command_origin != *preserved_jump_command))
           continue;
         const MachineItem& command = items.at(command_origin);
         if (command.kind != MachineItemKind::Op || command.opcode < 0x87 ||
@@ -6751,7 +6760,7 @@ NaturalTargetComponentLayoutResult optimize_natural_target_component_layout(
   if ((options.constrain_rebindable_selector_targets ||
        !options.deferred_selector_reconciliations.empty()) &&
       options.maximum_bounded_target_address >= 0) {
-    const int companion_maximum = std::min(99, options.maximum_bounded_target_address);
+    const int decimal_companion_maximum = std::min(99, options.maximum_bounded_target_address);
     std::set<int> examined_registers;
     for (const auto& [source_item, targets] : control_flow.indirect_flow_targets) {
       if (targets.size() != 1U || source_item >= items.size())
@@ -6766,6 +6775,11 @@ NaturalTargetComponentLayoutResult optimize_natural_target_component_layout(
       if (preload == preloads.end())
         continue;
       const auto& target = targets.front();
+      int companion_maximum=decimal_companion_maximum;
+      const int official_maximum=std::min(official_program_last_address(options.address_space_model),options.maximum_bounded_target_address);
+      if(official_maximum>99 && rebind_stable_preloaded_indirect_flow_selector(
+          items,*preload,control_flow,target.address,official_maximum,
+          options.address_space_model,&preloads))companion_maximum=official_maximum;
       // A fractional family need not represent 00: removing its trailing
       // zeros can change the address exposed by the delivered mantissa.
       // Probe the bounded address domain, not one arbitrary sentinel, before
@@ -7569,6 +7583,25 @@ NaturalTargetComponentLayoutResult optimize_natural_target_component_layout(
             (!best.has_value() || better_candidate(*candidate, *best))) {
           best = std::move(candidate);
           best_anchor_trial = *complete_trial;
+        }
+      }
+      // Preserve every historical trial. A conflicting stitch must not veto
+      // a different stable indirect tail in the complete artifact.
+      if (options.isolate_stable_tail_folds) {
+        for (const auto& [command, targets] : logical_flow->indirect_flow_targets) {
+          if (command >= logical_items.size() || targets.size() != 1U ||
+              logical_items[command].kind != MachineItemKind::Op ||
+              logical_items[command].opcode < 0x87 || logical_items[command].opcode > 0x8e)
+            continue;
+          auto candidate = try_candidate(
+              gap_layout_cache, logical_items, preloads, *logical_flow, options, *references, flows,
+              selectors, *complete_trial, bounded_target_origins, *original_trace,
+              flow_effect_proof_context, *original_external, true, command, &result.plan.reasons);
+          if (candidate && candidate->plan.fallthrough_jump_folds > 0 &&
+              (!best || better_candidate(*candidate, *best))) {
+            best = std::move(candidate);
+            best_anchor_trial = *complete_trial;
+          }
         }
       }
     }

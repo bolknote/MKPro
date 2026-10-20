@@ -156,6 +156,9 @@ struct NaturalTargetComponentLayoutOptions {
   // external/return entry, stack/X2 effect, indirect target, and preload under
   // the final authoritative control-flow proof.
   bool allow_standalone_fallthrough_jump_fold = false;
+  // Price each existing stable indirect tail after the complete historical
+  // trials, using the same final data/word, entry-mode and rooted trace proofs.
+  bool isolate_stable_tail_folds = false;
   // Complete-artifact search only: widen the stitch proof to neutral,
   // unreferenced labels while retaining the ordinary greedy layout lane.
   bool allow_unreferenced_jump_labels = false;

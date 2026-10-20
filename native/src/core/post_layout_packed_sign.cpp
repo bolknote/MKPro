@@ -162,12 +162,19 @@ PackedSignInputProof prove_post_layout_packed_sign_inputs(
       predecessors[witness.target_state].size() != 1U ||
       predecessors[witness.target_state].front() != witness.source_state)
     return result;
-  const auto subtraction = predecessors[witness.source_state].front();
-  if (items[flow.execution_states[subtraction].item_index].opcode != 0x11 ||
-      !originate(predecessors[subtraction], [&](auto previous) {
-        const auto& item = items[flow.execution_states[previous].item_index];
-        return !item.raw && item.opcode == 0x40 + witness.register_index;
-      })) {
+  // A direct store or another X-preserving transport between subtraction
+  // and its guard does not change operand orientation. Ground every path
+  // at an actual old-minus-updated subtraction; a reversed/unknown producer
+  // or a cycle is not a negative-sign certificate.
+  const bool oriented = originate(predecessors[witness.source_state], [&](auto subtraction) {
+    const auto& operation = items[flow.execution_states[subtraction].item_index];
+    return !operation.raw && operation.opcode == 0x11 &&
+        originate(predecessors[subtraction], [&](auto previous) {
+          const auto& item = items[flow.execution_states[previous].item_index];
+          return !item.raw && item.opcode == 0x40 + witness.register_index;
+        });
+  });
+  if (!oriented) {
     if (result.exhausted) result.signs.clear();
     return result;
   }

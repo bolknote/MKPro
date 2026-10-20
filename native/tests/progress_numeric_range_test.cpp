@@ -4,6 +4,7 @@
 #include "mkpro/core/passes/finite_mode_representation.hpp"
 #include "mkpro/core/post_layout_numeric_ranges.hpp"
 #include "mkpro/core/post_layout_progress_bounds.hpp"
+#include "mkpro/core/post_layout_packed_sign.hpp"
 #include "mkpro/emulator/mk61.hpp"
 
 #include "test_support.hpp"
@@ -179,6 +180,60 @@ void bounded_ranges_and_input() {
   require(calc.run_until_stable(2000,8).stopped && number(calc.read_register("X"))==32,
           "all 28 bits plus canonicalization must exhaust the proved 29-step resource");
 }
+void indirect_progress_contracts() {
+  for(const int condition:{0x7e,0xee}) {
+    Fixture f;auto& v=f.items;append(v,{0x45});
+    v.push_back(MachineItem::label("body"));append(v,{0x69,0x68,0x38,0x49,0x11,0x43});
+    const auto guard=v.size();append(v,{condition});
+    v.back().indirect_flow_targets=std::vector<IrTarget>{condition==0x7e?"done":"changed"};
+    const auto done=[&]{v.push_back(MachineItem::label("done"));append(v,{0x67});stop(v);};
+    if(condition==0xee)done();
+    v.push_back(MachineItem::label("changed"));append(v,{0x32,0x67,1,0x10,0x47});
+    target(v,0x51,"body");if(condition==0x7e)done();
+    int pc=0,target_pc=-1;
+    for(const auto& item:v)if(item.kind==MachineItemKind::Label){
+      if(item.name==(condition==0x7e?"done":"changed"))target_pc=pc;
+    }else ++pc;
+    require(target_pc>=0,"indirect progress target resolves");
+    f.preloads.push_back({.register_name="e",.value=std::to_string(target_pc)});
+    const auto witness=progress(f);
+    require(witness.witness && witness.witness->register_index==9 &&
+        witness.witness->edge_kind==(condition==0x7e?PostLayoutExecutionEdgeKind::Fallthrough:
+            PostLayoutExecutionEdgeKind::IndirectTarget),"indirect predicates retain exact growth polarity");
+    const auto flow=build_post_layout_control_flow(v);
+    const auto lift=analyze_post_layout_automatic_entry_lift(v,flow,100000);
+    require(lift.has_value(),"indirect progress entry facts");
+    std::vector<std::size_t> queries;
+    for(std::size_t s=0;s<flow.execution_states.size();++s)
+      if(v[flow.execution_states[s].item_index].opcode==0x32)queries.push_back(s);
+    const auto sign=prove_post_layout_packed_sign_inputs(v,flow,*lift,queries,&f.preloads);
+    require(!queries.empty() && sign.signs.size()==queries.size() &&
+        std::all_of(sign.signs.begin(),sign.signs.end(),[](const auto& row){return row.second==-1;}),
+        "a transparent store and indirect guard retain the negative producer certificate");
+    emulator::MK61 calc;require(calc.load_program(bytecode(v)).diagnostics.empty(),"indirect progress ROM load");
+    for(const auto& word:f.preloads)calc.set_register(word.register_name,word.value);
+    calc.press_sequence({"В/О","С/П"});
+    require(calc.run_until_stable(2000,8).stopped && number(calc.read_register("X"))==4,
+        "ROM executes exactly one canonicalizing growth and takes the zero exit");
+    auto aliased=f;aliased.items[guard].opcode=(condition&0xf0)+9;
+    require(!progress(aliased).witness,"a progress carrier cannot be its own flow selector");
+    auto wrong=f;wrong.items[guard].opcode=0x9e;
+    require(!progress(wrong).witness,"a sign predicate cannot borrow an equality growth theorem");
+    auto reversed=f;
+    reversed.items.insert(reversed.items.begin()+static_cast<std::ptrdiff_t>(guard-2U),MachineItem::op(0x14,"reverse comparison"));
+    const auto reverse_flow=build_post_layout_control_flow(reversed.items);
+    const auto reverse_lift=analyze_post_layout_automatic_entry_lift(reversed.items,reverse_flow,100000);
+    require(reverse_lift.has_value(),"reversed comparison entry facts");
+    std::vector<std::size_t> reverse_queries;
+    for(std::size_t s=0;s<reverse_flow.execution_states.size();++s)
+      if(reversed.items[reverse_flow.execution_states[s].item_index].opcode==0x32)reverse_queries.push_back(s);
+    require(prove_post_layout_packed_sign_inputs(reversed.items,reverse_flow,*reverse_lift,reverse_queries,&reversed.preloads).signs.empty(),
+        "new-minus-old cannot inherit an old-minus-new negative certificate");
+    const auto exhausted=progress(f,1);
+    require(exhausted.exhausted && !exhausted.witness,"indirect progress exhaustion exports no partial witness");
+  }
+}
+
 void negative_witnesses() {
   for(int variant=0;variant<8;++variant) {
     auto f=fixture(false);
@@ -339,6 +394,7 @@ int main() {
   try {
     native_rank_facts();
     bounded_ranges_and_input();
+    indirect_progress_contracts();
     negative_witnesses();
     compiler_composition_and_size();
     matched_call_contexts();

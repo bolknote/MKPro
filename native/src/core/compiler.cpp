@@ -59558,6 +59558,24 @@ bool callee_hole_indirect_call_targets_proved(const std::vector<OptimizationRepo
 
   const std::vector<const MachineItem*> items_by_step =
       callee_hole_items_by_step(items, steps.size());
+  // A proof annotation belongs to the delivered instruction, not to an
+  // independently mutable pretty-print projection. Check every protocol
+  // marker, including high digits that are not the inventory's final digit.
+  // A resolved-only artifact has no second view; its charge and target
+  // certificates below remain mandatory. Any supplied item table, including
+  // a partial one, must account for every annotated instruction.
+  for (std::size_t index = 0; index < steps.size(); ++index) {
+    const auto* item = index < items_by_step.size() ? items_by_step[index] : nullptr;
+    const auto protocol = [](const std::optional<std::string>& comment) {
+      return comment && comment->starts_with("callee-hole ");
+    };
+    if (!items.empty() &&
+        (protocol(steps[index].comment) || (item && protocol(item->comment))) &&
+        (!item || item->comment != steps[index].comment)) {
+      return reject("callee-hole annotation disagrees with its delivered instruction at address " +
+                    std::to_string(steps[index].address));
+    }
+  }
   const CalleeHoleResolvedFlow resolved_flow =
       callee_hole_resolved_flow(steps, items_by_step, options);
   std::optional<core::AuthoritativePostLayoutControlFlow> repaired_entry_flow;

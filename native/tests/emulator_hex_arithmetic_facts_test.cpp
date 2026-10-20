@@ -1,4 +1,5 @@
 #include "mkpro/emulator/mk61.hpp"
+#include "mkpro/core/indirect_addressing.hpp"
 
 #include "test_support.hpp"
 
@@ -113,9 +114,83 @@ void require_unary_table(const std::vector<UnaryCase>& cases, const std::string&
   }
 }
 
+
+void raw_stable_selector_word_facts() {
+  for(const char digit:{'A','B','C','D'})for(const int exponent:{-1,-2,-3})for(const bool negative:{false,true}){
+    const std::string word=std::string(negative?"-":"")+digit+"E"+std::to_string(exponent);
+    const auto address=core::evaluate_indirect_address("c",word,core::IndirectOperationKind::Flow,AddressSpaceModel::Standard);
+    require(address && address->actual_flow_target==0 && core::indirect_writeback_preserves_literal_word(*address,word),
+        "the supported raw no-shift family has a complete word fixed point");
+    emulator::MK61 calc;calc.load_program({0x52,0xac,0x50});calc.set_register("c",word);
+    const auto before=calc.read_register("c");calc.press_sequence({"В/О","С/П"});
+    require(calc.run_until_stable(2000,8).stopped && calc.read_register("c")==before,
+        "a real indirect call preserves raw mantissa, order and sign in ROM");
+  }
+  require(!core::evaluate_indirect_address("c","DE-4",core::IndirectOperationKind::Flow,AddressSpaceModel::Standard),
+      "the shifted order -4 is not a raw no-shift fixed point");
+  const auto denormal=core::evaluate_indirect_address("c","0.1",core::IndirectOperationKind::Flow,AddressSpaceModel::Standard);
+  require(denormal && !core::indirect_writeback_preserves_literal_word(*denormal,"0.1"),
+      "numeric decimal equality still cannot certify original memory shape");
+}
+
+void nonnegative_machine_sign_facts() {
+  // Set X/Y directly: recalling an F-leading word can stop before the tested
+  // operation and would therefore provide no evidence about Kmax itself.
+  for (const char* input : {"0", "1E-99", "1", "98", "1E99", "A", "B", "C", "D", "E", "F",
+                            "AA", "BB", "CC", "DD", "EE", "FF", "FA", "8.AAAAAAA", "8.FFFFFFF",
+                            "DE-2", "EE-2", "FE-2", "0.A", "0.F"}) {
+    std::vector<std::string> expected;
+    for (const char* negative : {"-1", "-0.1", "-1E-99"}) {
+      emulator::MK61 calc;
+      calc.load_program({0x36, 0x50});
+      calc.set_register("X", negative); calc.set_register("Y", input);
+      calc.set_register("Z", "37"); calc.set_register("T", "41");
+      calc.press_sequence({"В/О", "С/П"});
+      require(calc.run_until_stable(2000, 4).stopped, "sign-cut Kmax must finish");
+      std::vector<std::string> actual{calc.program_counter(), calc.display_text()};
+      for (const char* reg : {"X", "Y"}) actual.push_back(calc.read_register(reg));
+      if (expected.empty()) expected = actual;
+      require(actual == expected, "a nonnegative machine word absorbs strictly negative ordinary spellings");
+    }
+    for (const bool negative : {false, true}) {
+      emulator::MK61 calc;
+      calc.load_program({0x22, 0x50});
+      calc.set_register("X", (negative ? std::string("-") : std::string{}) + input);
+      calc.press_sequence({"В/О", "С/П"});
+      require(calc.run_until_stable(2000, 4).stopped, "raw square must finish");
+      require(!compact(calc.read_register("X")).starts_with("-"),
+              "square clears the sign even with raw digits or exponent overflow");
+    }
+  }
+  // Addition preserves the independent sign-byte invariant even when its
+  // BCD digits are not an ordinary numeric range. Exercise both operand orders,
+  // zero, carries, opposite extreme orders and raw/super-number mantissas.
+  for (const char* y : {"0", "1E-99", "9", "99999999", "9.9999999E99", "A", "B", "D", "F", "DE-2", "FF", "8.FFFFFFF"})
+    for (const char* x : {"0", "1E-99", "9", "99999999", "9.9999999E99", "A", "B", "D", "F", "DE-2", "FF", "8.FFFFFFF"}) {
+      emulator::MK61 calc; calc.load_program({0x10, 0x50});
+      calc.set_register("X", x); calc.set_register("Y", y);
+      calc.press_sequence({"В/О", "С/П"});
+      require(calc.run_until_stable(2000, 4).stopped, "nonnegative addition must finish");
+      require(!compact(calc.read_register("X")).starts_with("-"),
+              "adding nonnegative machine signs cannot create a negative sign");
+    }
+  std::vector<std::string> deep;
+  for (const char* negative : {"-1", "-1E-99"}) {
+    emulator::MK61 calc; calc.load_program({0x36, 0x50});
+    calc.set_register("X", negative); calc.set_register("Y", "F");
+    calc.set_register("Z", "37"); calc.set_register("T", "41");
+    calc.press_sequence({"В/О", "С/П"});
+    require(calc.run_until_stable(2000, 4).stopped, "raw Kmax stack counterexample stops");
+    deep.push_back(calc.read_register("T"));
+  }
+  require(deep[0] != deep[1], "equal max results do not certify deep-stack equality");
+}
+
 } // namespace
 
 void emulator_hex_arithmetic_facts_match_typescript_contract() {
+  nonnegative_machine_sign_facts();
+  raw_stable_selector_word_facts();
   {
     emulator::MK61 calc;
     calc.set_register("1", "Г");

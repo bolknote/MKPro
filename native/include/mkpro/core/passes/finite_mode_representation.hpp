@@ -53,6 +53,13 @@ struct FiniteModeCandidateOptions {
   bool encode_preloaded_state = false;
   // Independently priced late-artifact precision, not a greedy IR assumption.
   bool precise_entry_facts = false;
+  // Independent candidate lane; never replace an opaque-boundary recovery
+  // candidate merely because only some finite rows admit a sign cut.
+  bool nonnegative_max_cuts = false;
+  // Complete-artifact lane only. Preserve every command executed under a
+  // formal hardware counter at the same physical address; transformations
+  // elsewhere may still compete without expanding the shared continuation.
+  bool preserve_formal_execution_frames = false;
 };
 
 struct FiniteModePreloadReplacement {

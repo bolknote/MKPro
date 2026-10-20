@@ -3,6 +3,7 @@
 #include "mkpro/core/post_layout_control_flow.hpp"
 #include "mkpro/core/result.hpp"
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <map>
@@ -26,6 +27,13 @@ struct OrdinaryNumericRange {
 
 std::optional<OrdinaryNumericRange> bound_ordinary_decimal(std::string_view value);
 
+struct OrdinaryStackValue {
+  std::optional<OrdinaryNumericRange> range;
+  // A numeric-value certificate on normal completion, not canonical BCD
+  // memory, a magnitude bound, or permission to change a selector word.
+  bool ordinary = false;
+};
+
 struct PostLayoutNumericRangeProof {
   // X immediately before an item, joined over every matched call context.
   // Absence means unknown, including unreachable or externally entered values.
@@ -42,6 +50,12 @@ struct PostLayoutNumericRangeProof {
   // Complete guarded definition/use proofs may exclude an execution state.
   // This is distinct from an absent/unknown numeric value; no CFG is edited.
   std::set<std::size_t> unreachable_states;
+  // Independent ROM sign-byte certificate (positive sign, including zero).
+  // Raw mantissas need not denote ordinary decimals; never manufacture a range.
+  std::set<std::size_t> nonnegative_words_before;
+  std::set<std::size_t> nonnegative_words_before_state;
+  // Opt-in complete stack queries; IDs belong to this exact input graph.
+  std::map<std::size_t, std::array<OrdinaryStackValue, 4>> stack_before_state;
   std::size_t work = 0;
   bool exhausted = false;
 };
@@ -80,5 +94,22 @@ PostLayoutNumericRangeProof prove_post_layout_numeric_ranges(
     const std::vector<PreloadReport>* preloads = nullptr,
     std::size_t maximum_work = 100000,
     NumericRangeInputPolicy input_policy = NumericRangeInputPolicy::Forget);
+
+// Independent demand for every X/Y/Z/T slot. Existing scalar-range clients
+// retain their original lattice and candidate enumeration. Unknown external
+// input never gains an ordinary-value assumption; exhaustion exports nothing.
+PostLayoutNumericRangeProof prove_post_layout_stack_numeric_values(
+    const std::vector<MachineItem>& items,
+    const AuthoritativePostLayoutControlFlow& flow,
+    const std::vector<bool>& automatic_entry_lift,
+    const std::vector<std::size_t>& requested_items,
+    const std::vector<PreloadReport>* preloads = nullptr,
+    std::size_t maximum_work = 100000,
+    NumericRangeInputPolicy input_policy = NumericRangeInputPolicy::Forget);
+
+std::optional<OrdinaryNumericRange> bound_ordinary_unary(
+    int opcode, const OrdinaryNumericRange& input);
+std::optional<OrdinaryNumericRange> bound_ordinary_binary(
+    int opcode, const OrdinaryNumericRange& y, const OrdinaryNumericRange& x);
 
 } // namespace mkpro::core

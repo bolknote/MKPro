@@ -566,6 +566,14 @@ void callee_hole_helper_matches_direct_call_semantics() {
   require(optimizer_static_proof_gate_accepts_for_testing(gate_options, proved_mutating),
           "final static gate should accept a resolved R0 charge after four recalls erase X/X2");
 
+  CompileResult partial_mutating_items = proved_mutating;
+  MachineItem partial_charge = MachineItem::op(3, "3");
+  partial_charge.comment = proved_mutating.steps.front().comment;
+  partial_mutating_items.items.push_back(std::move(partial_charge));
+  require(!optimizer_static_proof_gate_accepts_for_testing(gate_options,
+                                                           partial_mutating_items),
+          "a partial typed item table must not inherit the resolved-only charge contract");
+
   CompileResult natural_skeleton_calls = proved_mutating;
   natural_skeleton_calls.steps.at(3).opcode = 0xa7;
   natural_skeleton_calls.steps.at(3).comment =

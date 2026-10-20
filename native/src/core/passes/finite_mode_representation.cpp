@@ -300,6 +300,8 @@ struct Macro {
   bool state_identity = false;
   bool inline_product = false;
   bool normalizing_max = false;
+  bool nonnegative_max = false;
+  std::set<int> max_admitted_rows;
   bool predicate_observation = false;
   std::optional<int> replacement_recall;
   std::optional<int> finite_input_row;
@@ -324,6 +326,7 @@ struct ExitRecovery {
 };
 
 struct Plan {
+  bool lifetime_qualified_effects = false;
   int reg = 0;
   std::optional<FiniteModePreloadReplacement> preload_replacement;
   int saved_cells = 0;
@@ -342,6 +345,7 @@ struct Plan {
   bool inline_coefficient = false;
   std::optional<int> seed_reg;
   std::size_t normalizing_max_count = 0;
+  std::size_t nonnegative_max_count = 0;
   std::size_t opaque_max_count = 0;
   std::size_t predicate_observation_count = 0;
   std::vector<std::string> finite_values;
@@ -1758,7 +1762,18 @@ std::vector<Plan> discover_inline_coefficient_carriers(
                 domain->second.lower > original->upper &&
                 domain->second.lower > encoded_value->upper;
           }
-          if (!absorbs) {
+          std::set<int> negative_rows;
+          if (options.nonnegative_max_cuts && !absorbs && !encoding.raw &&
+              numeric.nonnegative_words_before.contains(machine[read]))
+            for (std::size_t row = 0; row < values.size(); ++row) {
+              const auto old = exact_decimal(values[row]);
+              const auto next = exact_decimal(encoding.words[row]);
+              if (values[row] == encoding.words[row] ||
+                  (old && next && old->numerator < 0 && next->numerator < 0 &&
+                   bound_ordinary_decimal(values[row]) && bound_ordinary_decimal(encoding.words[row])))
+                negative_rows.insert(static_cast<int>(row));
+            }
+          if (!absorbs && negative_rows.empty()) {
             // This is an ordinary observation, NOT an absorbing boundary.
             // Leave its instructions outside the representation macros. The
             // relational proof must restore the original carrier first; an
@@ -1769,6 +1784,9 @@ std::vector<Plan> discover_inline_coefficient_carriers(
           Macro reduction;
           reduction.end = store + 1U;
           reduction.normalizing_max = true;
+          reduction.nonnegative_max = !absorbs;
+          reduction.max_admitted_rows = std::move(negative_rows);
+          if (reduction.nonnegative_max) ++plan.nonnegative_max_count;
           plan.macros.emplace(read, std::move(reduction));
           ++plan.normalizing_max_count;
         }
@@ -2396,10 +2414,12 @@ std::vector<Plan> discover_joint(
   return plans;
 }
 
-bool symbolic(const std::vector<IrOp>& ops, bool preserve_compiler_selector_charges) {
+bool symbolic(const std::vector<IrOp>& ops, bool preserve_compiler_selector_charges,
+              bool preserve_formal_execution_frames = false) {
   for (const auto& op : ops) {
     if (op.meta.raw || op.meta.logical_register_analysis ||
-        op.kind == IrKind::OrphanAddress || op.target_meta.formal_opcode ||
+        op.kind == IrKind::OrphanAddress ||
+        (op.target_meta.formal_opcode && !preserve_formal_execution_frames) ||
         op.meta.indirect_flow_formal_targets)
       return false;
     if ((op.kind == IrKind::Call || op.kind == IrKind::Jump ||
@@ -2440,7 +2460,8 @@ bool prove(const std::vector<MachineItem>& items,
            const std::vector<std::size_t>& machine, Plan& plan,
            const std::vector<bool>& automatic_entry_lift,
            std::string& reason,
-           const std::vector<std::size_t>* roots = nullptr) {
+           const std::vector<std::size_t>* roots = nullptr,
+           const std::vector<int>* finite_rows = nullptr) {
   const auto fail = [&](const char* why) { reason = why; return false; };
   if (automatic_entry_lift.size() != flow.execution_states.size())
     return fail("fresh numeric entry facts have the wrong context domain");
@@ -2481,16 +2502,17 @@ bool prove(const std::vector<MachineItem>& items,
       continue;
     const int family = item.opcode & 0xf0;
     if (family >= 0x70 && family <= 0xe0 && (item.opcode & 15) == plan.reg &&
-        !plan.joint)
+        !plan.joint && !plan.lifetime_qualified_effects)
       return fail("mode is also an indirect selector");
-    if (family == 0xb0 || family == 0xd0) {
+    if (!plan.lifetime_qualified_effects && (family == 0xb0 || family == 0xd0)) {
       const auto targets = flow.indirect_memory_targets.find(i);
       if (targets == flow.indirect_memory_targets.end() ||
           std::find(targets->second.begin(), targets->second.end(), plan.reg) != targets->second.end())
         return fail("mode has an indirect memory alias");
     }
     constexpr std::array<int, 4> loops{0x5d, 0x5b, 0x58, 0x5a};
-    if (plan.reg < 4 && item.opcode == loops[static_cast<std::size_t>(plan.reg)])
+    if (!plan.lifetime_qualified_effects && plan.reg < 4 &&
+        item.opcode == loops[static_cast<std::size_t>(plan.reg)])
       return fail("mode is a destructive loop counter");
     if (plan.coefficient_reg) {
       const int coefficient = *plan.coefficient_reg;
@@ -2644,14 +2666,24 @@ bool prove(const std::vector<MachineItem>& items,
           state.stack.x2_equal = false;
         state.encoded_input = false;
       } else if (macro.normalizing_max) {
+        if (macro.nonnegative_max && state.initialized &&
+            (!finite_rows || index >= finite_rows->size() ||
+             !macro.max_admitted_rows.contains(finite_rows->at(index))))
+          return fail("nonnegative max has an unproved finite carrier row");
         if (!old[0])
           return fail("max epoch boundary has unequal dynamic operands");
-        // In an encoded epoch the independent range certificate proves Y
-        // absorbs both carrier spellings. In an ordinary epoch both inputs
-        // already agree. Kmax keeps Y; it does not pop the stack like +.
+        // The numeric cut proves the selected X/Y values, not the complete
+        // microcode transfer. Raw leading F can leak the other operand into
+        // the deep stack. Those slots and X2 must be killed independently.
         state.stack.stack_equal = {true, old[0], old[1], old[2]};
         state.stack.x1_equal = !state.initialized;
-        state.stack.x2_equal = old[0]; // recall saves old X; Kmax preserves X2
+        state.stack.x2_equal = old[0]; // ordinary recall saves old X
+        if (macro.nonnegative_max) {
+          state.stack.stack_equal[2] = false;
+          state.stack.stack_equal[3] = false;
+          state.stack.x1_equal = false;
+          state.stack.x2_equal = false;
+        }
         state.initialized = false;
         state.coefficient_ready = false;
         state.encoded_input = false;
@@ -2747,6 +2779,20 @@ bool prove(const std::vector<MachineItem>& items,
       const int family = opcode & 0xf0;
       const bool selector = family >= 0x70 && family <= 0xe0 &&
                             family != 0xb0 && family != 0xd0;
+      if (plan.lifetime_qualified_effects && (state.initialized || state.retired)) {
+        if ((family == 0xb0 || family == 0xd0)) {
+          const auto targets = flow.indirect_memory_targets.find(item_index);
+          if (targets == flow.indirect_memory_targets.end() ||
+              std::find(targets->second.begin(), targets->second.end(), plan.reg) != targets->second.end())
+            return fail("live encoded epoch has an indirect memory observation or write");
+        }
+        constexpr std::array<int, 4> loops{0x5d, 0x5b, 0x58, 0x5a};
+        if (plan.reg < 4 && opcode == loops[static_cast<std::size_t>(plan.reg)])
+          return fail("live encoded epoch is a destructive loop counter");
+        if (family >= 0x70 && family <= 0xe0 && (opcode & 15) == plan.reg &&
+            !plan.joint)
+          return fail("live encoded epoch is an uncertified indirect selector");
+      }
       if (state.retired && family >= 0x70 && family <= 0xe0 &&
           (opcode & 15) == plan.reg)
         return fail("retired carrier is observed as an indirect selector");
@@ -2877,6 +2923,7 @@ std::optional<FiniteEpochGraph> finite_epoch_graph(
     const std::vector<bool>& entry_lift) {
   constexpr int unknown = -1;
   constexpr int positive = -2;
+  constexpr int nonnegative_word = -3;
   const auto count = flow.execution_states.size();
   if (plan.raw_coefficient || plan.finite_values.empty() ||
       flow.execution_edges.size() != count || entry_lift.size() != count)
@@ -2944,14 +2991,27 @@ std::optional<FiniteEpochGraph> finite_epoch_graph(
       } else if (macro.normalizing_max) {
         // A positive absorbing operand does not prove positivity if the old
         // ordinary carrier was unknown (it might be raw or hardware zero).
-        row = row >= 0 || row == positive ? positive : unknown;
+        if (macro.nonnegative_max) {
+          if (row >= 0 && !macro.max_admitted_rows.contains(row)) return std::nullopt;
+          row = row >= 0 || row == positive || row == nonnegative_word ? nonnegative_word : unknown;
+        } else {
+          row = row >= 0 || row == positive ? positive : unknown;
+        }
         input = unknown;
       } else {
         input = unknown;
       }
-      if (macro.predicate_observation && row != unknown)
-        predicate = ordinary_predicate(item.opcode,
-            row == positive ? "1" : plan.finite_values[static_cast<std::size_t>(row)]);
+      if (macro.predicate_observation && row != unknown) {
+        if (row == nonnegative_word) {
+          // Sign proves ordering only. Zero remains possible, and a raw
+          // mantissa never acquires a nonzero/ordinary-decimal certificate.
+          if (item.opcode == 0x59) predicate = true;
+          if (item.opcode == 0x5c) predicate = false;
+        } else {
+          predicate = ordinary_predicate(item.opcode,
+              row == positive ? "1" : plan.finite_values[static_cast<std::size_t>(row)]);
+        }
+      }
     } else if (!macro_items.contains(item_index)) {
       const int code = item.opcode, family = code & 0xf0;
       const bool transports = (code >= 0x40 && code <= 0x4e) ||
@@ -3117,12 +3177,13 @@ bool prove_with_finite_exits(
     const std::vector<bool>& entry_lift, int maximum_growth,
     std::string& reason) {
   if (!plan.inline_coefficient ||
-      (plan.predicate_observation_count == 0 && plan.opaque_max_count == 0))
+      (plan.predicate_observation_count == 0 && plan.opaque_max_count == 0 &&
+       plan.nonnegative_max_count == 0))
     return false;
   const auto graph = finite_epoch_graph(items, flow, machine, plan, entry_lift);
   if (!graph)
     return false;
-  if (prove(items, graph->flow, machine, plan, graph->entry_lift, reason, &graph->roots)) {
+  if (prove(items, graph->flow, machine, plan, graph->entry_lift, reason, &graph->roots, &graph->rows)) {
     plan.epoch_pruned_edges = graph->pruned_edges;
     return true;
   }
@@ -3151,7 +3212,7 @@ bool prove_with_finite_exits(
       for (const auto site : selected)
         distinct = candidate.exit_recoveries.emplace(sites[site]).second && distinct;
       if (distinct && prove(items, graph->flow, machine, candidate, graph->entry_lift,
-                            reason, &graph->roots)) {
+                            reason, &graph->roots, &graph->rows)) {
         candidate.epoch_pruned_edges = graph->pruned_edges;
         best = std::move(candidate);
         break; // Frontier cost is monotone; equal cost retains the earlier proof.
@@ -3310,6 +3371,56 @@ static std::vector<Plan> discover_preloaded_inline_carriers(
   }
   if (encoders.empty()) return reject("no projected observations");
   functions.push_back(Projection{0x0b, std::nullopt, 0});
+  // A control-table certificate does not certify a memory-index observer.
+  // Keep those separate even when its current metadata names another home.
+  for(const auto& op:ops)
+    if((op.kind==IrKind::IndirectRecall || op.kind==IrKind::IndirectStore) && (op.opcode&15)==reg)
+      return reject("uncertified memory-index observer");
+  std::vector<std::size_t> control_reads;
+  for (std::size_t site=0;site<ops.size();++site)
+    if (flow_read(ops[site],reg)) control_reads.push_back(site);
+  if (!control_reads.empty()) {
+    // A decimal value is not its stored word. A real Recall/Negate/Store
+    // update must normalize every path before the first new control use.
+    const auto entries=resolve_post_layout_external_entry_contexts(flow);
+    if (reg<7 || !entries || !prove_post_layout_input_boundaries(lower_ir_to_machine(ops),flow).proved)
+      return reject("unproved control-entry normalization");
+    const auto count=flow.execution_states.size();
+    std::vector<std::vector<std::size_t>> predecessors(count);
+    std::vector<bool> rooted(count,false), normalized(count,true), out(count,true), queued(count,true);
+    std::deque<std::size_t> pending;
+    std::size_t work=0;
+    const auto spend=[&]{return work++<kMaximumProofStates;};
+    for(std::size_t s=0;s<count;++s){
+      if(entries->main[s]){rooted[s]=true;pending.push_back(s);}
+      for(auto n:flow.execution_successors[s])predecessors[n].push_back(s);
+    }
+    while(!pending.empty()){
+      if(!spend())return reject("control readiness exhausted");
+      const auto s=pending.front();pending.pop_front();
+      for(auto n:flow.execution_successors[s])if(!rooted[n]){rooted[n]=true;pending.push_back(n);}
+    }
+    std::set<std::size_t> normalized_stores;
+    for(auto read:updates)normalized_stores.insert(machine[read+2U]);
+    for(std::size_t s=0;s<count;++s)pending.push_back(s);
+    while(!pending.empty()){
+      if(!spend())return reject("control normalization exhausted");
+      const auto s=pending.front();pending.pop_front();queued[s]=false;
+      bool before=!entries->main[s]&&!predecessors[s].empty();
+      for(auto p:predecessors[s]){if(!spend())return reject("control normalization exhausted");before=before&&out[p];}
+      normalized[s]=before;
+      const bool after=before||normalized_stores.contains(flow.execution_states[s].item_index);
+      if(after==out[s])continue;out[s]=after;
+      for(auto n:flow.execution_successors[s])if(!queued[n]){queued[n]=true;pending.push_back(n);}
+    }
+    for(auto read:control_reads){
+      bool reached=false;
+      for(std::size_t s=0;s<count;++s)if(flow.execution_states[s].item_index==machine[read]){
+        reached=true;if(!rooted[s]||!normalized[s])return reject("control use precedes a normalized definition");
+      }
+      if(!reached)return reject("unrooted control observer");
+    }
+  }
   std::vector<Plan> output;
   for (const auto& encoder : encoders) {
     const auto apply_encoder=[&](const std::string& value) {
@@ -3369,6 +3480,44 @@ static std::vector<Plan> discover_preloaded_inline_carriers(
         if(!plan.encoding_summary.empty())plan.encoding_summary+=", ";
         plan.encoding_summary+=values[row]+" -> "+encoding.words[row];
       }
+      // Keep arithmetic and control observations in the same codebook. A
+      // matching numeric target alone cannot justify changed word writeback
+      // or a different formal counter/return domain.
+      bool flow_valid=true;
+      const auto positions=label_positions(ops);
+      for(auto site:control_reads){
+        const auto& op=ops[site];
+        if(!op.meta.indirect_flow_targets || op.meta.indirect_flow_formal_targets){flow_valid=false;break;}
+        std::set<int> advertised, decoded;
+        for(const auto& target:*op.meta.indirect_flow_targets){
+          const auto* label=std::get_if<std::string>(&target);
+          if(!label || !positions.contains(*label)){flow_valid=false;break;}
+          int origin=positions.at(*label);
+          if(options.assumed_target_addresses){
+            const auto at=options.assumed_target_addresses->find(*label);
+            if(at==options.assumed_target_addresses->end()){flow_valid=false;break;}
+            origin=at->second;
+          }
+          advertised.insert(origin);plan.fixed_targets.emplace(*label,origin);
+        }
+        for(std::size_t row=0;row<values.size() && flow_valid;++row){
+          const auto before=normalized_finite_ordinary_word(values[row]);
+          const auto after=encoding.raw?std::optional<std::string>{encoding.words[row]}:
+              normalized_finite_ordinary_word(encoding.words[row]);
+          if(!before || !after){flow_valid=false;break;}
+          const auto old=evaluate_indirect_address(name,*before,IndirectOperationKind::Flow,flow.address_space_model);
+          const auto now=evaluate_indirect_address(name,*after,IndirectOperationKind::Flow,flow.address_space_model);
+          if(!old || !now || !old->actual_flow_target || old->actual_flow_target!=now->actual_flow_target ||
+              noncanonical_indirect_flow_entries(old) || noncanonical_indirect_flow_entries(now) ||
+              !indirect_writeback_preserves_literal_word(*old,*before) ||
+              !indirect_writeback_preserves_literal_word(*now,*after)){flow_valid=false;break;}
+          decoded.insert(*old->actual_flow_target);
+        }
+        if(!flow_valid || decoded!=advertised){flow_valid=false;break;}
+        plan.flow_reads.insert(machine[site]);
+      }
+      if(!flow_valid)continue;
+      plan.joint=!plan.flow_reads.empty();
       const auto raw_decoder=[&](const std::vector<std::string>& wanted)->std::optional<Decoder>{
         if(wanted==std::vector<std::string>{"-1","1"})return Decoder{{0x32},false};
         return std::nullopt;
@@ -3452,7 +3601,9 @@ static std::vector<DeferredFiniteModeRepresentation> finite_mode_candidates_impl
   // ordinary lowering remains an incumbent: a local win can lose address
   // coincidences, so final layout, not this pass, chooses the program.
   if (!context.options.defer_return_suffix_until_callee_hole ||
-      !symbolic(ops, candidate_options.preserve_compiler_selector_charges)) {
+      !symbolic(ops, candidate_options.preserve_compiler_selector_charges,
+                defer_layout && candidate_options.preserve_compiler_selector_charges &&
+                    candidate_options.preserve_formal_execution_frames)) {
     if (std::getenv("MKPRO_NATIVE_TRACE_FINITE_MODE_REPRESENTATION"))
       std::cerr << "[finite-mode-discovery] unsupported IR/phase; late-context="
                 << candidate_options.preserve_compiler_selector_charges << '\n';
@@ -3478,6 +3629,29 @@ static std::vector<DeferredFiniteModeRepresentation> finite_mode_candidates_impl
       for (const auto& reason : flow.reasons)
         std::cerr << "[finite-mode-discovery] CFG: " << reason << '\n';
     return unchanged();
+  }
+  // A formal counter is not an ordinary label relocation. Freeze every
+  // instruction it executes, including its physical-00 return. This proof
+  // uses the complete unpruned graph, never a convenient callback subset.
+  std::set<std::size_t> formal_frame_ir;
+  std::map<std::size_t, int> formal_frame_addresses;
+  if (candidate_options.preserve_formal_execution_frames &&
+      std::any_of(ops.begin(), ops.end(), [](const auto& op) {
+        return op.target_meta.formal_opcode.has_value();
+      })) {
+    std::map<std::size_t, std::size_t> ir_at_item;
+    std::size_t at = 0; int address = 0;
+    for (std::size_t i = 0; i < ops.size(); ++i) {
+      ir_at_item.emplace(at, i);
+      formal_frame_addresses.emplace(i, address);
+      at += ops[i].kind == IrKind::Label ? 1U : static_cast<std::size_t>(cells_per_op(ops[i]));
+      address += cells_per_op(ops[i]);
+    }
+    for (const auto& state : flow.execution_states) if (state.formal_opcode) {
+      const auto found = ir_at_item.find(state.item_index);
+      if (found == ir_at_item.end()) return unchanged();
+      formal_frame_ir.insert(found->second);
+    }
   }
   // Use the complete graph before conditional pruning. Intersect all exact
   // caller contexts: one invocation cannot authorize a different invocation.
@@ -3514,7 +3688,8 @@ static std::vector<DeferredFiniteModeRepresentation> finite_mode_candidates_impl
   const auto selector_graph = closed_geometry
       ? build_selector_consistent_execution_graph(items, flow)
       : build_deferred_selector_consistent_execution_graph(
-            items, flow, *candidate_options.assumed_target_addresses).execution;
+            items, flow, *candidate_options.assumed_target_addresses, 20000,
+            candidate_options.preserve_formal_execution_frames).execution;
   if (selector_graph.proved && selector_graph.pruned_edges != 0) {
     const auto original = flow.execution_states;
     flow.execution_states.clear();
@@ -3538,6 +3713,13 @@ static std::vector<DeferredFiniteModeRepresentation> finite_mode_candidates_impl
   }
   std::vector<Plan> plans;
   for (int reg = 0; reg < 15; ++reg) {
+    if (candidate_options.nonnegative_max_cuts) {
+      auto cuts = discover_inline_coefficient_carriers(
+          ops, reg, flow, machine, *automatic_entry_lift, candidate_options);
+      for (auto& plan : cuts)
+        if (plan.nonnegative_max_count > 0) plans.push_back(std::move(plan));
+      continue; // Preserve the complete historical lane and its candidate cap.
+    }
     if (candidate_options.runtime_preloads && defer_layout && candidate_options.normalize_unit_arguments) {
       auto units = discover_unit_input_normalization(ops, reg, flow, machine, *automatic_entry_lift, candidate_options);
       plans.insert(plans.end(), std::make_move_iterator(units.begin()), std::make_move_iterator(units.end()));
@@ -3572,18 +3754,32 @@ static std::vector<DeferredFiniteModeRepresentation> finite_mode_candidates_impl
   });
   std::vector<Plan> proved_plans;
   for (auto plan : plans) {
+    plan.lifetime_qualified_effects = candidate_options.precise_entry_facts &&
+        candidate_options.runtime_preloads != nullptr;
+    const auto touches_formal_frame = [&] {
+      for (const auto& [begin, macro] : plan.macros) {
+        const auto found = formal_frame_ir.lower_bound(begin);
+        if (found != formal_frame_ir.end() && *found < macro.end) return true;
+      }
+      for (const auto& [at, unused] : plan.exit_recoveries) {
+        (void)unused; if (formal_frame_ir.contains(at)) return true;
+      }
+      return false;
+    };
+    if (touches_formal_frame()) continue;
     for (const auto& [at, dead] : overwritten_before_manual)
       if (dead.contains(register_name_for_index(plan.reg)))
         plan.dead_manual_items.insert(at);
     std::string reason;
-    const bool accepted = prove(items, flow, machine, plan, *automatic_entry_lift, reason) ||
+    const bool accepted = (plan.nonnegative_max_count == 0 &&
+        prove(items, flow, machine, plan, *automatic_entry_lift, reason)) ||
         prove_with_finite_exits(ops, items, flow, machine, plan, *automatic_entry_lift,
                                candidate_options.maximum_growth_cells, reason);
     if (std::getenv("MKPRO_NATIVE_TRACE_FINITE_MODE_REPRESENTATION") != nullptr)
       std::cerr << "[finite-mode-representation] R" << register_name_for_index(plan.reg)
                 << " values=" << plan.value_count << " local-saving=" << plan.saved_cells
                 << " proof=" << (accepted ? "accepted" : reason) << '\n';
-    if (accepted)
+    if (accepted && !touches_formal_frame())
       proved_plans.push_back(std::move(plan));
   }
   // Recovery is executable code, not a free proof hint. Compare complete
@@ -3593,6 +3789,7 @@ static std::vector<DeferredFiniteModeRepresentation> finite_mode_candidates_impl
   });
   for (const auto& plan : proved_plans) {
     std::vector<IrOp> rewritten;
+    std::map<std::size_t, std::size_t> unchanged_ir;
     for (std::size_t i = 0; i < ops.size();) {
       if (const auto recovery = plan.exit_recoveries.find(i);
           recovery != plan.exit_recoveries.end()) {
@@ -3610,6 +3807,7 @@ static std::vector<DeferredFiniteModeRepresentation> finite_mode_candidates_impl
       }
       const auto found = plan.macros.find(i);
       if (found == plan.macros.end()) {
+        unchanged_ir.emplace(i, rewritten.size());
         rewritten.push_back(ops[i++]);
         continue;
       }
@@ -3690,6 +3888,17 @@ static std::vector<DeferredFiniteModeRepresentation> finite_mode_candidates_impl
           rewritten[emitted].meta.raw = true;
       i = macro.end;
     }
+    bool frame_preserved = true;
+    if (!formal_frame_ir.empty()) {
+      std::vector<int> addresses; int address = 0;
+      for (const auto& op : rewritten) { addresses.push_back(address); address += cells_per_op(op); }
+      for (const auto old : formal_frame_ir) {
+        const auto at = unchanged_ir.find(old);
+        frame_preserved = frame_preserved && at != unchanged_ir.end() &&
+            addresses[at->second] == formal_frame_addresses.at(old);
+      }
+    }
+    if (!frame_preserved) continue;
     auto required_targets = plan.fixed_targets;
     auto original_positions = label_positions(ops);
     if (candidate_options.assumed_target_addresses)
@@ -3733,6 +3942,7 @@ static std::vector<DeferredFiniteModeRepresentation> finite_mode_candidates_impl
         .ops = std::move(rewritten), .applied = 1,
         .optimizations = {{
             .name = plan.unit_input_normalization ? "unit-argument-producer-normalization" :
+                    plan.nonnegative_max_count > 0 ? "nonnegative-max-coefficient-state-carrier" :
                     plan.normalizing_max_count > 0 ? "mixed-epoch-coefficient-state-carrier" :
                     plan.inline_coefficient
                         ? (plan.raw_coefficient ? "raw-inline-coefficient-state-carrier"
@@ -3777,11 +3987,16 @@ static std::vector<DeferredFiniteModeRepresentation> finite_mode_candidates_impl
                                           register_name_for_index(*plan.seed_reg) + "."
                                     : "No extra register or preload.")
                           : std::string{}) +
-                      (plan.normalizing_max_count > 0
-                          ? " Proved " + std::to_string(plan.normalizing_max_count) +
+                      (plan.normalizing_max_count > plan.nonnegative_max_count
+                          ? " Proved " + std::to_string(plan.normalizing_max_count - plan.nonnegative_max_count) +
                                 " max epoch boundaries: an ordinary strictly positive operand "
                                 "dominates every original and encoded finite value. Dynamic "
                                 "epochs are unchanged; last-X remains unequal until independently erased."
+                          : std::string{}) +
+                      (plan.nonnegative_max_count > 0
+                          ? " Certified nonnegative machine-sign max cuts for every reachable finite row; "
+                            "only equal spellings or two ordinary strictly negative operands may cross. "
+                            "Zero and raw mantissas remain nonnumeric, and zero-test branches stay conservative."
                           : std::string{}) +
                       (plan.predicate_observation_count > 0
                           ? " Certified " + std::to_string(plan.predicate_observation_count) +
@@ -3794,6 +4009,26 @@ static std::vector<DeferredFiniteModeRepresentation> finite_mode_candidates_impl
       },
       .required_target_addresses = std::move(required_targets),
     });
+    if (plan.lifetime_qualified_effects)
+      alternatives.back().transformation.optimizations.push_back({
+          "finite-mode-epoch-qualified-register-effects",
+          "Checked indirect aliases, destructive selectors and loop counters against "
+          "the live encoded/retired version in each exact context, not against the "
+          "physical register globally. A plain equal-value overwrite ends that "
+          "relation; unrelated epochs remain identical in both executions."});
+    if (!formal_frame_ir.empty())
+      alternatives.back().transformation.optimizations.push_back({
+          "finite-mode-preserved-formal-frames",
+          "Kept every instruction reached under a formal hardware counter unchanged "
+          "at its exact physical address, including wraparound returns. Proved only "
+          "disjoint data epochs; final placement must preserve those contexts again."});
+    if (plan.preload_replacement && !plan.flow_reads.empty())
+      alternatives.back().transformation.optimizations.push_back({
+          "preloaded-finite-control-observers",
+          "Proved every arithmetic and read-only control observation in the same finite codebook. "
+          "Required a normalized definition on every rooted path; preserved complete selector words, "
+          "canonical entry counters and exact target equations for every row. The ordinary relational "
+          "stack/X1/X2, input, alias and final-layout proofs remain mandatory."});
     if (plan.preload_replacement) {
       alternatives.back().preload_replacements.push_back(*plan.preload_replacement);
       alternatives.back().transformation.optimizations.push_back({

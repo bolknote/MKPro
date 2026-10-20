@@ -22,6 +22,10 @@ struct ContextualCopyTransportOptions {
   // Complete delivered initializer environment, never setup assumptions at a
   // manual resume. Required only for independent finite-identity/GVN queries.
   const std::vector<PreloadReport>* runtime_preloads = nullptr;
+  // Complete-artifact opt-in. Direct formal entries retain their exact rooted
+  // counter/return contexts in every emitted relocation proof. Indirect formal
+  // aliases remain unsupported; both control and encoded origins are required.
+  bool preserve_formal_execution_frames = false;
 };
 // Conditional, complete-program transactions. Forward only static reads whose
 // every exact caller has the same source word. Sink a still-observed copied
@@ -60,6 +64,13 @@ std::vector<ContextualCopyTransportCandidate> contextual_finite_return_selector_
 std::vector<ContextualCopyTransportCandidate> contextual_pure_return_completion_candidates(
     const std::vector<IrOp>& ops, const PassContext& context,
     const ContextualCopyTransportOptions& limits = {});
+// Independent totality lane: a readonly scalar leaf may replace an ignored
+// return only after proving every extra operation total for all original
+// caller stack values. Unknown input, mutable/raw data, possible zero division
+// and live stack/X1/X2 reject. No caller/game recognizer is involved.
+std::vector<ContextualCopyTransportCandidate> contextual_total_return_completion_candidates(
+    const std::vector<IrOp>& ops, const PassContext& context,
+    const ContextualCopyTransportOptions& limits = {});
 // Add a store at an existing producer only when its old destination word is
 // dead on every continuation, then independently eliminate later copies of
 // that value. Neutral alternatives are intentional: dead stack loads and
@@ -74,4 +85,3 @@ std::vector<ContextualCopyTransportCandidate> contextual_anticipatory_copy_store
 std::vector<RegisterWebRecoloringRequest> contextual_copy_origin_register_requests(
     const std::vector<IrOp>& ops,std::size_t maximum_requests=16);
 } // namespace mkpro::core::passes
-

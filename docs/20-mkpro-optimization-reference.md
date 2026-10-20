@@ -5898,3 +5898,160 @@ pure command to its own return. Excluded callers and excluded path states
 cannot contribute equality facts from the must-analysis top element. The
 ordinary numeric, complete-word and future-observation obligations remain
 mandatory before erasing any copied store.
+
+## Nonnegative machine-sign max cuts
+
+The numeric proof carries a separate positive-sign-byte invariant through
+squares, same-sign nonnegative additions, copies and complete joins. It does
+not turn raw BCD mantissas or zero into an ordinary numeric interval.
+
+A finite coefficient web can cross Kmax without restoring its carrier only
+when every reachable encoded row has either the same word or two ordinary
+strictly negative spellings. A finite-row/return-context product proves this
+condition at each boundary. Unknown or positive rows reject; subsequent
+dynamic epochs retain exact equality. A nonnegative result never proves a
+nonzero predicate. Budget exhaustion exports no partial sign facts, and
+stack, last-X, X2, aliases and layout retain their independent proof gates.
+
+Raw Kmax results do not prove an ordinary stack transfer. A direct-ROM
+F-leading counterexample keeps X/Y equal while changing T with the negative
+operand. Sign-cut macros therefore invalidate Z/T, last-X and X2 equality
+and must prove every such difference dead on all exact continuations. The
+legacy opaque-boundary recovery search retains its independent candidate cap.
+
+### Disjoint formal frames and register epochs
+
+The complete-artifact representation lane may retain a direct formal hardware
+entry without expanding its shared continuation. Every command executed under
+that counter (including wraparound returns) keeps its opcode and physical
+address. The component placer freezes the complete affected fallthrough chains
+and rejects projected width changes there. Ordinary disjoint components can
+move only after exact rooted CFG/return-context transport. Indirect formal
+aliases remain unsupported by deferred canonical-selector bindings.
+
+Indirect memory and destructive selector effects are checked against the live
+encoded version in each exact context. A scratch use of the same physical
+register after a proved equal ordinary overwrite is not an observation of the
+old finite epoch. Live, retired and possibly aliased encoded words still reject.
+The late materialization lane uses the same exact alias/lifetime facts to
+reconsider a pooled constant; temporary code growth and every final selector
+word remain independently priced and proved by layout.
+
+### Reference epochs in guarded lifetime proofs
+
+A demand slice starts in the original reference execution. Independently proved
+contextual sign/value facts remain usable until its first hypothetically retained
+max-select store. A must-join preserves this reference epoch only when every
+incoming path still agrees. After divergence, the existing explicit unaffected-
+carrier dependency proof is required; a later global fact cannot prove its own
+retained guard. The IR, original CFG, real register reads and terminal observations
+are unchanged.
+
+Literal source-owned setup words are valid entry facts even when their report
+retains a source line. This grants no permission to retune that initializer,
+replace its ownership or assume it at an external resume. Expression-valued,
+symbolic-target and in-program setup reports remain excluded.
+
+### Composable equality-guard progress
+
+OR-only strict-growth certificates accept direct and indirect zero/nonzero
+predicates with their authoritative edge polarity. Selector effects and aliases
+are still checked independently; a carrier used as its own selector rejects.
+X-preserving stores may separate a comparison from its guard. A sign certificate
+traces every such predecessor to an actual old-minus-updated subtraction; the
+reverse orientation, unknown producer, self-supporting cycle or exhausted proof
+cannot establish a negative value. This keeps the same certificate available
+after conditional-underflow fusion, without a rewritten or assumed data CFG.
+
+### Finite arithmetic/control observer closure
+
+A delivered finite carrier may keep an existing read-only flow role while its
+arithmetic representation changes. Every encoded row must retain its exact
+canonical entry counter, complete selector writeback and symbolic destination
+equation. A grounded must-analysis proves Recall/Negate/Store normalization on
+every rooted path before a control read; equal decimal values with different
+memory orders are not interchangeable. Destructive selectors, changed targets,
+formal aliases, unknown setup, aliases and exhausted proofs fail closed.
+
+The supported single-A..D raw family at orders -1..-3 has an exact no-shift
+word fixed point in the selector model, separately checked against ROM for
+both signs. Order -4 remains excluded. Final stack/X1/X2, input, ownership and
+geometry proofs are unchanged. The independent compiler/ROM baseline combines
+three arithmetic projections with a control read: 39 -> 33 cells; changed-flow
+and observed-setup variants reject.
+
+### Contextual transformations around formal frames
+
+Complete-artifact contextual copy, finite-return and pure-return-completion
+transactions may analyze direct formal entries under an explicit opt-in. The
+unchanged closed selector graph is used when all encoded origins already match
+physical positions; pending geometry keeps the deferred graph and its exact
+formal contexts. Every emitted transformation still requires its full rooted
+execution-relocation certificate, including formal counters, wraparound returns
+and return frames. No indirect formal alias or unowned environment is admitted.
+A stock-ROM F1 regression shrinks a disjoint copy 130 -> 129 logical cells while
+executing only the independently proved official window; removing a prefix that
+would move that hardware window remains rejected.
+
+Formal-capable contextual search has an independent portfolio. Historical
+contextual calls retain their previous selector-graph policy and their complete
+beam/depth allowance. New candidates can replace the incumbent only with a
+strictly smaller fully finalized artifact; new neutral states cannot consume
+old search slots or displace an equal-size winner.
+
+
+### Closed return/branch/continuation composition
+
+The complete-artifact search separately prices a bounded atomic combination of
+an existing total quantizing return completion, an optional checked neutral
+home permutation, complementary branch placement and reopened/reclosed helper
+continuations. It uses the existing exact data, X1/X2 and rooted formal-PC
+proofs; no expanded instruction is free and no pending selector is published.
+The same transaction runs at the late selected-root boundary, even when no
+copy remains, so an earlier ABI winner cannot hide a composition discovered
+only after final placement. Historical lanes keep their budgets and equal-size
+incumbents. An observed returned value, changed formal window, incomplete proof
+or unclosed selector rejects the candidate.
+
+### Total readonly return completion
+
+An independent late lane composes an ignored return with an existing readonly
+scalar leaf. A demand-driven stack-value domain keeps normal-completion decimal
+value shape independently of widened integer enclosures. It is not a canonical
+BCD-word or selector certificate, and unknown/manual input stays unknown.
+
+The extra leaf is separately checked for totality over every original caller:
+bounded arithmetic uses the ordinary range evaluator; division by a divisor
+with magnitude at least one and addition/subtraction of a bounded eight-digit
+operand cannot overflow a finite decimal value. Decimal underflow is a value,
+not permission to normalize stored words. Unsupported operations, a possible
+zero divisor, raw/mutable coefficients and live stack/last-X/decimal-shadow
+observations reject. Readonly constants include complete indirect alias and
+selector write-back obligations. The control proof admits direct recalls only
+as read-only instructions; it does not itself grant numeric totality.
+
+Both completion lanes have independent candidate budgets. Every candidate still
+closes branch polarity, data/address constants, exact formal counters and return
+frames in the same final layout; a local deletion is not a published saving.
+
+
+### Independent stable-tail placement and official selector domains
+
+The complete-artifact over-budget finalizer preserves the historical search and
+also prices each existing stable R7-Re indirect tail independently. A geometrically
+impossible stitch must not veto another stitch. The existing natural-target proof
+rechecks placement, selector/data uses and writeback, numeric-entry closure, X2,
+rooted traces, external entries and return frames. Descriptive cell origins and
+unreferenced labels are not executable-entry permissions: real references, manual
+anchors, raw commands and semantic roles remain barriers. Fitting-profile budgets
+and incumbents are unchanged.
+
+Address-only preloads targeting physical 100 through the model's official last
+cell use the shared proved BCD selector encoder, not decimal source text. A preload's
+placement domain widens past 99 only after its own data/writeback certificate.
+Runtime decimal charges retain their independent two-digit bound. Stock memory
+remains 105 cells; expanded memory requires the separately selected mk61s model.
+
+Compiler/ROM fixtures cover conflicting stitches, fixed destinations, protected
+labels, raw jumps, exhausted placement, repeated calls and generated A1-to-A0 setup,
+including full data/stack/X1 and decimal-entry-shadow observations.

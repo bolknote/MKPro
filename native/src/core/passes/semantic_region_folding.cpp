@@ -33,12 +33,14 @@ bool ends_chain(const IrOp& op) {
          (op.kind == IrKind::Stop && op.meta.stop_disposition == StopDisposition::Terminal);
 }
 
-bool symbolic(const std::vector<IrOp>& ops, bool preserve_compiler_selector_charges = false) {
+bool symbolic(const std::vector<IrOp>& ops, bool preserve_compiler_selector_charges = false,
+              bool preserve_formal_execution_frames = false) {
   if (ops.empty() || ops.size() > 640U)
     return false;
   for (const auto& op : ops) {
     if (op.meta.raw || op.meta.logical_register_analysis ||
-        op.kind == IrKind::OrphanAddress || op.target_meta.formal_opcode ||
+        op.kind == IrKind::OrphanAddress ||
+        (op.target_meta.formal_opcode && !preserve_formal_execution_frames) ||
         op.meta.indirect_flow_formal_targets)
       return false;
     if ((op.kind == IrKind::Call || op.kind == IrKind::Jump ||
@@ -192,7 +194,8 @@ std::optional<SymbolicRegionLayout> layout_symbolic_regions(
     const PostLayoutControlFlowOptions* control_options,
     bool preserve_compiler_selector_charges,
     const SymbolicRegionProjection* projection) {
-  if (!symbolic(ops, preserve_compiler_selector_charges))
+  if (!symbolic(ops, preserve_compiler_selector_charges,
+                projection && projection->preserve_formal_execution_frames))
     return std::nullopt;
   auto parts = components(ops);
   if (parts.empty() || parts.size() > 24U)
@@ -235,6 +238,39 @@ std::optional<SymbolicRegionLayout> layout_symbolic_regions(
         starts[part] = original_address;
     for (std::size_t i = parts[part].begin; i < parts[part].end; ++i)
       original_address += cells_per_op(ops[i]);
+  }
+  if (projection && projection->preserve_formal_execution_frames &&
+      std::any_of(ops.begin(), ops.end(), [](const auto& op) {
+        return op.target_meta.formal_opcode.has_value();
+      })) {
+    const auto source = lower_ir_to_machine(ops);
+    const auto control = build_post_layout_control_flow(source,
+        control_options ? *control_options : flow_options(context));
+    if (!control.proved) return std::nullopt;
+    const auto machine = machine_indexes(ops);
+    std::map<std::size_t, std::size_t> part_by_item;
+    for (std::size_t part = 0; part < parts.size(); ++part)
+      for (std::size_t i = parts[part].begin; i < parts[part].end; ++i)
+        for (std::size_t cell = 0; cell < (ops[i].kind == IrKind::Label ? 1U :
+              static_cast<std::size_t>(cells_per_op(ops[i]))); ++cell)
+          part_by_item.emplace(machine[i] + cell, part);
+    std::set<std::size_t> frozen;
+    for (const auto& state : control.execution_states) if (state.formal_opcode) {
+      const auto found = part_by_item.find(state.item_index);
+      if (found == part_by_item.end()) return std::nullopt;
+      frozen.insert(found->second);
+    }
+    int original_start = 0;
+    for (std::size_t part = 0; part < parts.size(); ++part) {
+      if (frozen.contains(part)) {
+        if (starts[part] && *starts[part] != original_start) return std::nullopt;
+        starts[part] = original_start;
+        for (std::size_t i = parts[part].begin; i < parts[part].end; ++i)
+          if (widths[i] != cells_per_op(ops[i])) return std::nullopt;
+      }
+      for (std::size_t i = parts[part].begin; i < parts[part].end; ++i)
+        original_start += cells_per_op(ops[i]);
+    }
   }
   std::vector<std::pair<int, int>> bounds(parts.size(), {0, 1000000});
   if (projection) {

@@ -9,6 +9,12 @@
 
 namespace mkpro::core {
 
+// Close a zero-tested D3/return materialization and its displaced selector
+// families atomically. Only a smaller, fully placed artifact is exported.
+std::vector<ProvedSearchTransition<LayoutSearchArtifact>>
+zero_underflow_conditional_return_layout_transactions(
+    const LayoutSearchArtifact& artifact, const CompileOptions& options);
+
 // Preserve an already proved checkpoint across memory-model search roots only
 // when opcode effects, selectors and exact execution/return contexts agree.
 // This is not a relocation or permission to reinterpret short-side aliases.

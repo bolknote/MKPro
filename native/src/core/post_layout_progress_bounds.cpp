@@ -240,10 +240,16 @@ MonotoneProgressProof prove_post_layout_monotone_progress(
       if (!incoming[state] || incoming[state]->values[0].kind != Kind::Difference)
         continue;
       const int code = items[flow.execution_states[state].item_index].opcode;
-      if (code != 0x57 && code != 0x5e) continue;
+      // Equality predicates have the same truth polarity in direct and
+      // indirect form. The authoritative edge kind keeps their targets
+      // separate; any selector use of the carrier was rejected above.
+      const int family = code & 0xf0;
+      const bool zero = code == 0x5e || family == 0xe0;
+      if (code != 0x57 && code != 0x5e && family != 0x70 && family != 0xe0) continue;
       for (const auto& edge : flow.execution_edges[state]) {
-        const auto growth_kind = code == 0x5e ? PostLayoutExecutionEdgeKind::DirectTarget
-                                             : PostLayoutExecutionEdgeKind::Fallthrough;
+        const auto growth_kind = !zero ? PostLayoutExecutionEdgeKind::Fallthrough
+            : code >= 0x70 ? PostLayoutExecutionEdgeKind::IndirectTarget
+                           : PostLayoutExecutionEdgeKind::DirectTarget;
         if (edge.kind != growth_kind) continue;
         const auto reaches_guard = [&](bool stop_at_update) {
           std::vector<bool> seen(size, false);

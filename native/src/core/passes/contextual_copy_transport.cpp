@@ -47,6 +47,7 @@ struct Model {
         const ContextualCopyTransportOptions& limits) : ops(code), items(lower_ir_to_machine(code)) {
     const auto model=address_space_model_for_feature_profile(effective_optimizer_feature_profile(context.options));
     if(limits.encoded_target_origins && !limits.control) return;
+    if(limits.preserve_formal_execution_frames && (!limits.control || !limits.encoded_target_origins)) return;
     if(limits.control){control=*limits.control;if(control.address_space_model!=model)return;}
     else{control.empty_return_target=1;control.address_space_model=model;}
     if(limits.encoded_target_origins){
@@ -62,7 +63,8 @@ struct Model {
       // Formal-PC edits need their own placement theorem. Do not turn an
       // ordinary physical destination into permission to move a dark alias.
       if (op.meta.raw || op.meta.logical_register_analysis || op.kind == IrKind::OrphanAddress ||
-          op.target_meta.formal_opcode || op.meta.indirect_flow_formal_targets) {
+          (op.target_meta.formal_opcode && !limits.preserve_formal_execution_frames) ||
+          op.meta.indirect_flow_formal_targets) {
         if(std::getenv("MKPRO_NATIVE_TRACE_COPY_TRANSPORT"))std::cerr<<"[copy-transport] unsupported IR "<<i<<" opcode="<<op.opcode<<" formal="<<op.target_meta.formal_opcode.has_value()<<"\n";
         return;
       }
@@ -76,10 +78,15 @@ struct Model {
     }
     original = build_post_layout_control_flow(items, control);
     if (!original.proved || !prove_post_layout_input_boundaries(items, original).proved) return;
-    const auto selected = limits.encoded_target_origins
-        ? build_deferred_selector_consistent_execution_graph(
-              items,original,*limits.encoded_target_origins).execution
-        : build_selector_consistent_execution_graph(items, original);
+    std::map<std::string,int> positions;int pc=0;
+    for(const auto& op:ops){if(op.kind==IrKind::Label)positions.emplace(op.name,pc);pc+=cells_per_op(op);}
+    const bool closed_geometry=!limits.encoded_target_origins ||
+        (limits.preserve_formal_execution_frames && std::all_of(limits.encoded_target_origins->begin(),limits.encoded_target_origins->end(),
+            [&](const auto& entry){return positions.contains(entry.first) && positions.at(entry.first)==entry.second;}));
+    const auto selected = closed_geometry
+        ? build_selector_consistent_execution_graph(items,original)
+        : build_deferred_selector_consistent_execution_graph(items,original,*limits.encoded_target_origins,
+              20000,limits.preserve_formal_execution_frames).execution;
     if (!selected.proved) return;
     flow = original;
     flow.execution_states.clear();
@@ -857,35 +864,7 @@ std::vector<RegisterWebRecoloringRequest> contextual_copy_origin_register_reques
   return result;
 }
 
-namespace {
-// Exact canonical decimal spelling for a finite ordinary literal. No rounding,
-// host floating point, raw nibbles or over-eight-digit mantissas are admitted.
-std::optional<std::string> normalized_finite_word(const std::string& spelling){
-  std::string word=spelling;bool negative=false;
-  if(!word.empty()&&word.front()=='-'){negative=true;word.erase(0,1);}
-  const auto exponent_at=word.find_first_of("eE");int exponent=0;
-  if(exponent_at!=std::string::npos){
-    auto suffix=word.substr(exponent_at+1U);word.resize(exponent_at);bool minus=false;
-    if(!suffix.empty()&&(suffix.front()=='-'||suffix.front()=='+')){minus=suffix.front()=='-';suffix.erase(0,1);}
-    if(suffix.empty()||suffix.size()>2U)return std::nullopt;
-    for(const char c:suffix){if(c<'0'||c>'9')return std::nullopt;exponent=exponent*10+c-'0';}
-    if(minus)exponent=-exponent;
-  }
-  std::string digits;std::optional<int> point;
-  for(const char c:word){
-    if(c=='.'){if(point)return std::nullopt;point=static_cast<int>(digits.size());}
-    else if(c>='0'&&c<='9')digits+=c;else return std::nullopt;
-  }
-  if(digits.empty())return std::nullopt;
-  const int integer_digits=point.value_or(static_cast<int>(digits.size()));
-  const auto first=digits.find_first_not_of('0');if(first==std::string::npos)return std::nullopt;
-  exponent+=integer_digits-static_cast<int>(first)-1;digits.erase(0,first);
-  while(digits.size()>1U&&digits.back()=='0')digits.pop_back();
-  if(digits.size()>8U||exponent<-99||exponent>99)return std::nullopt;
-  digits.append(8U-digits.size(),'0');
-  return std::string(negative?"-":"")+digits.substr(0,1)+"."+digits.substr(1)+"e"+std::to_string(exponent);
-}
-}
+
 
 std::vector<ContextualCopyTransportCandidate> contextual_finite_return_selector_candidates(
     const std::vector<IrOp>& ops,const PassContext& context,const ContextualCopyTransportOptions& limits){
@@ -921,7 +900,7 @@ std::vector<ContextualCopyTransportCandidate> contextual_finite_return_selector_
     if(!reg||*reg<7||initial.setup_expression||initial.setup_target_name||initial.setup_expression_text||
         initial.retunable_natural_fractional_prefix||
         (initial.lowered_data_value&&*initial.lowered_data_value!=initial.value)||!bound_ordinary_decimal(initial.value))continue;
-    const auto canonical=normalized_finite_word(initial.value);if(!canonical)continue;
+    const auto canonical=normalized_finite_ordinary_word(initial.value);if(!canonical)continue;
     const std::string opposite=canonical->starts_with("-")?canonical->substr(1):"-"+*canonical;
     bool valid=true;
     for(const auto& word:std::array<std::string,2>{*canonical,opposite}){
@@ -1049,8 +1028,117 @@ std::vector<ContextualCopyTransportCandidate> contextual_finite_return_selector_
   return result;
 }
 
-std::vector<ContextualCopyTransportCandidate> contextual_pure_return_completion_candidates(
-    const std::vector<IrOp>& ops,const PassContext& context,const ContextualCopyTransportOptions& limits){
+namespace {
+// Constants stay readonly in the whole original program, including alias and
+// selector write-back observations. A stored numeric equality is not enough
+// to authorize an address-word mutation.
+std::map<std::string, OrdinaryNumericRange> readonly_completion_constants(
+    const Model& m, const std::vector<PreloadReport>& preloads, Id& work, Id maximum_work) {
+  std::map<std::string, OrdinaryNumericRange> result;
+  std::set<std::string> owners;
+  for (const auto& word : preloads) {
+    if(work>=maximum_work)return {};++work;
+    if (!physical_word_register(word.register_name) ||
+        !owners.insert(word.register_name).second) return {};
+    const auto range = bound_ordinary_decimal(word.value);
+    const auto canonical = normalized_finite_ordinary_word(word.value);
+    if (!range || !canonical || word.setup_expression || word.setup_target_name ||
+        word.setup_expression_text) continue;
+    const int reg = register_index(word.register_name);
+    bool valid = true;
+    for (Id i = 0; i < m.ops.size() && valid; ++i) {
+      if(work>=maximum_work)return {};++work;
+      const auto& op = m.ops[i];
+      const auto& effect = m.effects[i];
+      if (effect.may_define_any_register) {valid=false;break;}
+      if (op.kind==IrKind::IndirectStore) {
+        const auto aliases=m.flow.indirect_memory_targets.find(m.item[i]);
+        if(aliases==m.flow.indirect_memory_targets.end() ||
+            std::find(aliases->second.begin(),aliases->second.end(),reg)!=aliases->second.end()){valid=false;break;}
+      }
+      if (!effect.must_defs.contains(word.register_name) && !effect.may_defs.contains(word.register_name)) continue;
+      if (op.kind != IrKind::IndirectCall && op.kind != IrKind::IndirectJump &&
+          op.kind != IrKind::IndirectCondJump && op.kind != IrKind::IndirectRecall &&
+          op.kind != IrKind::IndirectStore) {valid=false;break;}
+      if ((op.opcode & 15) != reg || reg < 7) {valid=false;break;}
+      const bool memory = op.kind == IrKind::IndirectRecall || op.kind == IrKind::IndirectStore;
+      const auto decoded = evaluate_indirect_address(word.register_name, *canonical,
+          memory ? IndirectOperationKind::Memory : IndirectOperationKind::Flow, m.control.address_space_model);
+      valid = decoded && indirect_writeback_preserves_literal_word(*decoded,*canonical);
+    }
+    if (valid) result.emplace(word.register_name,*range);
+  }
+  return result;
+}
+
+bool total_readonly_completion(const Model& m, const std::vector<Id>& body,
+    std::array<OrdinaryStackValue,4> values,
+    const std::map<std::string,OrdinaryNumericRange>& constants, Id& work, Id maximum_work) {
+  const auto push = [&](OrdinaryStackValue value) {
+    for (Id slot=3;slot>0;--slot) values[slot]=values[slot-1U];
+    values[0]=std::move(value);
+  };
+  const auto drop = [&](OrdinaryStackValue value) {
+    values[0]=std::move(value);values[1]=values[2];values[2]=values[3];
+  };
+  bool fresh = true;
+  for (Id n=0;n+1U<body.size();++n) {
+    if(work>=maximum_work)return false;++work;
+    const auto& op=m.ops[body[n]];const int code=op.opcode;
+    if (op.kind==IrKind::Recall) {
+      const auto word=constants.find(op.register_name);if(word==constants.end())return false;
+      push({word->second,true});fresh=true;continue;
+    }
+    if (op.kind!=IrKind::Plain) return false;
+    if(code>=0 && code<=9) {
+      if(!fresh)return false;
+      std::string number;bool point=false;Id end=n;
+      for(;end+1U<body.size();++end){
+        const auto& next=m.ops[body[end]];if(next.kind!=IrKind::Plain)break;
+        if(next.opcode>=0&&next.opcode<=9)number.push_back(static_cast<char>('0'+next.opcode));
+        else if(next.opcode==0x0a&&!point){point=true;number.push_back('.');}
+        else break;
+      }
+      if(end+1U<body.size()&&m.ops[body[end]].kind==IrKind::Plain&&m.ops[body[end]].opcode==0x0b){number.insert(number.begin(),'-');++end;}
+      const auto range=bound_ordinary_decimal(number);if(!range)return false;
+      push({*range,true});fresh=false;n=end-1U;continue;
+    }
+    if(code==0x14){std::swap(values[0],values[1]);fresh=false;continue;}
+    if(code==0x25){const auto x=values[0];values[0]=values[1];values[1]=values[2];values[2]=values[3];values[3]=x;fresh=false;continue;}
+    if(code==0x0e){push(values[0]);fresh=false;continue;}
+    if(code==0x0d){values[0]={OrdinaryNumericRange{0,0,true},true};fresh=false;continue;}
+    if(code>=0x10&&code<=0x13){
+      const auto x=values[0],y=values[1];if(!x.ordinary||!y.ordinary)return false;
+      std::optional<OrdinaryNumericRange> range;
+      if(x.range&&y.range)range=bound_ordinary_binary(code,*y.range,*x.range);
+      bool total=range.has_value();
+      // Eight-digit decimal arithmetic: adding/subtracting a value bounded
+      // by 99999999 cannot overflow an otherwise finite ordinary operand.
+      // Above order 90 it is below half an ULP; below it there is exponent
+      // headroom. Subnormal decimal results round to zero, not an error.
+      if((code==0x10||code==0x11)&&x.range)total=true;
+      // A divisor whose magnitude is at least one cannot overflow a finite
+      // numerator. Decimal underflow is admitted only as a numeric value;
+      // no canonical stored-word or selector fact is manufactured.
+      if(code==0x13&&x.range&&(x.range->lower>=1||x.range->upper<=-1))total=true;
+      if(!total)return false;drop({range,true});fresh=true;continue;
+    }
+    const auto x=values[0];if(!x.ordinary)return false;
+    std::optional<OrdinaryNumericRange> range;
+    if(x.range)range=bound_ordinary_unary(code,*x.range);
+    if(code==0x35&&!range)range=OrdinaryNumericRange{-1,1,false};
+    bool total=code==0x31||code==0x32||code==0x34||code==0x35;
+    if(code==0x15)total=x.range&&x.range->lower>=-99&&x.range->upper<=7&&range.has_value();
+    if(code==0x22)total=range.has_value();
+    if(!total)return false;values[0]={range,true};fresh=selector_charge_entry_closer_opcode(code);
+  }
+  return true;
+}
+} // namespace
+
+static std::vector<ContextualCopyTransportCandidate> contextual_return_completion_candidates_impl(
+    const std::vector<IrOp>& ops,const PassContext& context,const ContextualCopyTransportOptions& limits,
+    bool scalar_leaf){
   namespace terms=detail::exact_terms;
   std::vector<ContextualCopyTransportCandidate> result;
   if(!limits.runtime_preloads||!limits.maximum_work||!limits.maximum_candidates||!limits.maximum_copy_sites)return result;
@@ -1058,7 +1146,7 @@ std::vector<ContextualCopyTransportCandidate> contextual_pure_return_completion_
   bool quantizer=false;
   for(Id i=1;i<ops.size();++i)quantizer=quantizer||
       (ops[i].kind==IrKind::Plain&&ops[i].opcode==0x34&&ops[i-1U].kind==IrKind::Label);
-  if(returns_count<2||!quantizer)return result;
+  if(returns_count<2||(!scalar_leaf&&!quantizer))return result;
   Model m(ops,context,limits);if(!m.valid)return result;
   const auto lift=analyze_post_layout_automatic_entry_lift_with_indirect_store_facts(m.items,m.flow,limits.maximum_work);
   if(!lift)return result;
@@ -1072,15 +1160,23 @@ std::vector<ContextualCopyTransportCandidate> contextual_pure_return_completion_
     if(!external){returns.push_back(i);queries.push_back(m.item[i]);}
   }
   if(returns.empty())return result;
-  const auto ranges=prove_post_layout_numeric_ranges(m.items,m.flow,*lift,queries,limits.runtime_preloads,
+  const auto prove_ranges=scalar_leaf ? prove_post_layout_stack_numeric_values : prove_post_layout_numeric_ranges;
+  const auto ranges=prove_ranges(m.items,m.flow,*lift,queries,limits.runtime_preloads,
       std::min<Id>(100000,limits.maximum_work/2U),NumericRangeInputPolicy::ValidatedRegisterTransport);
   if(ranges.exhausted)return result;
-  Id work=ranges.work;const auto spend=[&]{if(work>=limits.maximum_work)return false;++work;return true;};
+  Id work=ranges.work;
+  const auto constants=scalar_leaf ? readonly_completion_constants(m,*limits.runtime_preloads,work,limits.maximum_work) :
+      std::map<std::string,OrdinaryNumericRange>{};
+  if(work>=limits.maximum_work)return result;
+  const auto spend=[&]{if(work>=limits.maximum_work)return false;++work;return true;};
   struct Body{Id begin=0,first=0,end=0;std::vector<Id> commands;};
   std::vector<Body> bodies;
   for(Id first=1;first<ops.size();++first){
     if(!spend())return result;
-    if(ops[first].kind!=IrKind::Plain||ops[first].opcode!=0x34||ops[first-1U].kind!=IrKind::Label)continue;
+    if(ops[first-1U].kind!=IrKind::Label)continue;
+    if(!scalar_leaf && (ops[first].kind!=IrKind::Plain||ops[first].opcode!=0x34))continue;
+    if(scalar_leaf && (ops[first].kind!=IrKind::Plain && ops[first].kind!=IrKind::Recall))continue;
+    if(scalar_leaf && ops[first].kind==IrKind::Plain && ops[first].opcode==0x34)continue;
     Id begin=first;while(begin>0&&ops[begin-1U].kind==IrKind::Label)--begin;
     if(!begin)continue;
     const auto& previous=ops[begin-1U];
@@ -1094,6 +1190,7 @@ std::vector<ContextualCopyTransportCandidate> contextual_pure_return_completion_
           !op.procedure_boundary&&op.meta.semantic_call_origins.empty()){
         body.end=at;body.commands.push_back(at);complete=true;break;
       }
+      if(scalar_leaf && direct(op) && op.kind==IrKind::Recall && constants.contains(op.register_name)){body.commands.push_back(at);continue;}
       if(op.kind!=IrKind::Plain||op.meta.raw||op.meta.manual_interaction||op.procedure_boundary||
           !op.meta.semantic_call_origins.empty()||!descriptive(op.meta.roles)||!terms::modeled_plain(op.opcode))break;
       const int code=op.opcode;
@@ -1110,12 +1207,13 @@ std::vector<ContextualCopyTransportCandidate> contextual_pure_return_completion_
   Id tried=0;
   for(const auto source:returns){
     if(tried++>=limits.maximum_copy_sites)break;
-    std::set<std::int64_t> domain;bool complete=true,reached=false;
+    std::set<std::int64_t> domain;std::vector<Id> source_states;bool complete=true,reached=false;
     for(Id state=0;state<m.instruction.size();++state)if(m.instruction[state]==source){
       if(!spend())return result;
       if(ranges.unreachable_states.contains(state))continue;
       if(!lift->at(state)){complete=false;break;}
-      reached=true;
+      reached=true;source_states.push_back(state);
+      if(scalar_leaf){if(!ranges.stack_before_state.contains(state)){complete=false;break;}domain.insert(0);continue;}
       const auto value=ranges.x_before_state.find(state);
       if(value==ranges.x_before_state.end()||value->second.lower<-99999999||value->second.upper>99999999||
           value->second.upper-value->second.lower>7){complete=false;break;}
@@ -1138,7 +1236,10 @@ std::vector<ContextualCopyTransportCandidate> contextual_pure_return_completion_
       if(source>=body.begin&&source<=body.end)continue;
       if(source_labels<body.end+1U&&source>=body.begin)continue;
       bool total=true;
-      for(const auto row:domain){
+      if(scalar_leaf)for(const auto state:source_states){
+        if(!spend()||!total_readonly_completion(m,body.commands,ranges.stack_before_state.at(state),constants,work,limits.maximum_work)){total=false;break;}
+      }
+      else for(const auto row:domain){
         terms::Evaluation evaluation;const auto number=terms::number(std::to_string(row));if(!number){total=false;break;}
         evaluation.state.stack[0]=*number;evaluation.synchronize_call();
         // After int(X) the old fractional input and hidden entry copy are
@@ -1186,14 +1287,22 @@ std::vector<ContextualCopyTransportCandidate> contextual_pure_return_completion_
       const auto proof=prove_post_layout_execution_relocation(m.items,image,m.original,flow,mapping,transport);
       if(!proof.proved)continue;
       transformed.applied=1;
-      transformed.optimizations.push_back({"quantized-pure-return-completion",
-          "Removed a return by moving an existing pure quantizing helper into its physical fallthrough. Proved ordinary input bounds and exhaustive total evaluation of "+std::to_string(domain.size())+
-          " complete post-quantizer rows, not floating samples or a formula recognizer. Every changed stack/X1/X2 value is unobserved on all original continuations. Branch labels still reach the retained final V/O; the rooted CFG, all frames and the additional pure execution are independently transported. All original data/selector identities remain placement obligations."});
+      transformed.optimizations.push_back({scalar_leaf?"total-readonly-return-completion":"quantized-pure-return-completion",
+          (scalar_leaf?"Removed a return by moving an existing readonly scalar helper into its physical fallthrough. Proved every added arithmetic operation total over every original caller stack domain and immutable word; no finite samples or input assumptions. ":"Removed a return by moving an existing pure quantizing helper into its physical fallthrough. Proved ordinary input bounds and exhaustive total evaluation of "+std::to_string(domain.size())+" complete post-quantizer rows. ")+
+          "Every changed stack/X1/X2 value is unobserved on all original continuations. Branch labels still reach the retained final V/O; the rooted CFG, all frames and the additional pure execution are independently transported. All original data/selector identities remain placement obligations."});
       result.push_back(std::move(candidate));if(result.size()>=limits.maximum_candidates)return result;
     }
   }
   return result;
 }
 
-} // namespace mkpro::core::passes
+std::vector<ContextualCopyTransportCandidate> contextual_pure_return_completion_candidates(
+    const std::vector<IrOp>& ops,const PassContext& context,const ContextualCopyTransportOptions& limits){
+  return contextual_return_completion_candidates_impl(ops,context,limits,false);
+}
+std::vector<ContextualCopyTransportCandidate> contextual_total_return_completion_candidates(
+    const std::vector<IrOp>& ops,const PassContext& context,const ContextualCopyTransportOptions& limits){
+  return contextual_return_completion_candidates_impl(ops,context,limits,true);
+}
 
+} // namespace mkpro::core::passes

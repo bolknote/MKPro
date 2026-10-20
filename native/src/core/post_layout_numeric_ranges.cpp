@@ -697,7 +697,7 @@ static PostLayoutNumericRangeProof prove_numeric_ranges_on_graph(
     const std::vector<std::size_t>* analysis_order = nullptr,
     std::set<std::size_t>* widened_queries = nullptr,
     const GuardedRecallRanges* guarded = nullptr,
-    std::set<std::size_t>* recalled_states = nullptr) {
+    std::set<std::size_t>* recalled_states = nullptr, bool complete_stack = false) {
   PostLayoutNumericRangeProof result;
   const auto count = flow.execution_states.size();
   if (!flow.proved || automatic_entry_lift.size() != count ||
@@ -850,10 +850,12 @@ static PostLayoutNumericRangeProof prove_numeric_ranges_on_graph(
     // The ROM-checked positive 8.<seven arbitrary BCD nibbles> K OR
     // result class. It is not an ordinary-decimal interval.
     bool normalized_or_payload = false;
+    bool nonnegative_word = false;
+    bool ordinary_value = false;
     bool operator==(const Fact&) const = default;
   };
   const Fact unknown{true, std::nullopt, std::nullopt};
-  const auto constant = [](Range range, Quantum quantum = std::nullopt) {
+  const auto constant = [complete_stack](Range range, Quantum quantum = std::nullopt) {
     if (quantum && (!range || quantum->denominator == 1)) {
       const auto precise = quantized_enclosure(*quantum);
       if (range && precise)
@@ -869,11 +871,15 @@ static PostLayoutNumericRangeProof prove_numeric_ranges_on_graph(
       quantum = quantized_range(range);
     const bool integer_word = range && range->integral && range->lower >= 1;
     const auto mantissa = range ? ordinary_mantissa() : MantissaShape{};
-    return Fact{true, std::move(range), std::move(quantum), integer_word, mantissa};
+    auto fact = Fact{true, std::move(range), std::move(quantum), integer_word, mantissa};
+    fact.ordinary_value = complete_stack && fact.range.has_value();
+    return fact;
   };
   const auto decimal = [&](std::string_view text) {
     auto fact = constant(bound_ordinary_decimal(text), quantized_literal(text));
     fact.mantissa = literal_mantissa(text);
+    if (complete_stack && normalized_finite_ordinary_word(std::string(text))) fact.ordinary_value = true;
+    fact.nonnegative_word = fact.range && !text.starts_with("-");
     fact.canonical_small_integer = text.size()==1U && text[0]>='1' && text[0]<='9';
     if (fact.integer_selector_word) {
       const auto decoded = evaluate_indirect_address("0", text, IndirectOperationKind::Memory);
@@ -892,6 +898,8 @@ static PostLayoutNumericRangeProof prove_numeric_ranges_on_graph(
     joined.integer_selector_word = a.integer_selector_word && b.integer_selector_word;
     joined.canonical_small_integer = a.canonical_small_integer && b.canonical_small_integer;
     joined.normalized_or_payload = a.normalized_or_payload && b.normalized_or_payload;
+    joined.nonnegative_word = a.nonnegative_word && b.nonnegative_word;
+    joined.ordinary_value = a.ordinary_value && b.ordinary_value;
     joined.mantissa = join_mantissa(a.mantissa, b.mantissa);
     return joined;
   };
@@ -903,7 +911,8 @@ static PostLayoutNumericRangeProof prove_numeric_ranges_on_graph(
     return fact;
   };
   const auto is_top = [&](const Fact& fact) {
-    return fact.grounded && !fact.range && !fact.normalized_or_payload &&
+    return fact.grounded && !fact.range && !fact.normalized_or_payload && !fact.nonnegative_word &&
+        !fact.ordinary_value &&
         fact.mantissa == unknown.mantissa;
   };
   const auto bitwise = [&](int code, const Fact& y, const Fact& x) {
@@ -1090,6 +1099,7 @@ static PostLayoutNumericRangeProof prove_numeric_ranges_on_graph(
         auto fact = constant(Range{literal->second.value}, literal->second.quantum);
         fact.mantissa = literal->second.mantissa;
         fact.canonical_small_integer = literal->second.canonical_small_integer;
+        fact.nonnegative_word = literal->second.value.lower >= 0;
         return fact;
       }
     }
@@ -1115,7 +1125,7 @@ static PostLayoutNumericRangeProof prove_numeric_ranges_on_graph(
         (family >= 0x70 && family <= 0xe0))
       return input(slot);
     if (code == 0x0d)
-      return slot == 0 ? constant(bounded(0, 0, true)) : input(slot);
+      return slot == 0 ? decimal("0") : input(slot);
     if (code == 0x0e || code == 0x0f)
       return slot == 0 ? (code == 0x0e ? input(0) : unknown) : input(slot - 1);
     if (code == 0x0b) {
@@ -1151,7 +1161,16 @@ static PostLayoutNumericRangeProof prove_numeric_ranges_on_graph(
         const auto y = input(1);
         const auto x = input(0);
         if (code >= 0x37 && code <= 0x39) return bitwise(code, y, x);
-        return !y.grounded || !x.grounded ? Fact{} : constant(binary(code, y.range, x.range), binary_quantized(code, y.quantum, x.quantum));
+        if (!y.grounded || !x.grounded) return Fact{};
+        auto fact = constant(binary(code, y.range, x.range), binary_quantized(code, y.quantum, x.quantum));
+        // Positive-sign addition cannot acquire a negative sign from BCD
+        // mantissa carries. This does not certify ordinary digits or order.
+        fact.nonnegative_word = code == 0x10 && y.nonnegative_word && x.nonnegative_word;
+        // Only the value on normal completion is ordinary. This is NOT a
+        // totality certificate for a new arithmetic instruction.
+        fact.ordinary_value = complete_stack && y.ordinary_value && x.ordinary_value &&
+            ((code >= 0x10 && code <= 0x13) || code == 0x36);
+        return fact;
       }
       const auto x = input(0);
       if (x.grounded && code == 0x32) {
@@ -1165,7 +1184,17 @@ static PostLayoutNumericRangeProof prove_numeric_ranges_on_graph(
         ones.mantissa.digits.fill(0x8000U);
         return bitwise(0x39, ones, x);
       }
-      return x.grounded ? constant(unary(code, x.range), unary_quantized(code, x.quantum)) : Fact{};
+      if (!x.grounded) return Fact{};
+      auto fact = constant(unary(code, x.range), unary_quantized(code, x.quantum));
+      // Squaring clears the sign independently of the mantissa. Unknown raw
+      // values remain nonnumeric; only the sign-byte invariant is exported.
+      fact.nonnegative_word = code == 0x22;
+      fact.ordinary_value = complete_stack && (code == 0x15 ||
+          (x.ordinary_value && (code == 0x31 || code == 0x32 ||
+           code == 0x34 || code == 0x35 || code == 0x22)));
+      if (complete_stack && x.ordinary_value && !fact.range && code == 0x35)
+        fact.range = bounded(-1, 1, false);
+      return fact;
     }
     if (effect == StackEffect::ConsumeYDrop || effect == StackEffect::Exposes)
       return input(std::min(slot + 1, 3));
@@ -1178,7 +1207,8 @@ static PostLayoutNumericRangeProof prove_numeric_ranges_on_graph(
   for (const auto item : requested_items)
     if (const auto found = contexts.find(item); found != contexts.end())
       for (const auto state : found->second)
-        (void)before(state, 0);
+        for (int slot = 0; slot < (complete_stack ? 4 : 1); ++slot)
+          (void)before(state, slot);
   while (!work.empty() || !ordered_work.empty()) {
     if (result.work >= maximum_work) {
       result.exhausted = true;
@@ -1283,12 +1313,26 @@ static PostLayoutNumericRangeProof prove_numeric_ranges_on_graph(
     if (found == contexts.end())
       continue;
     for (const auto state : found->second) {
+      if (complete_stack) {
+        auto& values = result.stack_before_state[state];
+        for (int slot = 0; slot < 4; ++slot) {
+          const auto& value = cache.at(Key{state, slot});
+          values[static_cast<std::size_t>(slot)] = {value.range,
+              value.grounded && value.ordinary_value};
+        }
+      }
       const auto& fact = cache.at(Key{state,0});
+      if (fact.grounded && fact.nonnegative_word)
+        result.nonnegative_words_before_state.insert(state);
       if (fact.grounded && fact.range) {
         result.x_before_state.emplace(state,*fact.range);
         if(fact.canonical_small_integer)result.canonical_small_integer_states.insert(state);
       }
     }
+    if (std::all_of(found->second.begin(), found->second.end(), [&](std::size_t state) {
+          const auto& fact = cache.at(Key{state, 0});
+          return fact.grounded && fact.nonnegative_word;
+        })) result.nonnegative_words_before.insert(item);
     Range range;
     bool first = true;
     for (const auto state : found->second) {
@@ -1302,11 +1346,14 @@ static PostLayoutNumericRangeProof prove_numeric_ranges_on_graph(
     if (range)
       result.x_before.emplace(item, *range);
     if (result.exhausted) {
+      result.stack_before_state.clear();
       result.x_before.clear();
       result.x_before_state.clear();
       result.canonical_small_integer_states.clear();
       result.canonical_memory_load_states.clear();
       result.unreachable_states.clear();
+      result.nonnegative_words_before.clear();
+      result.nonnegative_words_before_state.clear();
       break;
     }
   }
@@ -1350,6 +1397,10 @@ PostLayoutNumericRangeProof prove_post_layout_numeric_ranges(
       // Both proofs are must bounds; their intersection is the stronger fact.
       if (!refined.exhausted) {
         result.unreachable_states.insert(refined.unreachable_states.begin(),refined.unreachable_states.end());
+        result.nonnegative_words_before.insert(refined.nonnegative_words_before.begin(),
+            refined.nonnegative_words_before.end());
+        result.nonnegative_words_before_state.insert(refined.nonnegative_words_before_state.begin(),
+            refined.nonnegative_words_before_state.end());
         result.canonical_memory_load_states.insert(refined.canonical_memory_load_states.begin(),
             refined.canonical_memory_load_states.end());
         result.canonical_small_integer_states.insert(refined.canonical_small_integer_states.begin(),
@@ -1394,9 +1445,36 @@ PostLayoutNumericRangeProof prove_post_layout_numeric_ranges(
   result.work += bounded.work;
   // The extension is optional. Exhaustion cannot invalidate already converged
   // ordinary facts, and no partial bounded-product fact is ever exported.
-  if (!bounded.exhausted)
+  if (!bounded.exhausted) {
     result.x_before.insert(bounded.x_before.begin(), bounded.x_before.end());
+    result.nonnegative_words_before.insert(bounded.nonnegative_words_before.begin(),
+        bounded.nonnegative_words_before.end());
+  }
   return result;
+}
+
+PostLayoutNumericRangeProof prove_post_layout_stack_numeric_values(
+    const std::vector<MachineItem>& items,
+    const AuthoritativePostLayoutControlFlow& flow,
+    const std::vector<bool>& automatic_entry_lift,
+    const std::vector<std::size_t>& requested_items,
+    const std::vector<PreloadReport>* preloads, std::size_t maximum_work,
+    NumericRangeInputPolicy input_policy) {
+  return prove_numeric_ranges_on_graph(items, flow, automatic_entry_lift,
+      requested_items, preloads, maximum_work, input_policy, nullptr, nullptr,
+      nullptr, nullptr, true);
+}
+
+std::optional<OrdinaryNumericRange> bound_ordinary_unary(
+    int opcode, const OrdinaryNumericRange& input) {
+  if (!bounded(input.lower,input.upper,input.integral)) return std::nullopt;
+  return unary(opcode, input);
+}
+std::optional<OrdinaryNumericRange> bound_ordinary_binary(
+    int opcode, const OrdinaryNumericRange& y, const OrdinaryNumericRange& x) {
+  if (!bounded(y.lower,y.upper,y.integral) || !bounded(x.lower,x.upper,x.integral))
+    return std::nullopt;
+  return binary(opcode, y, x);
 }
 
 } // namespace mkpro::core

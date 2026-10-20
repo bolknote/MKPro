@@ -1661,6 +1661,65 @@ void finite_return_selector_orbits(){
 }
 
 
+
+void final_root_return_composition_contracts(){
+  for(bool observed:{false,true}){
+    MachineEmitter e;e.emit_op(0x52);e.emit_op(0x68);
+    e.emit_jump(0x53,"real formal window","return-window");e.items.back().formal_opcode=0xf1;
+    e.emit_jump(0x51,"main continuation","return-main");
+    while(cells(e.items)<39)e.emit_op(0x54);
+    e.emit_label("return-window");e.emit_op(0x22);
+    while(cells(e.items)<48)e.emit_op(0x54);e.emit_op(0x52);e.emit_op(0x54);
+    e.emit_label("return-main");e.emit_op(0x68);
+    e.emit_jump(0x53,"observed pure call","return-quantize");e.emit_op(0x4b);
+    e.emit_jump(0x53,"possibly ignored return","return-work");
+    if(observed)e.emit_op(0x4c);
+    for(int i=0;i<4;++i)e.emit_op(0x69);
+    e.emit_op(0x10);e.emit_op(0x0f);e.emit_op(0x46);
+    e.emit_stop(StopDisposition::Terminal);e.items.back().roles.push_back(kTypedDisplayObservationRole);
+    e.emit_label("return-work");e.emit_op(0x68);e.emit_op(0x35);
+    e.emit_jump(0x5e,"addressed return","return-done");e.emit_op(0x35);
+    e.emit_label("return-done");e.emit_op(0x52);
+    e.emit_label("return-quantize");e.emit_op(0x34);e.emit_op(4);e.emit_op(0x10);e.emit_op(0x52);
+    while(cells(e.items)<130)e.emit_op(0x54);
+    CompileOptions options;options.analysis=true;
+    const std::vector<PreloadReport> words{{.register_name="8",.value="0.25"},
+        {.register_name="9",.value="23"}};
+    const auto edges=contextual_copy_transport_layout_transactions({e.items,words,{}},options);
+    bool tested=false;
+    for(const auto& edge:edges){
+      const bool composed=std::any_of(edge.node.optimizations.begin(),edge.node.optimizations.end(),
+          [](const auto& report){return report.name=="joint-quantized-return-composition";});
+      if(!composed)continue;
+      require(!observed,"an actually observed return cannot be completed by a different value");
+      require(cells(edge.node.items)<130,"the production entry point must export a smaller closed artifact");
+      const auto official=[](const auto& items){
+        PostLayoutControlFlowOptions control;control.empty_return_target=1;
+        const auto flow=build_post_layout_control_flow(items,control);
+        require(flow.proved,"the composed root retains its exact hardware CFG");
+        for(const auto& state:flow.execution_states)
+          require(state.address<=104,"the ROM fixture's entire rooted code lies in stock memory");
+        std::map<std::string,int> labels;int pc=0;
+        for(const auto& item:items)if(item.kind==MachineItemKind::Label)labels[item.name]=pc;else ++pc;
+        std::vector<MachineItem> window;pc=0;
+        for(auto item:items){
+          if(item.kind==MachineItemKind::Label){if(pc<105)window.push_back(std::move(item));continue;}
+          if(pc++>=105)continue;
+          if(item.kind==MachineItemKind::Address)
+            if(const auto* label=std::get_if<std::string>(&item.target))item.target=labels.at(*label);
+          window.push_back(std::move(item));
+        }
+        return window;
+      };
+      require(observe({official(e.items),words,{}},-1)==
+          observe({official(edge.node.items),edge.node.preloads,{}},-1),
+          "real F1 wrap, addressed returns, all registers, full stack, X1 and decimal shadow agree in ROM");
+      tested=true;
+    }
+    require(tested!=observed,"late composition is connected to production and still rejects live X");
+  }
+}
+
 void quantized_pure_return_completions(){
   for(int kind=0;kind<6;++kind)for(const char* input:{"0","0.25","1"}){
     MachineEmitter e;e.emit_op(0x52);e.emit_label("main");
@@ -1692,6 +1751,61 @@ void quantized_pure_return_completions(){
     }
     require(passes::contextual_pure_return_completion_candidates(ops,{options},
         {.maximum_work=1,.runtime_preloads=&words}).empty(),"partial totality/range proofs cannot publish return completion");
+  }
+}
+
+void total_return_decimal_boundary_facts(){
+  // Totality is separate from dead-state equality. Check exponent extremes,
+  // underflow, both signs and fractional exponents against the stock ROM.
+  for(const char* bank:{"0","23","-23","1E-99","-1E-99","9.9999999E99","-9.9999999E99"})
+  for(const char* exponent:{"0","0.25","1"}){
+    emulator::MK61 calc;
+    require(calc.load_program({0x68,0x15,0x13,0x35,0x6e,0x11,0x22,0x10,0x4a,1,0x47,0x50}).diagnostics.empty(),
+        "decimal totality fact uses stock instructions");
+    calc.set_register("8",exponent);calc.set_register("e","0.41200076");
+    calc.set_register("7","2");
+    for(const char* slot:{"X","Y","Z","T"})calc.set_register(slot,bank);
+    calc.press_sequence({"В/О","С/П"});
+    require(calc.run_until_stable(2000,8).stopped && calc.read_register("7")=="1,",
+        "scaled fraction, bounded offset, square and small addition reach the real terminal, not an error stop");
+  }
+}
+
+void total_readonly_return_completions(){
+  for(int kind=0;kind<9;++kind)for(const char* input:{"0","0.25","1"}){
+    MachineEmitter e;e.emit_op(0x52);e.emit_label("main");
+    for(int i=0;i<4;++i)e.emit_op(0x69);e.emit_op(0x68);
+    e.emit_jump(0x53,"existing observed scalar call","scalar-total");e.emit_op(0x4b);
+    if(kind==4){e.emit_number("0.5");e.emit_op(0x4e);}
+    for(int i=0;i<4;++i)e.emit_op(0x69);
+    e.emit_jump(0x53,"ignored readonly return","scalar-work");
+    if(kind==1)e.emit_op(0x4c);
+    if(kind==2){e.emit_op(0x0f);e.emit_op(0x4c);}
+    for(int i=0;i<4;++i)e.emit_op(0x69);e.emit_op(0x10);e.emit_op(0x0f);e.emit_op(0x46);
+    e.emit_stop(StopDisposition::Terminal);e.items.back().roles.push_back(kTypedDisplayObservationRole);
+    e.emit_label("scalar-work");
+    if(kind==7){e.emit_stop(StopDisposition::Resumable);e.items.back().roles.clear();}
+    e.emit_op(0x68);e.emit_op(0x35);e.emit_op(0x52);
+    e.emit_label("scalar-total");e.emit_op(0x15);
+    if(kind==3)e.emit_op(0);
+    e.emit_op(0x13);if(kind==6)e.items.back().raw=true;
+    e.emit_op(0x35);e.emit_op(0x6e);e.emit_op(0x11);e.emit_op(0x22);e.emit_op(0x10);e.emit_op(0x52);
+    std::vector<PreloadReport> words{{.register_name="8",.value=input},
+        {.register_name="9",.value="23"},{.register_name="e",.value=kind==8?"DE-2":"0.41200076"}};
+    if(kind==5)words.erase(words.begin());
+    const auto ops=raise_machine_to_ir(e.items);CompileOptions options;
+    const auto candidates=passes::contextual_total_return_completion_candidates(ops,{options},
+        {.maximum_work=200000,.maximum_candidates=4,.maximum_copy_sites=8,.runtime_preloads=&words});
+    require(!candidates.empty()==(kind==0),
+        "readonly completion needs total arithmetic, immutable decimal words and dead stack/X1/X2; raw, mutable, unknown and observable cases reject");
+    for(const auto& candidate:candidates){
+      const auto image=lower_ir_to_machine(candidate.transformation.ops);
+      require(cells(image)==cells(e.items)-1,"total readonly completion removes one actual return");
+      require(observe({e.items,words,{}},-1)==observe({image,words,{}},-1),
+          "ROM preserves existing scalar results, every register, later X1 reads and full final stack");
+    }
+    require(passes::contextual_total_return_completion_candidates(ops,{options},
+        {.maximum_work=1,.runtime_preloads=&words}).empty(),"partial totality proofs cannot publish a completion");
   }
 }
 
@@ -1998,7 +2112,8 @@ void data_and_rom(){
   fresh_literal_producer_proof();
   typed_reply_web_transport();
   memory_cursor_web_domains();
-  quantized_pure_return_completions();
+  final_root_return_composition_contracts();quantized_pure_return_completions();
+  total_return_decimal_boundary_facts();total_readonly_return_completions();
   finite_return_selector_orbits();
   predicate_qualified_store_identity();
   guarded_context_word_identity();
@@ -2104,4 +2219,3 @@ void pending(){
 }
 int main(int argc,char** argv){try{if(argc>1 && std::string(argv[1])=="--pending")pending();else data_and_rom();return 0;}
 catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}}
-

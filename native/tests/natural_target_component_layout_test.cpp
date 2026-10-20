@@ -900,6 +900,101 @@ bool reason_contains(const core::NaturalTargetComponentLayoutPlan& plan,
 
 void natural_target_component_layout_is_generic_and_proof_gated() {
 
+  const auto tail_fixture = [] {
+    Fixture f;
+    const auto indirect = [&](int code,const std::string& target){
+      f.items.push_back(op(code));
+      f.items.back().indirect_flow_targets=std::vector<IrTarget>{target};
+    };
+    const auto padding = [&](int count){
+      for(int n=1;n<count;++n)f.items.push_back(op(0x54));
+      f.items.push_back(stop());
+    };
+    f.items.push_back(op(0x61));f.items.push_back(op(0x62));
+    indirect(0x8a,"tail_alpha");padding(9);
+    f.items.push_back(MachineItem::label("tail_beta"));f.items.push_back(op(0x62));
+    f.items.push_back(MachineItem::label("unreferenced_tail_note"));indirect(0x8c,"tail_gamma");
+    padding(1);padding(3);f.items.push_back(MachineItem::label("tail_alpha"));
+    indirect(0xab,"tail_beta");f.items.push_back(stop());padding(2);
+    f.items.push_back(MachineItem::label("tail_gamma"));f.items.push_back(op(0x22));f.items.push_back(op(0x52));
+    f.preloads={{.register_name="1",.value="3"},{.register_name="2",.value="5"},
+      {.register_name="a",.value="18"},{.register_name="b",.value="12"},{.register_name="c",.value="22"}};
+    return f;
+  };
+  const auto tail_observe=[](const auto& items,const auto& preloads){
+    emulator::MK61 calc;
+    const auto setup=core::emit::lowering::compile_setup_program_with_preloads({},{},preloads,CompileOptions{});
+    std::vector<int> bytes;for(const auto& step:setup.steps)bytes.push_back(step.opcode);
+    require(calc.load_program(bytes).diagnostics.empty(),"tail setup loads in stock ROM");
+    calc.press_sequence({"В/О","С/П"});require(calc.run_until_stable(5000,8).stopped,"tail setup completes");
+    const auto program=resolve_machine_items(items);
+    require(program.diagnostics.empty(),"tail has final official operands");
+    bytes.clear();for(const auto& step:program.steps)bytes.push_back(step.opcode);
+    require(calc.load_program(bytes).diagnostics.empty(),"tail program fits stock memory");
+    for(const auto& [name,value]:std::map<std::string,std::string>{
+        {"X","17.5"},{"Y","3"},{"Z","4"},{"T","5"},{"X1","-2"}})calc.set_register(name,value);
+    std::vector<std::string> values;
+    for(int invocation=0;invocation<2;++invocation){
+      calc.press_sequence({"В/О","С/П"});
+      require(calc.run_until_stable(5000,8).stopped,"tail returns on repeated invocations");
+      for(const char* name:{"X","Y","Z","T","X1","0","1","2","3","4","5","6","7","8","9","a","b","d","e"})
+        values.push_back(calc.read_register(name));
+      // Rc is the intentionally changed private address, not a data output.
+      calc.press(".");values.push_back(calc.display_text(true));
+    }
+    return values;
+  };
+  for(const int blocked:{0,1,2,3}){
+    auto input=tail_fixture();core::NaturalTargetComponentLayoutOptions options;
+    options.allow_standalone_fallthrough_jump_fold=true;options.isolate_stable_tail_folds=true;
+    options.allow_unreferenced_jump_labels=blocked!=2;options.allow_size_neutral_absolute_layout=true;
+    options.required_absolute_targets={{item_at_address(input.items,18),18},{item_at_address(input.items,12),12}};
+    if(blocked==1)options.required_absolute_targets.push_back({item_at_address(input.items,22),22});
+    if(blocked==3)input.items[item_at_address(input.items,13)].raw=true;
+    const auto control=flow(input);
+    const auto changed=core::optimize_natural_target_component_layout(input.items,input.preloads,control,options);
+    if(blocked){require(changed.removed_cells==0&&changed.plan.fallthrough_jump_folds==0,
+      "fixed targets, protected labels and raw jumps prohibit isolated erasure");continue;}
+    auto legacy=options;legacy.isolate_stable_tail_folds=false;
+    const auto historical=core::optimize_natural_target_component_layout(input.items,input.preloads,control,legacy);
+    require(historical.removed_cells==0&&historical.plan.fallthrough_jump_folds==0,
+      "historical/all-tail search remains independent of the new alternatives");
+    require(changed.plan.proved&&changed.plan.final_artifact_proved&&changed.plan.final_control_flow.proved&&
+      changed.plan.fallthrough_jump_folds==1&&cell_count(changed.items)==23,
+      "a valid indirect stitch survives an earlier geometrically conflicting stitch");
+    require(tail_observe(input.items,input.preloads)==tail_observe(changed.items,changed.preloads),
+      "isolated tail preserves all data registers, full stack, X1, entry shadow and repeated returns");
+    auto exhausted=options;exhausted.maximum_subset_states=1;
+    require(core::optimize_natural_target_component_layout(input.items,input.preloads,control,exhausted).applied==0,
+      "partial placement cannot export a tail certificate");
+  }
+  {
+    Fixture input;input.items.push_back(op(0xac));
+    input.items.back().indirect_flow_targets=std::vector<IrTarget>{std::string{"official_tail"}};
+    input.items.push_back(op(0x53));input.items.push_back(MachineItem::address("official_pinned"));input.items.push_back(stop());
+    for(int n=0;n<84;++n)input.items.push_back(op(0x54));
+    input.items.push_back(MachineItem::label("official_pinned"));
+    for(int n=0;n<12;++n)input.items.push_back(op(0x61));
+    input.items.push_back(op(0x8c));input.items.back().indirect_flow_targets=std::vector<IrTarget>{std::string{"official_tail"}};
+    input.items.push_back(MachineItem::label("official_tail"));input.items.push_back(op(0x43));
+    input.items.push_back(op(0x52));input.items.push_back(stop());
+    input.preloads={{.register_name="1",.value="7"},{.register_name="c",.value="A1"}};
+    core::NaturalTargetComponentLayoutOptions options;
+    options.allow_standalone_fallthrough_jump_fold=true;options.isolate_stable_tail_folds=true;
+    options.allow_size_neutral_absolute_layout=true;options.required_absolute_targets={{item_at_address(input.items,88),88}};
+    options.constrain_rebindable_selector_targets=true;options.maximum_bounded_target_address=104;
+    const auto control=flow(input);
+    const auto changed=core::optimize_natural_target_component_layout(input.items,input.preloads,control,options);
+    require(changed.plan.final_artifact_proved&&changed.plan.fallthrough_jump_folds==1&&cell_count(changed.items)==103,
+      "official BCD domains admit a real 101-to-100 tail relocation");
+    const auto owner=std::find_if(changed.preloads.begin(),changed.preloads.end(),[](const auto& word){return word.register_name=="c";});
+    require(owner!=changed.preloads.end()&&owner->value=="A0","physical 100 must be delivered as A0, not decimal 100");
+    require(tail_observe(input.items,input.preloads)==tail_observe(changed.items,changed.preloads),
+      "BCD rebinding preserves generated setup, nested ROM calls, all data and entry shadow");
+    require(!core::rebind_stable_preloaded_indirect_flow_selector(input.items,input.preloads.back(),control,101,105,
+      AddressSpaceModel::Standard,&input.preloads),"stock official domains never reinterpret 105 as extra storage");
+  }
+
   for (const bool nested : {false, true})
   for (const auto& [counter, helper] : {
            std::pair{0xeb, std::string{"side_leaf_alpha"}},

@@ -314,6 +314,32 @@ IndirectAddressEvaluation r0_fractional_result(std::string selector,
 
 }  // namespace
 
+std::optional<std::string> normalized_finite_ordinary_word(const std::string& spelling){
+  std::string word=spelling;bool negative=false;
+  if(!word.empty()&&word.front()=='-'){negative=true;word.erase(0,1);}
+  const auto exponent_at=word.find_first_of("eE");int exponent=0;
+  if(exponent_at!=std::string::npos){
+    auto suffix=word.substr(exponent_at+1U);word.resize(exponent_at);bool minus=false;
+    if(!suffix.empty()&&(suffix.front()=='-'||suffix.front()=='+')){minus=suffix.front()=='-';suffix.erase(0,1);}
+    if(suffix.empty()||suffix.size()>2U)return std::nullopt;
+    for(const char c:suffix){if(c<'0'||c>'9')return std::nullopt;exponent=exponent*10+c-'0';}
+    if(minus)exponent=-exponent;
+  }
+  std::string digits;std::optional<int> point;
+  for(const char c:word){
+    if(c=='.'){if(point)return std::nullopt;point=static_cast<int>(digits.size());}
+    else if(c>='0'&&c<='9')digits+=c;else return std::nullopt;
+  }
+  if(digits.empty())return std::nullopt;
+  const int integer_digits=point.value_or(static_cast<int>(digits.size()));
+  const auto first=digits.find_first_not_of('0');if(first==std::string::npos)return std::nullopt;
+  exponent+=integer_digits-static_cast<int>(first)-1;digits.erase(0,first);
+  while(digits.size()>1U&&digits.back()=='0')digits.pop_back();
+  if(digits.size()>8U||exponent<-99||exponent>99)return std::nullopt;
+  digits.append(8U-digits.size(),'0');
+  return std::string(negative?"-":"")+digits.substr(0,1)+"."+digits.substr(1)+"e"+std::to_string(exponent);
+}
+
 IndirectSelectorMutation indirect_selector_mutation(int register_index_value) {
   if (register_index_value <= 3)
     return IndirectSelectorMutation::PreDecrement;
@@ -406,6 +432,12 @@ bool indirect_writeback_preserves_literal_word(
     const IndirectAddressEvaluation& evaluation, std::string_view original_value) {
   if (!indirect_writeback_preserves_literal_value(evaluation, original_value))
     return false;
+  // The selector model retains all eight raw nibbles, sign and order in
+  // this no-shift family. Compare complete decoded words, never numbers.
+  if (const auto raw = decode_raw_single_hex_word(original_value)) {
+    const auto after = evaluation.result_value ? decode_raw_single_hex_word(*evaluation.result_value) : std::nullopt;
+    return raw->exponent >= -3 && after && raw->canonical_word == after->canonical_word;
+  }
   const std::string spelling = lower_ascii(trim_ascii(std::string(original_value)));
   if (spelling.starts_with("0x"))
     return false;

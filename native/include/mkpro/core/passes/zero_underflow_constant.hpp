@@ -8,6 +8,9 @@
 #include "mkpro/core/detail/cell_provenance.hpp"
 
 #include <algorithm>
+#include <array>
+#include <set>
+#include <string_view>
 #include <deque>
 #include <map>
 #include <optional>
@@ -26,8 +29,13 @@ namespace mkpro::core::passes {
 inline PassResult rematerialize_zero_underflow_constant(
     const std::vector<IrOp>& ops,
     const std::map<std::string, std::string>& immutable_preloads,
-    AddressSpaceModel model = AddressSpaceModel::Standard) {
+    AddressSpaceModel model = AddressSpaceModel::Standard,
+    const AuthoritativePostLayoutControlFlow* contextual_flow = nullptr) {
   PassResult result{.ops = ops};
+  if (contextual_flow && (!contextual_flow->proved ||
+      contextual_flow->execution_states.size() != contextual_flow->execution_successors.size() ||
+      contextual_flow->execution_states.size() != contextual_flow->execution_edges.size()))
+    return result;
   if (ops.size() < 3 || immutable_preloads.empty())
     return result;
   for (const auto& op : ops)
@@ -55,9 +63,22 @@ inline PassResult rematerialize_zero_underflow_constant(
     if (value == immutable_preloads.end() || value->second != "-99999999")
       continue;
     bool immutable = true;
+    std::size_t machine_item = 0;
     for (const auto& op : ops) {
       const auto effects = register_effects(op);
-      if (effects.may_define_any_register ||
+      bool unknown_write = effects.may_define_any_register;
+      // The complete exact CFG, not a syntactic indirect opcode, owns aliases.
+      // R7..Re constant homes cannot be a destructive low selector themselves.
+      if (unknown_write && contextual_flow && op.kind == IrKind::IndirectStore) {
+        const auto aliases = contextual_flow->indirect_memory_targets.find(machine_item);
+        if (aliases != contextual_flow->indirect_memory_targets.end() &&
+            std::find(aliases->second.begin(), aliases->second.end(),
+                recall.opcode - 0x60) == aliases->second.end())
+          unknown_write = false;
+      }
+      machine_item += op.kind == IrKind::Label ? 1U :
+          static_cast<std::size_t>(cells_per_op(op));
+      if (unknown_write ||
           effects.must_defs.contains(recall.register_name) ||
           effects.may_defs.contains(recall.register_name)) {
         immutable = false;
@@ -72,7 +93,8 @@ inline PassResult rematerialize_zero_underflow_constant(
 
   PostLayoutControlFlowOptions options;
   options.address_space_model = model;
-  const auto flow = build_post_layout_control_flow(lower_ir_to_machine(ops), options);
+  const auto flow = contextual_flow ? *contextual_flow
+      : build_post_layout_control_flow(lower_ir_to_machine(ops), options);
   if (!flow.proved || flow.execution_states.empty())
     return result;
   std::map<int, std::size_t> instruction_at;
@@ -99,9 +121,10 @@ inline PassResult rematerialize_zero_underflow_constant(
       predecessors[edge.target_state].push_back({state, edge.kind});
 
   const auto external = [&](std::size_t state) {
-    const int state_address = flow.execution_states[state].address;
     return std::any_of(flow.external_entries.begin(), flow.external_entries.end(),
-        [&](const auto& entry) { return entry.entry.address == state_address; });
+        [&](const auto& entry) {
+          return post_layout_execution_matches_external_entry(flow.execution_states[state], entry);
+        });
   };
 
   // Must information about the delivered X representation, not only its
@@ -165,6 +188,13 @@ inline PassResult rematerialize_zero_underflow_constant(
   // resumable prompts; unknown memory effects fail closed. A cycle with no
   // read or observation of R3 is harmless, not an excuse to guess a loop count.
   const auto r3_unobserved_until_overwrite = [&](std::size_t start) {
+    if (contextual_flow) {
+      LivenessOptions lifetime;
+      lifetime.discover_toggle_projection_signs = true;
+      const GuardedOldWordQuery query{sites[start], "3"};
+      const auto dead = analyze_dead_old_words(ops, flow, {query}, lifetime, 400000U);
+      return !dead.exhausted && dead.dead_words.contains(query);
+    }
     std::vector<bool> visited(sites.size(), false);
     std::vector<std::size_t> work{start};
     while (!work.empty()) {
@@ -188,8 +218,9 @@ inline PassResult rematerialize_zero_underflow_constant(
   // numeric/formal flow ownership instead of shifting an encoded address by
   // guesswork. Late selector values are still independently rebound and
   // checked by the compiler's final-artifact pipeline.
-  const bool growth_relocatable = std::all_of(ops.begin(), ops.end(), [](const IrOp& op) {
-    if (op.kind == IrKind::OrphanAddress || op.target_meta.formal_opcode.has_value() ||
+  const bool growth_relocatable = std::all_of(ops.begin(), ops.end(), [&](const IrOp& op) {
+    if (op.kind == IrKind::OrphanAddress ||
+        (op.target_meta.formal_opcode.has_value() && !contextual_flow) ||
         op.meta.indirect_flow_formal_targets.has_value())
       return false;
     if ((op.kind == IrKind::Jump || op.kind == IrKind::CondJump ||
@@ -208,6 +239,18 @@ inline PassResult rematerialize_zero_underflow_constant(
     bool reached = false;
     const bool scratch = ops[candidate + 1].register_name != "3";
     bool proved = !scratch || growth_relocatable;
+    if (contextual_flow && std::any_of(ops.begin(), ops.end(), [](const auto& op) {
+          return op.target_meta.formal_opcode.has_value();
+        })) {
+      for (std::size_t state = 0; state < sites.size(); ++state) {
+        if (!flow.execution_states[state].formal_opcode) continue;
+        // No rewritten opcode may be fetched by a formal counter, and no
+        // added scratch store may shift a later formal instruction. The
+        // independently closed layout retains these exact hardware contexts.
+        if (sites[state] == candidate || sites[state] == candidate + 1U ||
+            (scratch && sites[state] > candidate)) proved = false;
+      }
+    }
     for (std::size_t state = 0; state < sites.size(); ++state) {
       if (sites[state] == candidate) {
         reached = true;
@@ -260,6 +303,131 @@ inline PassResult rematerialize_zero_underflow_constant(
         "proved all call/return contexts, scratch liveness and exclusive pair entry. "
         "Released data uses may be rebound only by the independent final-layout proof."});
   return result;
+}
+
+// A direct-only physical home permutation is a representation change, not a
+// same-register value claim. Preserve logical words by a bijection, then use
+// the existing exact D3 materialization certificate in the permuted program.
+// This neutral enabling transaction may release the old pool's data role.
+inline PassResult permuted_zero_underflow_constant(
+    const std::vector<IrOp>& ops, const std::vector<PreloadReport>& preloads,
+    const PostLayoutControlFlowOptions& control, std::size_t maximum_work = 400000U) {
+  const auto unchanged = [&] { return PassResult{.ops=ops}; };
+  std::map<std::string, const PreloadReport*> owners;
+  std::map<std::string, std::string> words;
+  for (const auto& word : preloads) {
+    if (!owners.emplace(word.register_name, &word).second) return unchanged();
+    if (!word.setup_expression && !word.setup_expression_text && !word.setup_target_name)
+      words.emplace(word.register_name, word.value);
+  }
+  // An existing R3 initializer remains owned. This lane never moves it by
+  // silently overwriting a reserved entry value or changing a data constant.
+  if (owners.contains("3")) return unchanged();
+  std::set<int> protocols;
+  for (const auto& op : ops)
+    if (op.meta.manual_interaction &&
+        op.meta.manual_interaction->kind == ManualInteractionAnchorKind::PromptStop &&
+        std::find(op.meta.roles.begin(),op.meta.roles.end(),kTypedDisplayObservationRole)!=op.meta.roles.end())
+      protocols.insert(op.meta.manual_interaction->protocol_id);
+  for (const auto& op : ops) {
+    if (op.meta.raw || op.meta.logical_register_analysis || op.kind == IrKind::OrphanAddress ||
+        op.opcode == 0x4f || op.opcode == 0x6f) return unchanged();
+    if (op.kind == IrKind::Stop &&
+        std::find(op.meta.roles.begin(),op.meta.roles.end(),kTypedDisplayObservationRole)==op.meta.roles.end())
+      return unchanged();
+    if (op.meta.manual_interaction && !protocols.contains(op.meta.manual_interaction->protocol_id))
+      return unchanged();
+  }
+  const auto items = lower_ir_to_machine(ops);
+  const auto flow = build_post_layout_control_flow(items,control);
+  const auto entries = resolve_post_layout_external_entry_contexts(flow);
+  if (!flow.proved || !entries) return unchanged();
+  const auto deaths = prove_post_layout_register_deadness(ops,flow,maximum_work);
+  if (!deaths.proved) return unchanged();
+  std::vector<std::size_t> mains;
+  for (std::size_t state=0;state<entries->main.size();++state) if(entries->main[state]) {
+    if (!deaths.before_state[state].contains("3")) return unchanged();
+    mains.push_back(state);
+  }
+  if (mains.empty()) return unchanged();
+  std::vector<std::size_t> machine;
+  std::size_t at=0;
+  for (const auto& op:ops) {
+    machine.push_back(at);
+    at += op.kind==IrKind::Label?1U:static_cast<std::size_t>(cells_per_op(op));
+  }
+  for (std::size_t read=0;read+1U<ops.size();++read) {
+    const auto& pooled=ops[read]; const auto& destination=ops[read+1U];
+    if (pooled.kind!=IrKind::Recall || destination.kind!=IrKind::Store ||
+        destination.register_name=="3" || !words.contains(pooled.register_name) ||
+        words.at(pooled.register_name)!="-99999999") continue;
+    const auto name=destination.register_name;
+    if(name.size()!=1U)continue;
+    const auto digit=std::string_view{"0123456789abcde"}.find(name[0]);
+    if(digit==std::string_view::npos || digit==3U)continue;
+    const int other=static_cast<int>(digit);
+    bool safe=true;
+    for(std::size_t i=0;i<ops.size();++i) {
+      const auto& op=ops[i]; const int family=op.opcode&0xf0;
+      if(family>=0x70 && family<=0xe0 && ((op.opcode&15)==3 || (op.opcode&15)==other))safe=false;
+      constexpr std::array<int,4> loops{0x5d,0x5b,0x58,0x5a};
+      if(op.kind==IrKind::Loop && (op.counter=="3" || op.counter==name))safe=false;
+      if(op.opcode==loops[3] || (other<4 && op.opcode==loops[static_cast<std::size_t>(other)]))safe=false;
+      if(family==0xb0 || family==0xd0) {
+        const auto aliases=flow.indirect_memory_targets.find(machine[i]);
+        if(aliases==flow.indirect_memory_targets.end() ||
+            std::find(aliases->second.begin(),aliases->second.end(),3)!=aliases->second.end() ||
+            std::find(aliases->second.begin(),aliases->second.end(),other)!=aliases->second.end())safe=false;
+      }
+    }
+    if(!safe)continue;
+    // Explicit hardware frames remain byte-identical, even though unrelated
+    // direct homes outside them may be permuted at equal instruction width.
+    if(std::any_of(ops.begin(),ops.end(),[](const auto& op){return op.target_meta.formal_opcode.has_value();}))
+      for(const auto& state:flow.execution_states) if(state.formal_opcode) {
+        const auto& item=items[state.item_index];
+        if(item.kind==MachineItemKind::Op &&
+            (item.opcode==0x43 || item.opcode==0x63 ||
+             item.opcode==0x40+other || item.opcode==0x60+other))safe=false;
+      }
+    if(!safe)continue;
+    std::vector<PreloadReport> added;
+    if(const auto owner=owners.find(name);owner!=owners.end()) {
+      const auto& old=*owner->second;
+      if(old.setup_expression || old.setup_expression_text || old.setup_target_name ||
+          old.counts_against_program || old.retunable_natural_fractional_prefix)continue;
+      // Re-emitting setup can change every hidden stack slot, independently
+      // of the register renaming theorem. Prove all of those effects dead.
+      if(!prove_post_layout_stack_state_equality(items,flow,mains,
+          {{false,false,false,false},false,false}))continue;
+      auto copy=old;copy.register_name="3";added.push_back(std::move(copy));
+    } else {
+      for(const auto state:mains)if(!deaths.before_state[state].contains(name))safe=false;
+      if(!safe)continue;
+    }
+    auto renamed=ops;
+    for(auto& op:renamed) {
+      if(op.kind!=IrKind::Store && op.kind!=IrKind::Recall)continue;
+      if(op.register_name!="3" && op.register_name!=name)continue;
+      op.register_name=op.register_name=="3"?name:"3";
+      const int index=op.register_name=="3"?3:other;
+      op.opcode=(op.kind==IrKind::Store?0x40:0x60)+index;
+      op.meta.mnemonic=opcode_by_code(op.opcode).name;
+    }
+    const auto renamed_flow=build_post_layout_control_flow(lower_ir_to_machine(renamed),control);
+    if(!renamed_flow.proved || renamed_flow.maximum_observed_return_depth!=flow.maximum_observed_return_depth)continue;
+    auto result=rematerialize_zero_underflow_constant(renamed,words,
+        control.address_space_model,&renamed_flow);
+    if(result.applied<=0)continue;
+    result.preloads=std::move(added);
+    result.optimizations.push_back({"direct-home-permutation-materialization",
+        "Permuted direct-only R3 and R"+name+" as a whole-program word bijection; "
+        "excluded loop/selector classes, all indirect aliases, public bank observations "
+        "and formal-frame byte changes. Proved dead unowned Main epochs and any added "
+        "setup stack/X1/X2 effects, then independently certified neutral D3 materialization."});
+    return result;
+  }
+  return unchanged();
 }
 
 // Conditional counterpart for a long literal exposed after allocation. The
