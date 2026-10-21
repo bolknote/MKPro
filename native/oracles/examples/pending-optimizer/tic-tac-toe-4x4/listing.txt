@@ -59,7 +59,7 @@
    55 |  0B  | /-/                     | negative exponent
    56 |  4D  | X→П d                   | setup Rd
    57 |  09  | 9                       |
-   58 |  01  | 1                       |
+   58 |  00  | 0                       |
    59 |  4C  | X→П c                   | setup Rc
    60 |  50  | С/П                     | setup complete
 
@@ -73,32 +73,32 @@
    04 | 43    | X→П 3                   | set x
    05 | AB    | К ПП b                  | expr cell_mask(x, y) stack entry; preloaded Rb=88888834 indirect-target=34 shifted-forward indirect flow
    06 | 11    | −                       | compare previous and updated state
-   07 | 7D    | К x≠0 d                 | previous/update comparison false branch; preloaded Rd=2.2600088E-1 indirect-target=88 shifted-forward indirect flow
-   08 | 53    | ПП                      | call function mark_lines_and_check
-   09 | A0    | A0                      |
-   10 | 04    | 4                       |
+   07 | 57    | F x≠0                   | previous/update comparison false branch
+   08 | 60    | 60                      |
+   09 | 53    | ПП                      | call function mark_lines_and_check
+   10 | 98    | 98                      |
    11 | 41    | X→П 1                   | set x
    12 | 04    | 4                       |
    13 | 42    | X→П 2                   | set y
    14 | 61    | П→X 1                   | stage helper stack argument x
    15 | 53    | ПП                      | expr cell_mask(x, y) stack entry
-   16 | EA    | EA                      | divergent side-space helper entry; divergent side-space helper entry; divergent side-space helper entry
+   16 | EA    | EA                      | divergent side-space helper entry; divergent side-space helper entry; divergent side-space helper entry; divergent side-space helper entry
    17 | 37    | К ∧                     | bit_and()
    18 | 35    | К {x}                   | frac()
-   19 | EC    | К x=0 c                 | false branch for ==; preloaded Rc=91 indirect-target=91 shifted-forward indirect flow
+   19 | EC    | К x=0 c                 | false branch for ==; preloaded Rc=90 indirect-target=90 shifted-forward indirect flow
    20 | 05 02 | 52                      | callee-hole selector-value=52 indirect-target=52
    22 | 53    | ПП                      | callee-hole charge-entry call; proof=__callee_hole_helper_0; selector=a; entry-repair=sunk-literal; proc call candidate_score
-   23 | A4    | A4                      |
+   23 | A2    | A2                      |
    24 | 68    | П→X 8                   | recall best_score
    25 | 36    | К max                   | max-assignment update
    26 | 48    | X→П 8                   | set best_score
    27 | 11    | −                       | max-assignment equality compare
-   28 | EC    | К x=0 c                 | false branch for max assignment equality; preloaded Rc=91 indirect-target=91 shifted-forward indirect flow
+   28 | EC    | К x=0 c                 | false branch for max assignment equality; preloaded Rc=90 indirect-target=90 shifted-forward indirect flow
    29 | 61    | П→X 1                   | recall x
    30 | 43    | X→П 3                   | set slot
    31 | 62    | П→X 2                   | recall y
    32 | 40    | X→П 0                   | set best_y
-   33 | 8C    | К БП c                  | preloaded Rc=91 indirect-target=91 shifted-forward indirect flow
+   33 | 8C    | К БП c                  | preloaded Rc=90 indirect-target=90 shifted-forward indirect flow
    34 | AE    | К ПП e                  | grid_norm shared helper; preloaded Re=4.1200076E-1 indirect-target=76 shifted-forward indirect flow
    35 | 42    | X→П 2                   | set y
    36 | 63    | П→X 3                   | recall x
@@ -113,9 +113,9 @@
    45 | 15    | F 10ˣ                   | pow10()
    46 | 34    | К [x]                   | int()
    47 | 10    | +                       | expr +
-   48 | 38    | К ∨                     | retained-operand update; shared official helper continuation; shared official helper continuation; shared official helper continuation
-   49 | 49    | X→П 9                   | set occupied; shared official helper continuation; shared official helper continuation; shared official helper continuation
-   50 | 40    | X→П 0                   | set slot; shared official helper continuation; shared official helper continuation; shared official helper continuation
+   48 | 38    | К ∨                     | retained-operand update; shared official helper continuation; shared official helper continuation; shared official helper continuation; shared official helper continuation
+   49 | 49    | X→П 9                   | set occupied; shared official helper continuation; shared official helper continuation; shared official helper continuation; shared official helper continuation
+   50 | 40    | X→П 0                   | set slot; shared official helper continuation; shared official helper continuation; shared official helper continuation; shared official helper continuation
    51 | 52    | В/О                     | expression helper return
    52 | 15    | F 10ˣ                   | packed_score accumulator helper pow10; callee-hole leaf entry __packed_score_accumulator; callee-hole call-origin=packed_score accumulator helper
    53 | 13    | ÷                       | packed_score accumulator helper divide
@@ -125,20 +125,20 @@
    57 | 22    | F x²                    | packed_score accumulator helper square
    58 | 10    | +                       | packed_score accumulator helper add
    59 | 52    | В/О                     | packed_score accumulator helper return
-   60 | 00    | 0                       | halt
-   61 | 50    | С/П                     | halt
-   62 | 15    | F 10ˣ                   | stack-carried packed digit pow10; callee-hole leaf entry __fn_mark_one; callee-hole call-origin=proc call mark_one
-   63 | 68    | П→X 8                   | recall best_score
-   64 | 01 00 | 10                      |
-   66 | 13    | ÷                       | expr /
-   67 | 12    | ×                       | stack-carried packed digit delta
-   68 | 10    | +                       | add stacked indexed value to packed digit delta
-   69 | B0    | К X→П 0                 | predecrement indexed packed digit update store through 0 lines; indirect-memory-targets=4,5,6,7
-   70 | 6B    | П→X b                   | preload const 88888834
-   71 | 37    | К ∧                     | cached expression operand К ∧
-   72 | 35    | К {x}                   | frac()
-   73 | 57    | F x≠0                   | false branch for !=
-   74 | 87    | 87                      |
+   60 | 43    | X→П 3                   |
+   61 | D3    | К П→X 3                 |
+   62 | 52    | БП                      | empty-stack loop return to physical 01
+   63 | 15    | F 10ˣ                   | stack-carried packed digit pow10; callee-hole leaf entry __fn_mark_one; callee-hole call-origin=proc call mark_one
+   64 | 68    | П→X 8                   | recall best_score
+   65 | 01 00 | 10                      |
+   67 | 13    | ÷                       | expr /
+   68 | 12    | ×                       | stack-carried packed digit delta
+   69 | 10    | +                       | add stacked indexed value to packed digit delta
+   70 | B0    | К X→П 0                 | predecrement indexed packed digit update store through 0 lines; indirect-memory-targets=4,5,6,7
+   71 | 6B    | П→X b                   | preload const 88888834
+   72 | 37    | К ∧                     | cached expression operand К ∧
+   73 | 35    | К {x}                   | frac()
+   74 | 7E    | К x≠0 e                 | false branch for !=; preloaded Re=4.1200076E-1 indirect-target=76 shifted-forward indirect flow
    75 | 43    | X→П 3                   | set display_x
    76 | 34    | К [x]                   | grid_norm integer part
    77 | 04    | 4                       | grid_norm width divisor
@@ -152,37 +152,35 @@
    85 | 04    | 4                       | grid_norm width divisor
    86 | 12    | ×                       | exact decimal signed remainder correction
    87 | 52    | В/О                     | grid_norm helper return
-   88 | 43    | X→П 3                   |
-   89 | D3    | К П→X 3                 |
-   90 | 52    | БП                      | empty-stack loop return to physical 01
-   91 | 58    | F L2                    | counted while y
-   92 | 14    | 14                      | counted while y
-   93 | 5B    | F L1                    | counted while x
-   94 | 12    | 12                      | counted while x
-   95 | 68    | П→X 8                   | recall best_score
-   96 | 59    | F x≥0                   | false branch for <
-   97 | 60    | 60                      | false branch for <
-   98 | 60    | П→X 0                   | recall best_y
-   99 | AB    | К ПП b                  | expr cell_mask(x, y) stack entry; preloaded Rb=88888834 indirect-target=34 indirect flow
-   A0 | 32    | К ЗН                    | shared unit argument normalization
-   A1 | 48    | X→П 8                   | set best_score from X parameter
-   A2 | 06 02 | 62                      | callee-hole selector-value=62 indirect-target=62
-   A4 | 4A    | X→П a                   | callee-hole charge-entry store; proof=__callee_hole_helper_0; selector=a; entry-repair=sunk-literal
-  >69 | 09 08 | 98                      |
-  >6B | 67    | П→X 7                   | preload indexed value lines_7 for mark_one
-  >6C | 61    | П→X 1                   | recall x
-  >6D | AA    | К ПП a                  | callee-hole indirect call; proof=__callee_hole_helper_0; leaf-targets=52:__packed_score_accumulator,62:__fn_mark_one
-  >6E | 66    | П→X 6                   | preload indexed value lines_6 for mark_one
-  >6F | 62    | П→X 2                   | recall y
-  >70 | AA    | К ПП a                  | callee-hole indirect call; proof=__callee_hole_helper_0; leaf-targets=52:__packed_score_accumulator,62:__fn_mark_one
-  >71 | 65    | П→X 5                   | preload indexed value lines_5 for mark_one
-  >72 | 62    | П→X 2                   | recall y
-  >73 | 53    | ПП                      | proc call return suffix gadget
-  >74 | @120  | @120                    | return suffix gadget target; logical address; requires final physical layout
-  >75 | 64    | П→X 4                   | preload indexed value lines_4 for mark_one
-  >76 | 62    | П→X 2                   | recall y
-  >77 | 0B    | /-/                     | sum/difference tail canonicalization
-  >78 | 61    | П→X 1                   | recall x
-  >79 | 10    | +                       | sum/difference tail canonicalization
-  >7A | AE    | К ПП e                  | call function normalize; preloaded Re=4.1200076E-1 indirect-target=76 indirect flow
-  >7B | 8A    | К БП a                  | callee-hole indirect call; proof=__callee_hole_helper_0; leaf-targets=52:__packed_score_accumulator,62:__fn_mark_one
+   88 | 00    | 0                       | halt
+   89 | 50    | С/П                     | halt
+   90 | 58    | F L2                    | counted while y
+   91 | 14    | 14                      | counted while y
+   92 | 5B    | F L1                    | counted while x
+   93 | 12    | 12                      | counted while x
+   94 | 68    | П→X 8                   | recall best_score
+   95 | 9D    | К x≥0 d                 | false branch for <; preloaded Rd=2.2600088E-1 indirect-target=88 indirect flow
+   96 | 60    | П→X 0                   | recall best_y
+   97 | AB    | К ПП b                  | expr cell_mask(x, y) stack entry; preloaded Rb=88888834 indirect-target=34 indirect flow
+   98 | 32    | К ЗН                    | shared unit argument normalization
+   99 | 48    | X→П 8                   | set best_score from X parameter
+   A0 | 06 03 | 63                      | callee-hole selector-value=63 indirect-target=63
+   A2 | 4A    | X→П a                   | callee-hole charge-entry store; proof=__callee_hole_helper_0; selector=a; entry-repair=sunk-literal
+   A3 | 09 08 | 98                      |
+  >69 | 67    | П→X 7                   | preload indexed value lines_7 for mark_one
+  >6A | 61    | П→X 1                   | recall x
+  >6B | AA    | К ПП a                  | callee-hole indirect call; proof=__callee_hole_helper_0; leaf-targets=52:__packed_score_accumulator,63:__fn_mark_one
+  >6C | 66    | П→X 6                   | preload indexed value lines_6 for mark_one
+  >6D | 62    | П→X 2                   | recall y
+  >6E | AA    | К ПП a                  | callee-hole indirect call; proof=__callee_hole_helper_0; leaf-targets=52:__packed_score_accumulator,63:__fn_mark_one
+  >6F | 65    | П→X 5                   | preload indexed value lines_5 for mark_one
+  >70 | 62    | П→X 2                   | recall y
+  >71 | 53    | ПП                      | proc call return suffix gadget
+  >72 | @118  | @118                    | return suffix gadget target; logical address; requires final physical layout
+  >73 | 64    | П→X 4                   | preload indexed value lines_4 for mark_one
+  >74 | 62    | П→X 2                   | recall y
+  >75 | 0B    | /-/                     | sum/difference tail canonicalization
+  >76 | 61    | П→X 1                   | recall x
+  >77 | 10    | +                       | sum/difference tail canonicalization
+  >78 | AE    | К ПП e                  | call function normalize; preloaded Re=4.1200076E-1 indirect-target=76 indirect flow
+  >79 | 8A    | К БП a                  | callee-hole indirect call; proof=__callee_hole_helper_0; leaf-targets=52:__packed_score_accumulator,63:__fn_mark_one

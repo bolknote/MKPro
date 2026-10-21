@@ -163,6 +163,10 @@ struct PostLayoutReturnCompletion {
   std::size_t old_return_item = 0;
   // New consecutive pure command items, including their final plain V/O.
   std::vector<std::size_t> body_items;
+  // Empty preserves the historical physical-fallthrough completion contract.
+  // Otherwise only these direct conditional target edges enter the existing
+  // pure body; other callers still reach the unchanged retained V/O.
+  std::vector<std::size_t> redirected_direct_branch_items = {};
 };
 
 struct PostLayoutExecutionRelocationOptions {
@@ -194,6 +198,10 @@ struct PostLayoutExecutionRelocationOptions {
   // External/manual entries, fetched operands and non-fallthrough contexts
   // remain ineligible. Composing deletions requires one proof per deletion.
   std::optional<std::size_t> erased_stack_producer_item;
+  // Separate control-only certificate for a data-proved fresh digit 1..9
+  // immediately followed by the unchanged direct store. This does not widen
+  // recall/Enter erasure or prove canonical word/stack/X1/X2 equivalence.
+  std::optional<std::size_t> erased_redundant_literal_item;
   // Separately data-certified direct transfers may be stutters in the rooted
   // control relation. Each maps to its retained fallthrough command. This is
   // NOT a memory/stack certificate; the caller owns those and entry-mode proof.

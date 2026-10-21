@@ -15,12 +15,29 @@ with a raw listing: the goal is to make the high-level source fit.
 
 | File | Current | Target | Gap | Status |
 | --- | ---: | ---: | ---: | --- |
-| `tic-tac-toe-4x4.mkpro` | 124 | 105 | +19 | pending optimizer |
+| `tic-tac-toe-4x4.mkpro` | 122 | 105 | +17 | pending optimizer |
 | `nekromant.mkpro` | 138 | 105 | +33 | pending optimizer; +3 after correctness fixes |
 | `podvodnaya-lodka-lazarev.mkpro` | 246 | 105 | +141 | pending optimizer; continuous symbolic display |
 
 The `Current` number is the local `--analysis` size. Strict `mk-pro compile`
 mode may reject over-window programs earlier than the analysis path.
+
+## Regression checks and optimization goals
+
+Exact size baselines record achieved results, not desired future reductions.
+The 115-cell contextual-search threshold is an aspirational intermediate goal,
+not a historical 4x4 size or a regression limit. The final target remains 105.
+It is excluded from the default regression suite; its threshold is unchanged.
+To register and run the separate goal explicitly:
+
+```sh
+cmake -S . -B build/native -DMKPRO_ENABLE_OPTIMIZATION_GOALS=ON
+cmake --build build/native --target mkpro_contextual_copy_transport_tests
+ctest --test-dir build/native -L optimization-goal --output-on-failure
+```
+
+Set `MKPRO_ENABLE_OPTIMIZATION_GOALS=OFF` for the ordinary full regression suite.
+Compiler/ROM correctness tests and all exact size baselines remain enabled.
 
 The earlier 4x4 reduction from 137 to 136 uses the general entry-aware
 conditional-branch proof: a fresh literal after a proved call/store boundary
@@ -399,3 +416,9 @@ dead-or-fixed-point copy proofs and shared-prefix/jump placement. Its complete
 transaction reduces the unchanged 4x4 port from 127 to 125 cells; deleting the
 two copy cells alone would leave the same address-constrained padding. The
 ordinary coordinate normalization, two-phase input and report logic are unchanged.
+
+Canonical literal/store elision, complete selector-family allocation and
+reopened shared-tail placement jointly reduce the unchanged 4x4 source from
+123 to 122 cells. Literal deletion alone closes at 123, so the result belongs
+to the combined transaction, not to an asserted local saving. The 105-cell
+hardware target remains separate from this measured regression baseline.

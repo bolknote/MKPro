@@ -1,7 +1,12 @@
 #include "mkpro/core/passes/r0_fractional_sentinel.hpp"
+#include "mkpro/compiler.hpp"
+#include "mkpro/core/emit/machine_emitter.hpp"
+#include "mkpro/core/post_layout_control_flow.hpp"
+#include "mkpro/emulator/mk61.hpp"
 
 #include "test_support.hpp"
 
+#include <algorithm>
 #include <string>
 #include <utility>
 #include <vector>
@@ -160,6 +165,51 @@ void r0_fractional_sentinel_matches_typescript_contract() {
                 result.ops.at(3).kind == IrKind::Store &&
                 result.ops.at(3).register_name == "1",
             "zero-path sentinel fold emitted the wrong underflow sequence");
+    require(result.ops.at(2).meta.indirect_memory_targets &&
+                *result.ops.at(2).meta.indirect_memory_targets == std::vector<int>{3},
+            "the proved-zero R3 underflow records its exact self-read target");
+
+    using namespace core;
+    auto machine = lower_ir_to_machine(result.ops);
+    machine.back().stop_disposition = StopDisposition::Terminal;
+    const auto memory = std::find_if(machine.begin(), machine.end(), [](const auto& item) {
+      return item.kind == MachineItemKind::Op && item.opcode == 0xd3;
+    });
+    require(memory != machine.end() && memory->indirect_memory_targets &&
+                *memory->indirect_memory_targets == std::vector<int>{3},
+            "lowering retains the underflow's complete memory fact");
+    const auto roundtrip = raise_machine_to_ir(machine);
+    const auto recalled = std::find_if(roundtrip.begin(), roundtrip.end(), [](const auto& op) {
+      return op.kind == IrKind::IndirectRecall && op.opcode == 0xd3;
+    });
+    require(recalled != roundtrip.end() && recalled->meta.indirect_memory_targets &&
+                *recalled->meta.indirect_memory_targets == std::vector<int>{3},
+            "representation replay retains the same exact self-read fact");
+    require(build_post_layout_control_flow(machine, {}).proved,
+            "the transformed zero-path fixture has an authoritative complete CFG");
+    auto incomplete = machine;
+    incomplete[static_cast<std::size_t>(memory - machine.begin())].indirect_memory_targets.reset();
+    require(!build_post_layout_control_flow(incomplete, {}).proved,
+            "the same opcodes without their memory proof must still fail closed");
+
+    auto source = lower_ir_to_machine(program);
+    source.back().stop_disposition = StopDisposition::Terminal;
+    const auto play = [](const std::vector<MachineItem>& items, const char* input) {
+      const auto resolved = resolve_machine_items(items);
+      require(resolved.diagnostics.empty(), "zero-path ROM fixture resolves");
+      std::vector<int> code;
+      for (const auto& step : resolved.steps) code.push_back(step.opcode);
+      emulator::MK61 calc;
+      require(calc.load_program(code).diagnostics.empty(), "zero-path fixture fits stock ROM");
+      calc.set_register("1", "19").set_register("2", "23").set_register("3", "17");
+      calc.input_number(input).press_sequence({"\u0412/\u041e", "\u0421/\u041f"});
+      require(calc.run_until_stable(5000, 8).stopped, "both zero and nonzero paths reach their stop");
+      return std::vector<std::string>{calc.read_register("X"), calc.read_register("1"),
+                                      calc.read_register("2")};
+    };
+    for (const char* input : {"0", "7"})
+      require(play(source, input) == play(machine, input),
+              "ROM preserves the exact sentinel, destination and unrelated source state");
   }
 
   {

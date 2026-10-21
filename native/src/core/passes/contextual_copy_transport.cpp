@@ -1305,4 +1305,227 @@ std::vector<ContextualCopyTransportCandidate> contextual_total_return_completion
   return contextual_return_completion_candidates_impl(ops,context,limits,true);
 }
 
+std::vector<ContextualCopyTransportCandidate> contextual_edge_return_completion_candidates(
+    const std::vector<IrOp>& ops, const PassContext& context,
+    const ContextualCopyTransportOptions& limits) {
+  std::vector<ContextualCopyTransportCandidate> result;
+  if (!limits.runtime_preloads || !limits.maximum_work || !limits.maximum_candidates ||
+      !limits.maximum_copy_sites) return result;
+  std::map<std::string, Id> labels;
+  for (Id i = 0; i < ops.size(); ++i) if (ops[i].kind == IrKind::Label) {
+    Id first = i + 1U;
+    while (first < ops.size() && ops[first].kind == IrKind::Label) ++first;
+    if (!labels.emplace(ops[i].name, first).second) return result;
+  }
+  std::vector<std::pair<Id, Id>> branches;
+  for (Id i = 0; i < ops.size(); ++i) {
+    const auto& op = ops[i];
+    if (op.kind != IrKind::CondJump || op.meta.raw || op.meta.manual_interaction ||
+        op.procedure_boundary || !op.meta.semantic_call_origins.empty() ||
+        !descriptive(op.meta.roles) || !descriptive(op.target_meta.roles) ||
+        (op.opcode != 0x57 && op.opcode != 0x5e && op.opcode != 0x59 && op.opcode != 0x5c)) continue;
+    const auto* label = std::get_if<std::string>(&op.target);
+    if (!label || !labels.contains(*label)) continue;
+    const auto destination = labels.at(*label);
+    if (destination < ops.size() && ops[destination].kind == IrKind::Return &&
+        ops[destination].opcode == 0x52 && !ops[destination].meta.raw &&
+        !ops[destination].meta.manual_interaction && !ops[destination].procedure_boundary)
+      branches.emplace_back(i, destination);
+  }
+  if (branches.empty()) return result;
+  Model m(ops, context, limits);
+  if (!m.valid) return result;
+  const auto lift = analyze_post_layout_automatic_entry_lift_with_indirect_store_facts(
+      m.items, m.flow, limits.maximum_work);
+  if (!lift) return result;
+  std::vector<Id> queries;
+  for (const auto& [branch, target] : branches) { (void)branch; queries.push_back(m.item[target]); }
+  std::sort(queries.begin(), queries.end());
+  queries.erase(std::unique(queries.begin(), queries.end()), queries.end());
+  const auto ranges = prove_post_layout_stack_numeric_values(m.items, m.flow, *lift,
+      queries, limits.runtime_preloads, std::min<Id>(100000, limits.maximum_work / 2U),
+      NumericRangeInputPolicy::ValidatedRegisterTransport);
+  if (ranges.exhausted) return result;
+  Id work = ranges.work;
+  const auto constants = readonly_completion_constants(m, *limits.runtime_preloads, work,
+      limits.maximum_work);
+  const auto spend = [&] { if (work >= limits.maximum_work) return false; ++work; return true; };
+  Id tried = 0;
+  for (const auto& [branch, target] : branches) {
+    if (tried++ >= limits.maximum_copy_sites) break;
+    std::set<Id> return_states;
+    bool valid = true;
+    for (Id state = 0; state < m.instruction.size(); ++state) if (m.instruction[state] == branch) {
+      if (!spend()) return result;
+      for (const auto& edge : m.flow.execution_edges[state])
+        if (edge.kind == PostLayoutExecutionEdgeKind::DirectTarget) {
+          const auto next = edge.target_state;
+          if (m.instruction[next] != target) { valid = false; break; }
+          if (!ranges.unreachable_states.contains(next)) return_states.insert(next);
+        }
+    }
+    if (!valid || return_states.empty()) continue;
+    std::vector<Id> continuations;
+    for (const auto state : return_states) {
+      if (!lift->at(state) || !ranges.stack_before_state.contains(state) || m.entries.external[state]) {
+        valid = false; break;
+      }
+      continuations.insert(continuations.end(), m.flow.execution_successors[state].begin(),
+          m.flow.execution_successors[state].end());
+    }
+    // The selected edge may forget its result. Other invocations of this same
+    // physical return do not inherit that permission.
+    if (!valid || continuations.empty() || !prove_post_layout_stack_state_equality(
+        m.items, m.flow, continuations, {{false, false, false, false}, false, false},
+        {.refine_runtime_selectors = false, .numeric_entry_closed = true,
+         .transport_closed_entry_through_control = true})) continue;
+    std::set<Id> first_commands;
+    for (const auto& [label, first] : labels) { (void)label; if (first < target) first_commands.insert(first); }
+    for (const auto first : first_commands) {
+      if (!spend()) return result;
+      std::vector<Id> body;
+      bool complete = false;
+      for (Id i = first; i <= target && body.size() < 17U; ++i) {
+        if (!spend()) return result;
+        const auto& op = ops[i];
+        if (op.kind == IrKind::Label) continue;
+        if (i == target) { body.push_back(i); complete = true; break; }
+        if (op.kind == IrKind::Recall && direct(op) && constants.contains(op.register_name)) {
+          body.push_back(i); continue;
+        }
+        if (op.kind != IrKind::Plain || op.meta.raw || op.meta.manual_interaction ||
+            op.procedure_boundary || !op.meta.semantic_call_origins.empty() ||
+            !descriptive(op.meta.roles) || !detail::exact_terms::modeled_plain(op.opcode)) break;
+        body.push_back(i);
+      }
+      if (!complete || body.size() < 2U) continue;
+      // Both paths must close numeric entry, not merely produce equal-looking
+      // numbers with a potentially stale exponent/decimal shadow.
+      if (!selector_charge_entry_closer_opcode(ops[body[body.size() - 2U]].opcode)) continue;
+      bool total = true;
+      for (const auto state : return_states)
+        if (!spend() || !total_readonly_completion(m, body, ranges.stack_before_state.at(state),
+            constants, work, limits.maximum_work)) { total = false; break; }
+      if (!total) continue;
+      const auto label = std::find_if(labels.begin(), labels.end(),
+          [&](const auto& entry) { return entry.second == first; });
+      if (label == labels.end()) continue;
+      ContextualCopyTransportCandidate candidate;
+      auto& transformed = candidate.transformation;
+      transformed.ops = ops;
+      transformed.ops[branch].target = label->first;
+      std::vector<std::optional<Id>> mapping(m.items.size());
+      for (Id i = 0; i < mapping.size(); ++i) mapping[i] = i;
+      PostLayoutExecutionRelocationOptions transport;
+      PostLayoutReturnCompletion completion;
+      completion.old_return_item = m.item[target];
+      for (const auto command : body) completion.body_items.push_back(m.item[command]);
+      completion.redirected_direct_branch_items.push_back(m.item[branch]);
+      transport.pure_return_completions.push_back(std::move(completion));
+      const auto image = lower_ir_to_machine(transformed.ops);
+      const auto flow = build_post_layout_control_flow(image, m.control);
+      const auto proof = prove_post_layout_execution_relocation(m.items, image, m.original,
+          flow, mapping, transport);
+      if (!proof.proved) continue;
+      transformed.applied = 1;
+      transformed.optimizations.push_back({"edge-qualified-return-completion",
+          "Redirected one ignored conditional return edge through an existing total readonly leaf. "
+          "Proved every caller domain, changed stack/X1/X2 non-observation, numeric entry closure "
+          "and exact rooted return frames. Other callers reach the unchanged V/O; the neutral "
+          "candidate requires a separately profitable selector/layout transaction."});
+      result.push_back(std::move(candidate));
+      if (result.size() >= limits.maximum_candidates) return result;
+    }
+  }
+  return result;
+}
+
+std::vector<ContextualCopyTransportCandidate> contextual_redundant_literal_store_candidates(
+    const std::vector<IrOp>& ops, const PassContext& context,
+    const ContextualCopyTransportOptions& limits) {
+  std::vector<ContextualCopyTransportCandidate> result;
+  if (!limits.maximum_work || !limits.maximum_candidates || !limits.maximum_copy_sites)
+    return result;
+  std::vector<Id> candidates;
+  for (Id i = 0; i + 1U < ops.size() && candidates.size() < limits.maximum_copy_sites; ++i) {
+    const auto& literal = ops[i];
+    if (literal.kind == IrKind::Plain && literal.opcode >= 1 && literal.opcode <= 9 &&
+        !has_rewrite_barrier(literal) && literal.meta.roles.empty() &&
+        literal.meta.semantic_call_origins.empty() && direct(ops[i + 1U]) &&
+        ops[i + 1U].kind == IrKind::Store)
+      candidates.push_back(i);
+  }
+  if (candidates.empty()) return result;
+  const Model m(ops, context, limits);
+  if (!m.valid) return result;
+  const auto lift = analyze_post_layout_automatic_entry_lift_with_indirect_store_facts(
+      m.items, m.flow, limits.maximum_work);
+  if (!lift) return result;
+  std::vector<Id> queries;
+  for (const auto i : candidates) queries.push_back(m.item[i]);
+  const auto facts = prove_post_layout_stack_numeric_values(
+      m.items, m.flow, *lift, queries, limits.runtime_preloads, limits.maximum_work,
+      NumericRangeInputPolicy::ValidatedRegisterTransport);
+  if (facts.exhausted) return result;
+  for (const auto literal : candidates) {
+    bool valid = true, reached = false;
+    std::vector<Id> continuations;
+    for (Id state = 0; state < m.instruction.size(); ++state) {
+      if (m.instruction[state] != literal) continue;
+      reached = true;
+      const auto x = facts.x_before_state.find(state);
+      if (m.entries.external[state] || !lift->at(state) ||
+          !facts.canonical_small_integer_states.contains(state) ||
+          x == facts.x_before_state.end() || x->second.lower != ops[literal].opcode ||
+          x->second.upper != ops[literal].opcode ||
+          m.flow.execution_successors[state].size() != 1U) {
+        valid = false;
+        break;
+      }
+      const auto stored = m.flow.execution_successors[state].front();
+      if (m.instruction[stored] != literal + 1U) {
+        valid = false;
+        break;
+      }
+      continuations.insert(continuations.end(), m.flow.execution_successors[stored].begin(),
+                           m.flow.execution_successors[stored].end());
+    }
+    std::sort(continuations.begin(), continuations.end());
+    continuations.erase(std::unique(continuations.begin(), continuations.end()), continuations.end());
+    // The unchanged store writes the same canonical word and closes entry.
+    // It does not certify X2: omitting the fresh digit may preserve a different
+    // entry shadow. Last-X is unchanged; every Y/Z/T/X2 difference must die.
+    if (!valid || !reached || continuations.empty() ||
+        !prove_post_layout_stack_state_equality(m.items, m.flow, continuations,
+            {.stack_equal = {true, false, false, false},
+             .x2_equal = false, .x1_equal = true},
+            {.refine_runtime_selectors = false, .numeric_entry_closed = true,
+             .transport_closed_entry_through_control = true}))
+      continue;
+    ContextualCopyTransportCandidate candidate;
+    auto& transformation = candidate.transformation;
+    transformation.ops = ops;
+    transformation.ops.erase(transformation.ops.begin() + static_cast<std::ptrdiff_t>(literal));
+    const auto image = lower_ir_to_machine(transformation.ops);
+    std::vector<std::optional<Id>> mapping(m.items.size());
+    for (Id i = 0; i < m.items.size(); ++i)
+      mapping[i] = i - (i > m.item[literal] ? 1U : 0U);
+    PostLayoutExecutionRelocationOptions relocation;
+    relocation.erased_redundant_literal_item = m.item[literal];
+    const auto after = build_post_layout_control_flow(image, m.control);
+    if (!prove_post_layout_execution_relocation(m.items, image, m.original, after,
+                                                mapping, relocation).proved)
+      continue;
+    transformation.applied = 1;
+    transformation.optimizations.push_back({"context-qualified-redundant-literal-store",
+        "Removed a fresh one-digit literal before an unchanged direct store. Every exact caller "
+        "already has its canonical machine word in X; all removed stack-lift effects die before "
+        "observation, with entry/X1/X2 and rooted command/return-frame transport proved separately. "
+        "Original data and selector equations remain mandatory for final placement."});
+    result.push_back(std::move(candidate));
+    if (result.size() >= limits.maximum_candidates) break;
+  }
+  return result;
+}
+
 } // namespace mkpro::core::passes

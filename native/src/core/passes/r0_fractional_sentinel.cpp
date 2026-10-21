@@ -233,6 +233,7 @@ IrOp sentinel_scratch_recall(const IrOp& destination_store) {
   result.opcode = 0xd3;
   result.meta.mnemonic = "К П->X 3";
   result.meta.comment = "form and self-recall -99999999 by R3 underflow";
+  result.meta.indirect_memory_targets = std::vector<int>{3};
   return result;
 }
 

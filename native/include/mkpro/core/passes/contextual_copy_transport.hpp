@@ -52,6 +52,12 @@ std::vector<ContextualCopyTransportCandidate> contextual_copy_transport_candidat
 std::vector<ContextualCopyTransportCandidate> contextual_redundant_copy_store_candidates(
     const std::vector<IrOp>& ops, const PassContext& context,
     const ContextualCopyTransportOptions& limits = {});
+// Remove a fresh 1..9 literal before an unchanged direct store only when every
+// exact caller already has its canonical word in X and all removed stack-lift
+// effects are unobservable. Numeric interval equality alone is insufficient.
+std::vector<ContextualCopyTransportCandidate> contextual_redundant_literal_store_candidates(
+    const std::vector<IrOp>& ops, const PassContext& context,
+    const ContextualCopyTransportOptions& limits = {});
 // Reuse a complete finite self-negating stable-word orbit as a selector for
 // an existing plain return. The source data word is not recoded here; full
 // word preservation, typed roots, X2 and exact return aliasing are mandatory.
@@ -84,4 +90,11 @@ std::vector<ContextualCopyTransportCandidate> contextual_anticipatory_copy_store
 // mandatory, including when a producer helper transforms its argument.
 std::vector<RegisterWebRecoloringRequest> contextual_copy_origin_register_requests(
     const std::vector<IrOp>& ops,std::size_t maximum_requests=16);
+// Neutral semantic candidate: redirect one independently proved ignored
+// conditional return edge through an existing total readonly leaf ending
+// at the same return. Publication requires a profitable final layout; other
+// callers retain their original value and exact return-frame contracts.
+std::vector<ContextualCopyTransportCandidate> contextual_edge_return_completion_candidates(
+    const std::vector<IrOp>& ops, const PassContext& context,
+    const ContextualCopyTransportOptions& limits = {});
 } // namespace mkpro::core::passes

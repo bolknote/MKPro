@@ -1212,6 +1212,94 @@ program SixteenEntryLiveRegisters {
           "regenerated lowering accepted a forced assignment that violates liveness");
 }
 
+void compiler_alternating_arguments_survive_parameter_elision() {
+  for (int kind = 0; kind < 4; ++kind) {
+    for (const int coefficient : {3, 7}) {
+      std::string calls = "apply(-1)\nshow(sum)\n";
+      calls += kind == 1 ? "apply(-1)\nshow(sum)\n" : "apply(1)\nshow(sum)\n";
+      if (kind == 2) calls += "apply(-1)\nshow(sum)\n";
+      const std::string source =
+          "program FiniteArgumentOrder {\nstate { value: packed = 0\nsum: packed = 0 }\n"
+          "canonical(0)\nloop {\n" + calls + "}\n"
+          "fn canonical(argument) { value = int(argument) }\nfn apply(mode) {\n" +
+          (kind == 3 ? "mode = -mode\n" : "") +
+          "value = mode\nvalue *= " + std::to_string(coefficient) +
+          "\nsum += value\n}\n}";
+      CompileOptions ordinary;
+      ordinary.analysis = true;
+      ordinary.budget = 999999;
+      ordinary.disable_candidate_search = true;
+      const auto reference = compile_source(source, ordinary);
+      auto options = ordinary;
+      options.alternating_sign_toggle_args = true;
+      const auto transformed = compile_source(source, options);
+      require(reference.implemented && transformed.implemented &&
+                  !has_error_diagnostic(reference) && !has_error_diagnostic(transformed),
+              "ordinary and finite-argument lowering remain valid");
+      require(has_optimization(transformed, "alternating-sign-toggle-arg") == (kind == 0),
+              "only a closed even alternating block with a readonly parameter may become state");
+      if (kind == 0) {
+        const auto phase = std::find_if(transformed.optimizations.begin(), transformed.optimizations.end(),
+            [](const auto& report) { return report.name == "alternating-sign-toggle-arg"; });
+        const auto elision = std::find_if(transformed.optimizations.begin(), transformed.optimizations.end(),
+            [](const auto& report) { return report.name == "x-param-state-elision"; });
+        require(has_optimization(reference, "x-param-state-elision") &&
+                    elision != transformed.optimizations.end() && phase < elision,
+                "finite call provenance is proved before another parameter is elided");
+      }
+      const auto play = [](const CompileResult& program) {
+        emulator::MK61 calc;
+        std::vector<int> code;
+        for (const auto& step : program.steps) code.push_back(step.opcode);
+        require(calc.load_program(code).diagnostics.empty(), "finite-argument fixture fits stock ROM");
+        for (const auto& word : program.preloads) calc.set_register(word.register_name, word.value);
+        calc.press_sequence({"\u0412/\u041e", "\u0421/\u041f"});
+        std::vector<std::string> result;
+        for (int stop = 0; stop < 6; ++stop) {
+          require(calc.run_until_stable(10000, 8).stopped,
+                  "each invocation returns to its original visible stop");
+          result.push_back(calc.read_register("X"));
+          calc.press("\u0421/\u041f");
+        }
+        return result;
+      };
+      const auto expected = play(reference);
+      require(expected == play(transformed),
+              "ROM preserves exact visible values, persistent accumulation and later returns");
+      if (kind == 0) {
+        auto collection = options;
+        collection.collect_logical_register_allocation = true;
+        collection.repair_logical_register_assignment_preferences = true;
+        collection.preserve_logical_register_instruction_classes = true;
+        const auto collected = compile_source(source, collection);
+        require(collected.implemented && !collected.logical_register_assignments.empty(),
+                "the changed finite-argument ABI has a fresh source allocation");
+        auto rebuilt_options = options;
+        rebuilt_options.forced_logical_register_assignments = collected.logical_register_assignments;
+        const auto rebuilt = compile_source(source, rebuilt_options);
+        require(rebuilt.implemented && !has_error_diagnostic(rebuilt) && play(rebuilt) == expected,
+                "fresh allocation preserves finite-state initialization and every later invocation");
+        for (const bool exchanged : {false, true}) {
+          auto palette = options;
+          palette.forced_logical_register_assignments = {
+              {.name="mode", .register_name=exchanged ? "8" : "3", .preload_owner=true},
+              {.name="value", .register_name=exchanged ? "3" : "8", .preload_owner=true},
+              {.name="sum", .register_name="1", .preload_owner=true}};
+          const auto moved = compile_source(source, palette);
+          require(moved.implemented && !has_error_diagnostic(moved) && play(moved) == expected,
+                  "source regeneration can exchange ordinary low/high state homes without changing ROM behavior");
+        }
+        auto conflict = options;
+        conflict.forced_logical_register_assignments = {
+            {.name="mode", .register_name="3", .preload_owner=true},
+            {.name="sum", .register_name="3", .preload_owner=true}};
+        require(!compile_source(source, conflict).implemented,
+                "source regeneration still rejects aliases of simultaneously live initialized states");
+      }
+    }
+  }
+}
+
 void compiler_feature_profile_rf_optimizer_is_size_monotonic_contract() {
   const std::filesystem::path root = std::filesystem::current_path();
   const std::string source =

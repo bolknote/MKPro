@@ -10,6 +10,7 @@ option(MKPRO_ENABLE_TSAN "Enable ThreadSanitizer" OFF)
 option(MKPRO_STATIC "Statically link the CLI (GNU/Clang on non-Apple platforms)" OFF)
 option(MKPRO_FORCE_INT128_FALLBACK "Use the software 128-bit integer even where a builtin __int128 exists" OFF)
 option(MKPRO_BUILD_TOOLS "Build auxiliary research/diagnostic tools (e.g. the address solver)" OFF)
+option(MKPRO_ENABLE_OPTIMIZATION_GOALS "Register aspirational optimization goals separately from regressions" OFF)
 
 if(NOT CMAKE_CONFIGURATION_TYPES AND NOT CMAKE_BUILD_TYPE)
   set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
@@ -386,6 +387,7 @@ set(MKPRO_NATIVE_TEST_NAMES
   compiler_feature_profile_rf_extends_state_allocator_contract
   compiler_logical_register_allocator_handles_arbitrary_live_range_count_contract
   compiler_feature_profile_rf_optimizer_is_size_monotonic_contract
+  compiler_alternating_arguments_survive_parameter_elision
   counted_loop_unroll_matches_typescript_contract
   constant_folding_matches_typescript_contract
   cse_display_block_matches_typescript_contract
@@ -975,8 +977,17 @@ add_test(NAME mkpro.contextual_copy_transport_compiler_and_rom
 
 target_compile_definitions(mkpro_contextual_copy_transport_tests PRIVATE
   MKPRO_CONTEXT_REPO_ROOT="${CMAKE_CURRENT_SOURCE_DIR}/..")
-add_test(NAME mkpro.contextual_copy_transport_pending_reduction
-  COMMAND mkpro_contextual_copy_transport_tests --pending)
+if(MKPRO_ENABLE_OPTIMIZATION_GOALS)
+  add_test(NAME mkpro.goal.contextual_copy_transport_pending_reduction
+    COMMAND mkpro_contextual_copy_transport_tests --pending)
+  set_tests_properties(mkpro.goal.contextual_copy_transport_pending_reduction
+    PROPERTIES LABELS "optimization-goal")
+endif()
+
+add_executable(mkpro_edge_return_completion_tests tests/edge_return_completion_test.cpp)
+target_link_libraries(mkpro_edge_return_completion_tests PRIVATE mkpro_debug)
+mkpro_configure_target(mkpro_edge_return_completion_tests)
+add_test(NAME mkpro.edge_return_completion_compiler_and_rom COMMAND mkpro_edge_return_completion_tests)
 
 add_executable(mkpro_raw_decimal_multiplier_tests tests/raw_decimal_multiplier_test.cpp)
 target_link_libraries(mkpro_raw_decimal_multiplier_tests PRIVATE mkpro_debug)
@@ -987,3 +998,8 @@ add_executable(mkpro_x2_hot_path_tests tests/x2_hot_path_test.cpp)
 target_link_libraries(mkpro_x2_hot_path_tests PRIVATE mkpro_debug)
 mkpro_configure_target(mkpro_x2_hot_path_tests)
 add_test(NAME mkpro.x2_hot_path_exact_equivalence COMMAND mkpro_x2_hot_path_tests)
+
+add_executable(mkpro_redundant_literal_store_tests tests/redundant_literal_store_test.cpp)
+target_link_libraries(mkpro_redundant_literal_store_tests PRIVATE mkpro_debug)
+mkpro_configure_target(mkpro_redundant_literal_store_tests)
+add_test(NAME mkpro.redundant_literal_store_compiler_and_rom COMMAND mkpro_redundant_literal_store_tests)

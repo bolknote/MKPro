@@ -53753,6 +53753,11 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
       resolve_constant_indexed_state(*ast.v2, context.optimizations);
       materialize_display_expressions(*ast.v2, context.optimizations,
                                       options.inline_floor_packed_row_expressions);
+      // Preserve the finite call/parameter proof before storage elision or
+      // interprocedural rewriting erases that source-level opportunity. The
+      // later attempt still handles opportunities exposed by those rewrites.
+      if (options.alternating_sign_toggle_args)
+        toggle_alternating_literal_call_args(*ast.v2, context.optimizations);
       elide_x_param_return_state_fields(*ast.v2, context.optimizations);
       index_constants(context, *ast.v2);
       const core::ConstantFoldResult folded_constants =
@@ -81716,15 +81721,16 @@ CompileResult close_final_contextual_layout_roots(
   // original roots intact, then independently regenerate the finite-state ABI
   // with singleton physical preferences. The normal regenerated interference
   // and publication gates still decide whether any candidate is admissible.
-  // Fast search limits optional source-ABI regeneration, never closure of
-  // already constructed roots or rescue of a budget-only failure.
-  if (!lowering_options.alternating_sign_toggle_args &&
-      !comparison_options.fast_candidate_search) {
+  // A changed finite-argument ABI must meet a fresh lifetime allocation before
+  // placement. Bounded search owns one such root; exhaustive search additionally
+  // compares the other allocation/helper ABIs. No old alias proof is inherited.
+  if (!lowering_options.alternating_sign_toggle_args) {
     auto discovery = parse_v2_program_for_optimizer_discovery(source);
     std::vector<OptimizationReport> changed;
     if (discovery) toggle_alternating_literal_call_args(*discovery, changed);
     if (!changed.empty()) {
       for(const int allocation_mode:{0,1,2,3}) {
+      if (comparison_options.fast_candidate_search && allocation_mode != 1) continue;
       auto replay_options = lowering_options;
       replay_options.alternating_sign_toggle_args = true;
       replay_options.disable_candidate_search = true;
@@ -81740,7 +81746,7 @@ CompileResult close_final_contextual_layout_roots(
         replay_options.stack_argument_helper_entries=true;
       }
       if(allocation_mode==1 || allocation_mode==3){
-        if(replay_options.forced_logical_register_assignments.empty() && replay_options.forced_register_shares.empty())continue;
+        if(allocation_mode==3 && replay_options.forced_logical_register_assignments.empty() && replay_options.forced_register_shares.empty())continue;
         auto probe_options=replay_options;probe_options.collect_logical_register_allocation=true;
         probe_options.repair_logical_register_assignment_preferences=true;
         probe_options.compact_logical_register_allocation=false;
@@ -81765,6 +81771,11 @@ CompileResult close_final_contextual_layout_roots(
       // never inherited noninterference certificates from the older ABI.
       CompileOptions replay_proof;
       auto replay = compile_source_for_optimizer_profile(source,replay_options,&replay_proof);
+      if (std::getenv("MKPRO_NATIVE_TRACE_ABI_REPLAY"))
+        std::cerr << "[finite-abi-replay] allocation=" << allocation_mode
+                  << " implemented=" << replay.implemented
+                  << " cells=" << replay.steps.size()
+                  << " finite-proof=" << has_optimization_named(replay.optimizations,"alternating-sign-toggle-arg") << '\n';
       if (replay.implemented && has_optimization_named(replay.optimizations,"alternating-sign-toggle-arg") &&
           std::none_of(seeds.begin(),seeds.end(),[&](const auto& old){
             return core::same_layout_search_artifact(

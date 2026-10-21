@@ -1093,9 +1093,24 @@ static PostLayoutNumericRangeProof prove_numeric_ranges_on_graph(
       // The recall/lift certificate may cross direct BP chains and joins,
       // but never an ungrounded cycle, raw command or external input edge.
       const bool recalled = valid && recall_entry_lift[start];
-      if (valid && (automatic_entry_lift[start] || recalled) &&
+      // Enter ends numeric entry while inhibiting the next automatic lift.
+      // A following fresh literal overwrites X and preserves Y/Z/T; false
+      // automatic-lift alone cannot distinguish this from an open mantissa.
+      const bool unsigned_integer_entry = at - literal->second.begin < 8U &&
+          std::all_of(items.begin() + static_cast<std::ptrdiff_t>(literal->second.begin),
+                      items.begin() + static_cast<std::ptrdiff_t>(at + 1U),
+              [](const auto& item) {
+                return item.kind == MachineItemKind::Op && item.opcode >= 0 && item.opcode <= 9;
+              });
+      const bool entered = valid && unsigned_integer_entry && !predecessors[start].empty() &&
+          std::all_of(predecessors[start].begin(), predecessors[start].end(),
+              [&](std::size_t previous) {
+                const auto item = flow.execution_states[previous].item_index;
+                return ordinary_item(item) && items[item].opcode == 0x0e;
+              });
+      if (valid && (automatic_entry_lift[start] || recalled || entered) &&
           !external.contains(literal->second.begin)) {
-        if (slot != 0) return before(start, slot - 1);
+        if (slot != 0) return before(start, entered ? slot : slot - 1);
         auto fact = constant(Range{literal->second.value}, literal->second.quantum);
         fact.mantissa = literal->second.mantissa;
         fact.canonical_small_integer = literal->second.canonical_small_integer;
@@ -1170,6 +1185,11 @@ static PostLayoutNumericRangeProof prove_numeric_ranges_on_graph(
         // totality certificate for a new arithmetic instruction.
         fact.ordinary_value = complete_stack && y.ordinary_value && x.ordinary_value &&
             ((code >= 0x10 && code <= 0x13) || code == 0x36);
+        // Ordinary arithmetic normalizes its completed 1..9 result to the
+        // same full word as a fresh digit. An interval without this producer
+        // theorem, a raw operand or a numeric zero supplies no such fact.
+        fact.canonical_small_integer = fact.ordinary_value && code >= 0x10 && code <= 0x13 &&
+            fact.range && fact.range->integral && fact.range->lower >= 1 && fact.range->upper <= 9;
         return fact;
       }
       const auto x = input(0);

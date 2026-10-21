@@ -6055,3 +6055,83 @@ remains 105 cells; expanded memory requires the separately selected mk61s model.
 Compiler/ROM fixtures cover conflicting stitches, fixed destinations, protected
 labels, raw jumps, exhausted placement, repeated calls and generated A1-to-A0 setup,
 including full data/stack/X1 and decimal-entry-shadow observations.
+
+
+### Edge-qualified total return completion
+
+A separately bounded complete-artifact lane may redirect an ignored direct
+conditional return edge through an existing total readonly leaf ending at the
+same plain return. The other invocations of that return keep their original
+value contract: a caller that needs the leaf's result must not block an unrelated
+ignored edge, nor inherit its permission to change stack/X1/X2.
+
+The independent control certificate names each redirected conditional explicitly.
+It rejects duplicate/nonconditional sources, operand or external entries, changed
+formal counters, incomplete bodies and unmatched return frames. The data proof
+checks every selected caller domain, arithmetic totality, readonly aliases,
+numeric-entry closure and all later observations of the changed stack/shadows.
+This is not permission to skip errors or to treat private values as equal.
+
+The local retarget is size-neutral. Its independent lane closes stable-tail,
+selector and placement transactions to a strictly decreasing fixed point. Every
+fold retains the complete final-artifact proof; no local delta is published.
+The historical lifetime/value representation portfolio remains independent and
+is not recursively replayed for each neutral candidate. No source name,
+particular formula, game or hand-selected target address participates.
+
+Aspirational reduction goals are not regression baselines. They are excluded by
+default and registered with the optimization-goal label only when
+MKPRO_ENABLE_OPTIMIZATION_GOALS is ON. The exact achieved-size and compiler/ROM
+checks stay in the ordinary suite; enabling a goal does not change its threshold.
+
+### Finite-argument proof before parameter elision
+
+The closed alternating-argument transformation first runs before parameter-state
+elision and interprocedural rewriting. Its finite state and transition proof must
+not disappear merely because another representation was selected first. A later
+attempt remains for newly exposed literal calls; converted rules have no formal
+parameter, so the transformation is idempotent. Odd, nonalternating, independently
+entered and parameter-mutating call patterns retain their original lowering.
+Normal allocation, selector, final layout and observation proofs remain required.
+
+For an oversized complete root, bounded search also retains one independently
+regenerated finite-argument ABI with a fresh logical interference graph. Prior
+physical preferences, if any, are repaired and then reverified as hard assignments;
+sharing certificates are never transferred to the changed source. This root may
+compose with value representation, selector allocation and layout before final
+size comparison. Other ABI regeneration modes remain exhaustive-search work.
+
+The zero-path R3 underflow sentinel constructor records its exact indirect-memory
+target R3 in IR metadata. This follows from its proved zero seed and self-read
+semantics; it is not inferred from a comment or from an arbitrary D3 instruction.
+IR/machine round trips preserve the fact. Removing it must still make the
+authoritative CFG proof fail closed, rather than silently admitting unknown memory.
+
+## Canonical literal/store elision with joint placement
+
+A fresh one-digit literal before a direct store can be omitted when every exact
+caller already has the same canonical 1..9 machine word in X. Completed ordinary
+addition, subtraction, multiplication and division can certify this word shape;
+numeric range equality alone, raw words, zero and open digit entry cannot.
+The retained store closes numeric entry, not the hidden X2 word. Every
+continuation must kill all removed Y/Z/T lift and X2 differences before
+observation, with physical last-X unchanged. An
+independent, separately typed rooted control certificate checks the retained
+store, fetched operands, external entries and every saved return continuation.
+The historical recall/Enter erasure certificate is not widened.
+
+A separate bounded lane reopens a certified shared tail before erasure and then
+solves complete selector-family allocation and projected layout together. It
+retains all original preload/data bindings, charges expansion to the immutable
+root, preserves the older search budgets and publishes only a smaller fully
+closed result. A local saving may otherwise disappear in placement padding.
+Compiler/ROM tests cover all callers, live stack differences, unknown/raw/open
+entry negatives and 108 word-sensitive arithmetic/literal comparisons.
+
+An explicit Enter prefix supplies a separate fresh-but-no-lift literal boundary:
+an unsigned integer of at most eight digits replaces X without shifting Y/Z/T.
+Fractions, exponent edits, signed-zero and overlong entries stay outside this
+certificate. The range proof checks every
+exact immediate predecessor rather than interpreting any false lift flag as
+permission. Compiler/ROM positives keep this Enter prefix and explicitly read
+physical last-X; open-entry and observed-stack counterexamples remain negative.

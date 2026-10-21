@@ -1711,6 +1711,8 @@ PostLayoutExecutionRelocationProof prove_post_layout_execution_relocation(
   };
 
   std::map<std::size_t,std::vector<std::size_t>> return_completions;
+  std::set<std::size_t> edge_only_return_completions;
+  std::map<std::size_t, std::size_t> redirected_return_branches;
   const auto pure_completion_command=[](const MachineItem& item){
     if(item.kind!=MachineItemKind::Op || item.raw || item.manual_interaction || item.procedure_boundary ||
         !item.semantic_call_origins.empty())return false;
@@ -1755,6 +1757,39 @@ PostLayoutExecutionRelocationProof prove_post_layout_execution_relocation(
           return reject("completed return is a saved resume/return continuation");
     }
     if(!reached)return reject("completed return has no rooted context");
+    if (!completion.redirected_direct_branch_items.empty()) {
+      edge_only_return_completions.insert(source);
+      for (const auto branch : completion.redirected_direct_branch_items) {
+        const auto relocated = mapped_item(branch);
+        if (branch >= before.size() || !relocated || before[branch].kind != MachineItemKind::Op ||
+            before[branch].raw || before[branch].manual_interaction ||
+            (before[branch].opcode != 0x57 && before[branch].opcode != 0x5e &&
+             before[branch].opcode != 0x59 && before[branch].opcode != 0x5c) ||
+            !redirected_return_branches.emplace(branch, source).second)
+          return reject("return completion has an invalid or duplicate conditional edge");
+        bool branch_reached = false;
+        for (std::size_t state = 0; state < before_control.execution_states.size(); ++state) {
+          const auto& here = before_control.execution_states[state];
+          if (here.operand_item_index == branch)
+            return reject("completed conditional also serves as an operand");
+          if (here.item_index != branch) continue;
+          branch_reached = true;
+          if (!old_entries->labels[state].empty() ||
+              here.formal_opcode != canonical_cursor(before_index, here.address,
+                  before_control.address_space_model).formal_opcode)
+            return reject("completed conditional has an external or noncanonical entry");
+          bool target_reached = false;
+          for (const auto& edge : before_control.execution_edges[state])
+            if (edge.kind == PostLayoutExecutionEdgeKind::DirectTarget) {
+              if (before_control.execution_states[edge.target_state].item_index != source)
+                return reject("completed conditional does not target its certified return");
+              target_reached = true;
+            }
+          if (!target_reached) return reject("completed conditional has no direct return edge");
+        }
+        if (!branch_reached) return reject("completed conditional has no rooted context");
+      }
+    }
     for(std::size_t state=0;state<after_control.execution_states.size();++state){
       const auto& here=after_control.execution_states[state];
       const auto position=std::find(body.begin(),body.end()-1,here.item_index);
@@ -1775,10 +1810,13 @@ PostLayoutExecutionRelocationProof prove_post_layout_execution_relocation(
                                          options.erased_data_effect_items.end());
   const std::set<std::size_t> inserted_jumps(options.inserted_transparent_jump_items.begin(),
                                             options.inserted_transparent_jump_items.end());
+  if (options.erased_stack_producer_item && options.erased_redundant_literal_item)
+    return reject("separate producer erasure certificates cannot be combined");
+  const auto erased_producer = options.erased_stack_producer_item
+      ? options.erased_stack_producer_item : options.erased_redundant_literal_item;
   if (erased_data.size() != options.erased_data_effect_items.size() ||
       inserted_jumps.size() != options.inserted_transparent_jump_items.size() ||
-      (options.erased_stack_producer_item &&
-       erased_data.contains(*options.erased_stack_producer_item)))
+      (erased_producer && erased_data.contains(*erased_producer)))
     return reject("duplicated data-erasure or transparent-jump certificate");
   for (const auto source : erased_data) {
     if (source >= before.size() || !mapped_item(source))
@@ -1939,17 +1977,24 @@ PostLayoutExecutionRelocationProof prove_post_layout_execution_relocation(
       return reject("inserted jump exposes its changed X2 on a continuation");
   }
 
-  if (options.erased_stack_producer_item) {
-    const auto source = *options.erased_stack_producer_item;
+  if (erased_producer) {
+    const auto source = *erased_producer;
+    const bool literal = options.erased_redundant_literal_item.has_value();
     if (source >= before.size() || !mapped_item(source))
       return reject("erased producer has no retained continuation identity");
     const auto& producer = before[source];
     if (producer.kind != MachineItemKind::Op || producer.raw ||
         producer.manual_interaction || producer.procedure_boundary ||
         !producer.roles.empty() || !producer.semantic_call_origins.empty() ||
-        !((producer.opcode >= 0x60 && producer.opcode <= 0x6e) ||
-          producer.opcode == 0x0e))
-      return reject("erasure transport requires a plain direct recall or Enter");
+        (literal ? (producer.opcode < 1 || producer.opcode > 9) :
+          !((producer.opcode >= 0x60 && producer.opcode <= 0x6e) || producer.opcode == 0x0e)))
+      return reject("producer is outside its separate erasure certificate");
+    if (literal && (source + 1U >= before.size() ||
+        before[source + 1U].kind != MachineItemKind::Op || before[source + 1U].raw ||
+        before[source + 1U].manual_interaction || before[source + 1U].opcode < 0x40 ||
+        before[source + 1U].opcode > 0x4e ||
+        mapped_item(source + 1U) != mapped_item(source)))
+      return reject("literal erasure requires its retained direct store");
     for (const auto& entry : before_control.external_entries)
       if (entry.entry.item_index == source)
         return reject("an external entry cannot be an erased producer");
@@ -1966,7 +2011,10 @@ PostLayoutExecutionRelocationProof prove_post_layout_execution_relocation(
           edges.front().target_state >= before_control.execution_states.size())
         return reject("an erased producer must have one exact fallthrough");
       const auto& next = before_control.execution_states[edges.front().target_state];
-      if (next.item_index == source || !mapped_item(next.item_index) ||
+      if ((literal && (next.item_index != source + 1U ||
+              here.formal_opcode != canonical_cursor(before_index, here.address,
+                                                    before_control.address_space_model).formal_opcode)) ||
+          next.item_index == source || !mapped_item(next.item_index) ||
           mapped_item(next.item_index) != mapped_item(source) ||
           next.return_stack != here.return_stack ||
           next.formal_return_stack != here.formal_return_stack)
@@ -2093,9 +2141,16 @@ PostLayoutExecutionRelocationProof prove_post_layout_execution_relocation(
         if (outgoing.size() != 1U) return std::nullopt;
         item = control.execution_states[outgoing.front().target_state].item_index;
       }
-      if(remap&&edge.kind==PostLayoutExecutionEdgeKind::Fallthrough){
-        const auto completion=return_completions.find(target.item_index);
-        if(completion!=return_completions.end())item=completion->second.front();
+      if (remap) {
+        const auto completion = return_completions.find(target.item_index);
+        const auto branch = redirected_return_branches.find(
+            control.execution_states.at(state_index).item_index);
+        const bool completed_fallthrough = edge.kind == PostLayoutExecutionEdgeKind::Fallthrough &&
+            !edge_only_return_completions.contains(target.item_index);
+        const bool completed_branch = edge.kind == PostLayoutExecutionEdgeKind::DirectTarget &&
+            branch != redirected_return_branches.end() && branch->second == target.item_index;
+        if (completion != return_completions.end() && (completed_fallthrough || completed_branch))
+          item = completion->second.front();
       }
       const auto frames = frame_addresses(target.return_stack, remap);
       if (!item.has_value() || !frames.has_value())
@@ -2179,7 +2234,7 @@ PostLayoutExecutionRelocationProof prove_post_layout_execution_relocation(
         continue;
       }
     }
-    if (options.erased_stack_producer_item == old_state.item_index || erased_data.contains(old_state.item_index)) {
+    if (erased_producer == old_state.item_index || erased_data.contains(old_state.item_index)) {
       if (!target || *target != new_state.item_index || !frames ||
           (!new_frames || *frames != *new_frames) ||
           !old_entries->labels.at(old_state_index).empty() ||

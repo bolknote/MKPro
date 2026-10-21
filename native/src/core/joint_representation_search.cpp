@@ -2524,9 +2524,9 @@ std::optional<LayoutSearchArtifact> close_final_stable_tail_layout(
 }
 }
 
-std::vector<ProvedSearchTransition<LayoutSearchArtifact>>
-contextual_copy_transport_layout_transactions(const LayoutSearchArtifact& artifact,
-                                              const CompileOptions& options) {
+static std::vector<ProvedSearchTransition<LayoutSearchArtifact>>
+contextual_copy_transport_layout_transactions_impl(const LayoutSearchArtifact& artifact,
+    const CompileOptions& options) {
   bool demand=false;
   for(std::size_t i=1;i<artifact.items.size() && !demand;++i) {
     const auto& a=artifact.items[i-1U];const auto& b=artifact.items[i];
@@ -2534,10 +2534,9 @@ contextual_copy_transport_layout_transactions(const LayoutSearchArtifact& artifa
         b.opcode>=0x40 && b.opcode<=0x4e &&
         ((a.opcode>=0x40 && a.opcode<=0x4e) || (a.opcode>=0x60 && a.opcode<=0x6e));
   }
-  auto composed=close_quantized_return_composition(artifact,options,{},
-      joint_representation_search_limits(options.fast_candidate_search));
-  auto scalar_composed=close_quantized_return_composition(artifact,options,{},
-      joint_representation_search_limits(options.fast_candidate_search),true);
+  const auto return_limits = joint_representation_search_limits(options.fast_candidate_search);
+  auto composed=close_quantized_return_composition(artifact,options,{},return_limits);
+  auto scalar_composed=close_quantized_return_composition(artifact,options,{},return_limits,true);
   if(scalar_composed.incumbent && (!composed.incumbent ||
       cells(*scalar_composed.incumbent)<cells(*composed.incumbent)))
     composed.incumbent=std::move(scalar_composed.incumbent);
@@ -3316,6 +3315,62 @@ contextual_copy_transport_layout_transactions(const LayoutSearchArtifact& artifa
   return result;
 }
 
+std::vector<ProvedSearchTransition<LayoutSearchArtifact>>
+contextual_copy_transport_layout_transactions(const LayoutSearchArtifact& artifact,
+                                              const CompileOptions& options) {
+  auto result = contextual_copy_transport_layout_transactions_impl(artifact, options);
+  const auto model = address_space_model_for_feature_profile(effective_optimizer_feature_profile(options));
+  // Independent complete-artifact portfolio: historical candidates retain
+  // their entire budgets. No extra multiplier is added to fitting profiles.
+  if (cells(artifact) <= official_program_step_limit(model)) return result;
+  auto view = representation_view(artifact, options);
+  if (!view) return result;
+  ConstrainedRepresentation root{artifact, {}, {}};
+  root.artifact.items = lower_ir_to_machine(*view);
+  if (!refresh_constraint_targets(root)) return result;
+  const auto origins = detail::joint_target_origins(root.artifact.items, root.targets, root.encoded_selectors);
+  if (!origins) return result;
+  CompileOptions configured = options;
+  configured.coalesce_copies = true;
+  configured.defer_return_suffix_until_callee_hole = true;
+  PostLayoutControlFlowOptions control;
+  control.empty_return_target = 1;
+  control.address_space_model = model;
+  const auto candidates = passes::contextual_edge_return_completion_candidates(*view, {configured},
+      {.maximum_work=200000, .maximum_candidates=2, .maximum_copy_sites=8,
+       .control=&control, .encoded_target_origins=&*origins,
+       .runtime_preloads=&artifact.preloads, .preserve_formal_execution_frames=true});
+  for (const auto& candidate : candidates) {
+    auto semantic = apply(root.artifact, candidate.transformation);
+    if (!semantic) continue;
+    // The historical lane has already priced value/allocation alternatives.
+    // Close this neutral edge with the independent stable-tail/selector layout,
+    // not another recursive replay of the entire representation portfolio.
+    // Every accepted fold strictly decreases cells and has a complete final
+    // artifact proof. Repeated folds compose without a growth ratchet.
+    bool folded = false;
+    while (auto next = close_final_stable_tail_layout(*semantic, options)) {
+      semantic = std::move(next);
+      folded = true;
+    }
+    if (!folded || cells(*semantic) >= cells(artifact) ||
+        std::any_of(result.begin(), result.end(), [&](const auto& old) {
+          return same_layout_search_artifact(old.node, *semantic);
+        })) continue;
+    semantic->optimizations.push_back({"joint-edge-return-selector-layout",
+        "Closed a neutral edge-qualified total leaf with independently proved stable-tail, "
+        "selector and placement transactions. Rechecked all data/selector obligations, "
+        "formal counters, numeric entry, X1/X2 and rooted return frames. Every fold "
+        "strictly decreases complete artifact size; the historical representation "
+        "portfolio is not recursively replayed."});
+    result.push_back({std::move(*semantic), "joint-edge-return-selector-layout", true});
+  }
+  std::stable_sort(result.begin(), result.end(), [](const auto& a, const auto& b) {
+    return cells(a.node) < cells(b.node);
+  });
+  return result;
+}
+
 TransactionSearchResult<LayoutSearchArtifact> search_joint_representation_constraints(
     const LayoutSearchArtifact& root, const CompileOptions& options,
     const JointRepresentationFinalizer& finalize,
@@ -3466,6 +3521,64 @@ TransactionSearchResult<LayoutSearchArtifact> search_joint_representation_constr
     if(composed.incumbent && (!result.incumbent || cells(*composed.incumbent)<cells(*result.incumbent)))
       result.incumbent=std::move(composed.incumbent);
     result.expanded+=composed.expanded;result.admitted+=composed.admitted;
+  }
+  // Reopen physical sharing, erase a proved redundant literal, then solve
+  // complete selector families and projected geometry together. A local cell
+  // saving is not a publication result. This independent lane cannot consume
+  // the historical beams or replace their equal-size incumbents.
+  if (preload_environment_complete && limits.maximum_expansions &&
+      limits.maximum_candidates && limits.maximum_depth) {
+    const auto view = representation_view(root, options);
+    if (view) {
+      CompileOptions configured = options;
+      configured.coalesce_copies = true;
+      configured.defer_return_suffix_until_callee_hole = true;
+      PostLayoutControlFlowOptions control;
+      control.address_space_model = address_space_model_for_feature_profile(
+          effective_optimizer_feature_profile(options));
+      control.empty_return_target = 1;
+      ConstrainedRepresentation base{root, {}, {}};
+      base.artifact.items = lower_ir_to_machine(*view);
+      if (refresh_constraint_targets(base)) {
+        std::vector<ConstrainedRepresentation> sources{base};
+        auto reopened = reopen_shared_helper_dual_mode_layout(base.artifact.items, control);
+        if (reopened.applied > 0 && reopened.added_cells <= limits.maximum_growth_cells) {
+          auto expanded = base;
+          expanded.artifact.items = std::move(reopened.items);
+          if (refresh_constraint_targets(expanded)) sources.push_back(std::move(expanded));
+        }
+        for (const auto& source : sources) {
+          const auto origins = detail::joint_target_origins(
+              source.artifact.items, source.targets, source.encoded_selectors);
+          if (!origins) continue;
+          for (auto& erased : passes::contextual_redundant_literal_store_candidates(
+                   raise_machine_to_ir(source.artifact.items), {configured},
+                   {.maximum_work=200000, .maximum_candidates=2, .maximum_copy_sites=16,
+                    .control=&control, .encoded_target_origins=&*origins,
+                    .runtime_preloads=&source.artifact.preloads,
+                    .preserve_formal_execution_frames=true})) {
+            auto candidate = apply(source.artifact, std::move(erased.transformation));
+            if (!candidate || !transaction_growth_fits(
+                    cells(root), cells(*candidate), limits.maximum_growth_cells)) continue;
+            auto pending = source;
+            pending.artifact = std::move(*candidate);
+            if (!refresh_constraint_targets(pending)) continue;
+            auto composed = search_joint_representation_constraints_impl(
+                pending.artifact, options, strict, limits, true,
+                ProloguePartitionLane::Disabled, proof_counts, intermediate, true,
+                &pending, cells(root));
+            if (composed.incumbent && (!result.incumbent ||
+                cells(*composed.incumbent) < cells(*result.incumbent)))
+              result.incumbent = std::move(composed.incumbent);
+            result.expanded += composed.expanded;
+            result.admitted += composed.admitted;
+            result.duplicate += composed.duplicate;
+            result.rejected += composed.rejected;
+            result.budget_exhausted = result.budget_exhausted || composed.budget_exhausted;
+          }
+        }
+      }
+    }
   }
   if (std::getenv("MKPRO_NATIVE_TRACE_JOINT_PROOF_INPUT"))
     std::cerr << "[joint-proof-input] inputs=" << proof_counts.inputs
