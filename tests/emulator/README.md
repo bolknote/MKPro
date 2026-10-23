@@ -77,14 +77,31 @@ Csákány's cards and numbers solitaire:
 node tests/emulator/csakany-cards-numbers.cjs
 ```
 
-Checks the 104-step listing with the card's keyboard setup and an independent
+Checks the 105-step listing with the card's keyboard setup and an independent
 integer deck/rules model. Covers the 100000-state generator cycle and first-pair
 rank bias across all seeds; seven complete ROM games; every physical card and
 rounding of its bit mask; early victory and the last stock pair; normalized
 negative, fractional and very large seeds; retained products after failed
-pairs; all angle modes; ignored numeric input during play; terminal stops,
+pairs; all angle modes; ignored numeric input during play and at completion; terminal stops,
 restarts and the book's division example. The card explicitly identifies the
 no-recycling waste rule as an adaptation choice.
+
+Csákány's either/or card game:
+
+```sh
+node tests/emulator/csakany-either-or.cjs
+```
+
+Checks the 104-step listing and both mode launches using the card's keyboard
+preparation. Complete solo and two-player games are checked against an
+independent scoring/rules model; finite-deck changes must account for exactly
+one card per move, with no fifth copy. Covers both choices, alternating players,
+hidden solo discards, invalid and repeated codes without resource changes,
+copy-number boundaries and zero/upper-end RNG proposals in the unchanged ROM
+program, all angle modes, thirteen complete games with continued native RNG
+state, terminal reports after a return to 00 and full keyboard restarts.
+Taking all known digits must
+reproduce the card's exact 45-point control game.
 
 Romanovskis's regularity rally:
 

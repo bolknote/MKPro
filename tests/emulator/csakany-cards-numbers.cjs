@@ -12,10 +12,10 @@ const listing = fs.readFileSync(`${base}.txt`, 'utf8');
 const card = fs.readFileSync(`${base}.md`, 'utf8');
 const parsed = parseProgramText(listing);
 assert.deepEqual(parsed.diagnostics, []);
-assert.equal(parsed.codes.length, 104);
+assert.equal(parsed.codes.length, 105);
 // The parser ignores addresses beyond the machine's memory limit.
 const cells = listing.trim().split(/\n/);
-assert.equal(cells.length, 104);
+assert.equal(cells.length, 105);
 cells.forEach((line, i) => assert.ok(line.startsWith(
   `${i < 100 ? String(i).padStart(2, '0') : `A${i - 100}`}\t`)));
 
@@ -85,7 +85,7 @@ function model(seed) {
   function report(value, phase, pair) {
     reports.push({ value, phase, product, removed, consumed: cursor,
       masks: masks(deck.ids.slice(0, cursor)), state: deck.states[cursor - 1],
-      groups: Math.max(1, 7 - removed), pairs: 9 - pair });
+      groups: phase === 'end' && value === 0 ? 0 : Math.max(1, 7 - removed), pairs: 9 - pair });
   }
   for (let pair = 0; pair < 9; pair++) {
     if (triple === null) {
@@ -146,7 +146,7 @@ function prepare(seed = 161, angleMode = 'rad', existing = null) {
   keyboard(calc, setup[0]);
   keyboard(calc, setup[1].replace(/^161\b/, String(seed)));
   settle(calc);
-  assert.deepEqual(calc.readProgramCodes(104), parsed.codes);
+  assert.deepEqual(calc.readProgramCodes(105), parsed.codes);
   return calc;
 }
 let totalPairs = 0, completeGames = 0;
@@ -166,10 +166,12 @@ function play(calc, seed, noisy = false) {
     }
   }
   const finalState = values(calc, [...'0123456789ABCDE']);
-  for (let repeat = 0; repeat < 2; repeat++) next(calc, expected.result, 'terminal report');
+  for (let repeat = 0; repeat < 2; repeat++) next(calc, expected.result, 'terminal report ignores input', true);
+  keyboard(calc, 'В/О С/П');
+  assert.equal(settle(calc), expected.result, 'returning to 00 restores the terminal report');
   assert.deepEqual(values(calc, [...'0123456789ABCDE']), finalState,
     'continuing after completion must not deal any more cards');
-  assert.deepEqual(calc.readProgramCodes(104), parsed.codes);
+  assert.deepEqual(calc.readProgramCodes(105), parsed.codes);
   completeGames++;
   return expected;
 }
@@ -195,8 +197,8 @@ printed.forEach((match, index) => {
 // through the keyboard. This exercises all forty bit positions, including
 // rounding of 2^j on the actual ROM, and fills both masks exactly.
 assert.equal(reference.consumed, 39);
-keyboard(first, 'БП 03 С/П');
-assert.equal(settle(first), reference.deck.cards[39]);
+keyboard(first, 'БП 05 С/П');
+assert.equal(settle(first), 0, 'the standalone deal returns through the persistent win report');
 assert.equal(register(first, '6'), reference.deck.ids[39]);
 assert.deepEqual(values(first, ['3', '4']), [1048575, 1048575]);
 
@@ -248,6 +250,6 @@ keyboard(book, '2 хПe 6 хП7');
 assert.notEqual(270 % (2 * 6), 0, 'the product of divisors need not divide 270');
 next(book, -120, '270/2 and 270/6 remove exactly one triple');
 assert.equal(register(book, '1'), 6);
-assert.deepEqual(book.readProgramCodes(104), parsed.codes);
+assert.deepEqual(book.readProgramCodes(105), parsed.codes);
 
 console.log(`Csákány cards and numbers: 100000 generator states/seeds, ${sameRank} same-rank first pairs; ${completeGames} complete ROM games, ${totalPairs} pairs; all 40 physical cards, keyboard setup/restarts, seed normalization, stock boundaries, angle modes and the book example OK.`);
