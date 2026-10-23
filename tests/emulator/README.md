@@ -71,6 +71,21 @@ all three scan errors and win all four levels using only public scan displays.
 Resource checks, empty launchers, shield limits and terminal inspection are
 covered too. Pass `solitaire`, `hamurabi` or `trek` to run one group.
 
+Csákány's cards and numbers solitaire:
+
+```sh
+node tests/emulator/csakany-cards-numbers.cjs
+```
+
+Checks the 104-step listing with the card's keyboard setup and an independent
+integer deck/rules model. Covers the 100000-state generator cycle and first-pair
+rank bias across all seeds; seven complete ROM games; every physical card and
+rounding of its bit mask; early victory and the last stock pair; normalized
+negative, fractional and very large seeds; retained products after failed
+pairs; all angle modes; ignored numeric input during play; terminal stops,
+restarts and the book's division example. The card explicitly identifies the
+no-recycling waste rule as an adaptation choice.
+
 Romanovskis's regularity rally:
 
 ```sh
