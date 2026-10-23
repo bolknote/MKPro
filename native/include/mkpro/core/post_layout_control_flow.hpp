@@ -5,6 +5,7 @@
 
 #include <cstddef>
 #include <map>
+#include <memory>
 #include <optional>
 #include <string>
 #include <utility>
@@ -268,6 +269,13 @@ struct PostLayoutBorrowedSelectorProof {
 // Comments, semantic names, preloads, and optimizer switches are not consulted.
 AuthoritativePostLayoutControlFlow
 build_post_layout_control_flow(const std::vector<MachineItem>& items,
+                               const PostLayoutControlFlowOptions& options = {});
+
+// Immutable owning view of the same exact facts and bounded full-key cache.
+// Read-only consumers share storage; the value API above still returns an
+// independent mutable copy. Snapshots remain valid after cache eviction.
+std::shared_ptr<const AuthoritativePostLayoutControlFlow>
+shared_post_layout_control_flow(const std::vector<MachineItem>& items,
                                const PostLayoutControlFlowOptions& options = {});
 
 // A separate product graph for relational data proofs. Several product nodes

@@ -31,9 +31,9 @@ inline std::optional<LayoutSearchArtifact> rebind_layout_search_artifact(
   return artifact;
 }
 
-inline bool same_layout_search_artifact(const LayoutSearchArtifact& a,
-                                        const LayoutSearchArtifact& b) {
-  if (a.items.size() != b.items.size() || a.preloads.size() != b.preloads.size())
+inline bool same_layout_search_items(const std::vector<MachineItem>& a,
+                                    const std::vector<MachineItem>& b) {
+  if (a.size() != b.size())
     return false;
   // Include typed proof/observation metadata, not just bytes or CFG shape.
   // Keep label metadata too; machine_items_equal intentionally compares
@@ -50,6 +50,17 @@ inline bool same_layout_search_artifact(const LayoutSearchArtifact& a,
                     item.borrowed_entry_phase_selector,
                     item.semantic_call_origins, item.target, item.formal_opcode);
   };
+  return std::equal(a.begin(), a.end(), b.begin(),
+                    [&](const auto& left, const auto& right) {
+                      return item_fields(left) == item_fields(right);
+                    });
+}
+
+inline bool same_layout_search_artifact(const LayoutSearchArtifact& a,
+                                        const LayoutSearchArtifact& b) {
+  if (a.preloads.size() != b.preloads.size() ||
+      !same_layout_search_items(a.items, b.items))
+    return false;
   const auto preload_fields = [](const PreloadReport& preload) {
     return std::tie(preload.register_name, preload.value,
                     preload.counts_against_program,
@@ -58,11 +69,7 @@ inline bool same_layout_search_artifact(const LayoutSearchArtifact& a,
                     preload.setup_expression_text, preload.setup_source_line,
                     preload.lowered_data_value);
   };
-  return std::equal(a.items.begin(), a.items.end(), b.items.begin(),
-                    [&](const auto& left, const auto& right) {
-                      return item_fields(left) == item_fields(right);
-                    }) &&
-         std::equal(a.preloads.begin(), a.preloads.end(), b.preloads.begin(),
+  return std::equal(a.preloads.begin(), a.preloads.end(), b.preloads.begin(),
                     [&](const auto& left, const auto& right) {
                       return preload_fields(left) == preload_fields(right);
                     });

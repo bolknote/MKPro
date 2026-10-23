@@ -93,9 +93,36 @@ struct ExecutionCursor {
   auto operator<=>(const ExecutionCursor&) const = default;
 };
 
+// The exact hardware bound is checked before exploration. Keep those frames
+// inline in lookup/queue keys instead of allocating two vectors per state.
+// Ordering remains lexicographic over active frames, exactly as for vector.
+class ExecutionFrames {
+ public:
+  auto begin() const { return frames_.begin(); }
+  auto end() const { return frames_.begin() + static_cast<std::ptrdiff_t>(size_); }
+  std::size_t size() const { return size_; }
+  bool empty() const { return size_ == 0; }
+  const ExecutionCursor& back() const { return frames_.at(size_ - 1U); }
+  void push_back(const ExecutionCursor& cursor) {
+    frames_.at(size_) = cursor;
+    ++size_;
+  }
+  void pop_back() { --size_; }
+  bool operator==(const ExecutionFrames& other) const {
+    return std::equal(begin(), end(), other.begin(), other.end());
+  }
+  auto operator<=>(const ExecutionFrames& other) const {
+    return std::lexicographical_compare_three_way(begin(), end(), other.begin(), other.end());
+  }
+
+ private:
+  std::array<ExecutionCursor, 5> frames_{};
+  std::size_t size_ = 0;
+};
+
 struct ExecutionState {
   ExecutionCursor pc;
-  std::vector<ExecutionCursor> returns;
+  ExecutionFrames returns;
   auto operator<=>(const ExecutionState&) const = default;
 };
 
@@ -512,15 +539,17 @@ std::vector<int> stack_addresses(const std::vector<PostLayoutCommandIdentity>& r
   return result;
 }
 
-std::vector<int> cursor_addresses(const std::vector<ExecutionCursor>& cursors) {
+std::vector<int> cursor_addresses(const ExecutionFrames& cursors) {
   std::vector<int> result;
+  result.reserve(cursors.size());
   for (const auto& cursor : cursors) result.push_back(cursor.address);
   return result;
 }
 
 std::vector<std::optional<int>> cursor_formals(
-    const std::vector<ExecutionCursor>& cursors) {
+    const ExecutionFrames& cursors) {
   std::vector<std::optional<int>> result;
+  result.reserve(cursors.size());
   for (const auto& cursor : cursors) result.push_back(cursor.formal_opcode);
   return result;
 }
@@ -528,7 +557,7 @@ std::vector<std::optional<int>> cursor_formals(
 bool add_external_entry(AuthoritativePostLayoutControlFlow& result,
                         const std::vector<MachineItem>& items, const ArtifactIndex& index,
                         const ExecutionCursor& pc,
-                        const std::vector<ExecutionCursor>& returns, ExternalEntryKind kind,
+                         const ExecutionFrames& returns, ExternalEntryKind kind,
                         std::optional<ManualInteractionAnchor> manual = std::nullopt) {
   const std::optional<PostLayoutCommandIdentity> entry = identity_at_address(items, index, pc.address);
   if (!entry.has_value()) {
@@ -637,7 +666,7 @@ void explore_entries_and_return_stacks(const std::vector<MachineItem>& items,
     const MachineItem& item = items.at(item_index);
     const int opcode = item.opcode;
 
-    const auto enqueue = [&](ExecutionCursor pc, const std::vector<ExecutionCursor>& returns,
+    const auto enqueue = [&](ExecutionCursor pc, const ExecutionFrames& returns,
                              PostLayoutExecutionEdgeKind kind =
                                  PostLayoutExecutionEdgeKind::Fallthrough) {
       const std::optional<std::size_t> successor =
@@ -739,7 +768,7 @@ void explore_entries_and_return_stacks(const std::vector<MachineItem>& items,
         }
         continue;
       }
-      std::vector<ExecutionCursor> returns = state.returns;
+      ExecutionFrames returns = state.returns;
       const ExecutionCursor return_pc = returns.back();
       returns.pop_back();
       enqueue(return_pc, returns, PostLayoutExecutionEdgeKind::Return);
@@ -777,7 +806,7 @@ void explore_entries_and_return_stacks(const std::vector<MachineItem>& items,
           add_reason(result, "direct call has no executable continuation");
           continue;
         }
-        std::vector<ExecutionCursor> returns = state.returns;
+        ExecutionFrames returns = state.returns;
         returns.push_back(*fallthrough);
         enqueue(*target, returns, PostLayoutExecutionEdgeKind::DirectTarget);
       } else if (is_direct_conditional_opcode(opcode)) {
@@ -799,7 +828,7 @@ void explore_entries_and_return_stacks(const std::vector<MachineItem>& items,
         add_reason(result, "reachable indirect flow lacks a complete typed target set");
         continue;
       }
-      std::vector<ExecutionCursor> returns = state.returns;
+      ExecutionFrames returns = state.returns;
       if (is_indirect_call_opcode(opcode)) {
         if (static_cast<int>(returns.size()) >= options.maximum_return_depth) {
           add_reason(result, "control flow exceeds the configured return-stack depth");
@@ -1001,16 +1030,17 @@ build_post_layout_control_flow_uncached(const std::vector<MachineItem>& items,
   return result;
 }
 
-AuthoritativePostLayoutControlFlow
-build_post_layout_control_flow(const std::vector<MachineItem>& items,
+std::shared_ptr<const AuthoritativePostLayoutControlFlow>
+shared_post_layout_control_flow(const std::vector<MachineItem>& items,
                                const PostLayoutControlFlowOptions& options) {
   const char* enabled=std::getenv("MKPRO_NATIVE_CFG_CACHE");
   if(enabled && std::string_view(enabled)=="0")
-    return build_post_layout_control_flow_uncached(items,options);
+    return std::make_shared<const AuthoritativePostLayoutControlFlow>(
+        build_post_layout_control_flow_uncached(items,options));
   struct Entry {
     LayoutSearchArtifact artifact;
     PostLayoutControlFlowOptions options;
-    AuthoritativePostLayoutControlFlow flow;
+    std::shared_ptr<const AuthoritativePostLayoutControlFlow> flow;
   };
   // A bounded per-thread cache owns every snapshot. A caller may freely prune
   // or mutate its returned graph without changing another proof's input.
@@ -1020,21 +1050,27 @@ build_post_layout_control_flow(const std::vector<MachineItem>& items,
         value.maximum_execution_states,value.main_entry,value.main_formal_opcode,
         value.proved_indirect_formal_targets,value.empty_return_target,value.opcode_address_words);
   };
-  const LayoutSearchArtifact artifact{.items=items};
   for(auto it=cache.rbegin();it!=cache.rend();++it)
-    if(key(it->options)==key(options) && same_layout_search_artifact(it->artifact,artifact))
+    if(key(it->options)==key(options) && same_layout_search_items(it->artifact.items,items))
       return it->flow;
-  auto flow=build_post_layout_control_flow_uncached(items,options);
+  auto flow=std::make_shared<const AuthoritativePostLayoutControlFlow>(
+      build_post_layout_control_flow_uncached(items,options));
   constexpr std::size_t maximum_entries=16,maximum_states=65536;
-  if(flow.execution_states.size()<=maximum_states){
-    std::size_t states=flow.execution_states.size();
-    for(const auto& entry:cache)states+=entry.flow.execution_states.size();
+  if(flow->execution_states.size()<=maximum_states){
+    std::size_t states=flow->execution_states.size();
+    for(const auto& entry:cache)states+=entry.flow->execution_states.size();
     while(!cache.empty() && (cache.size()>=maximum_entries || states>maximum_states)){
-      states-=cache.front().flow.execution_states.size();cache.erase(cache.begin());
+      states-=cache.front().flow->execution_states.size();cache.erase(cache.begin());
     }
-    cache.push_back({artifact,options,flow});
+    cache.push_back({LayoutSearchArtifact{.items=items},options,flow});
   }
   return flow;
+}
+
+AuthoritativePostLayoutControlFlow
+build_post_layout_control_flow(const std::vector<MachineItem>& items,
+                               const PostLayoutControlFlowOptions& options) {
+  return *shared_post_layout_control_flow(items, options);
 }
 
 namespace {

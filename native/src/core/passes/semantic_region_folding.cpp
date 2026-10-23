@@ -117,8 +117,10 @@ bool relocated(const std::vector<IrOp>& before, const std::vector<IrOp>& after,
       items[old_machine[i] + cell] = new_machine[mapping[i]] + cell;
   }
   const auto options = control_options ? *control_options : flow_options(context);
-  const auto old_flow = build_post_layout_control_flow(input, options);
-  const auto new_flow = build_post_layout_control_flow(output, options);
+  const auto old_flow_owner = shared_post_layout_control_flow(input, options);
+  const auto new_flow_owner = shared_post_layout_control_flow(output, options);
+  const auto& old_flow = *old_flow_owner;
+  const auto& new_flow = *new_flow_owner;
   if (!old_flow.proved || !new_flow.proved) return false;
 
   PostLayoutExecutionRelocationOptions transport;
@@ -244,8 +246,9 @@ std::optional<SymbolicRegionLayout> layout_symbolic_regions(
         return op.target_meta.formal_opcode.has_value();
       })) {
     const auto source = lower_ir_to_machine(ops);
-    const auto control = build_post_layout_control_flow(source,
+    const auto control_owner = shared_post_layout_control_flow(source,
         control_options ? *control_options : flow_options(context));
+    const auto& control = *control_owner;
     if (!control.proved) return std::nullopt;
     const auto machine = machine_indexes(ops);
     std::map<std::size_t, std::size_t> part_by_item;
@@ -341,7 +344,8 @@ std::optional<SymbolicRegionLayout> layout_symbolic_regions(
     // An absolute empty-return root is an entry contract too. Padding may
     // never turn physical 01 into an unobserved gap instead of its command.
     const auto options=control_options?*control_options:flow_options(context);
-    const auto flow=build_post_layout_control_flow(lower_ir_to_machine(ops),options);
+    const auto flow_owner=shared_post_layout_control_flow(lower_ir_to_machine(ops),options);
+    const auto& flow=*flow_owner;
     if(!flow.proved)return std::nullopt;
     if(flow.empty_return_target){
       const auto indexes=machine_indexes(ops);bool found=false;
@@ -450,7 +454,8 @@ std::vector<PassResult> deferred_stack_producer_erasure_candidates(
     const auto input = nodes[parent].items;
     const auto erased = nodes[parent].erased;
     if (erased >= limits.maximum_erased_cells) continue;
-    const auto flow = build_post_layout_control_flow(input, control_options);
+    const auto flow_owner = shared_post_layout_control_flow(input, control_options);
+    const auto& flow = *flow_owner;
     if (!flow.proved) continue;
     auto data_flow = flow;
     const auto product = build_deferred_selector_consistent_execution_graph(
@@ -493,7 +498,8 @@ std::vector<PassResult> deferred_stack_producer_erasure_candidates(
         continue;
       auto next = input;
       next.erase(next.begin() + static_cast<std::ptrdiff_t>(at));
-      const auto next_flow = build_post_layout_control_flow(next, control_options);
+      const auto next_flow_owner = shared_post_layout_control_flow(next, control_options);
+      const auto& next_flow = *next_flow_owner;
       std::vector<std::optional<std::size_t>> relocation(input.size());
       for (std::size_t i = 0; i < input.size(); ++i)
         relocation[i] = i < at ? i : i - 1U;

@@ -26,17 +26,17 @@ class PreparedJointProofInput {
                          JointProofPreparationCounts* counts = nullptr,
                          std::size_t capacity = 64)
       : items_(items), preloads_(preloads), options_(std::move(options)),
-        flow_(build_post_layout_control_flow(items_,options_)),
+        flow_(shared_post_layout_control_flow(items_,options_)),
         counts_(counts), capacity_(capacity) {
     if (counts_) ++counts_->inputs;
   }
   const std::vector<MachineItem>& items() const { return items_; }
   const std::vector<PreloadReport>& preloads() const { return preloads_; }
   const PostLayoutControlFlowOptions& options() const { return options_; }
-  const AuthoritativePostLayoutControlFlow& flow() const { return flow_; }
+  const AuthoritativePostLayoutControlFlow& flow() const { return *flow_; }
   const std::optional<JointOriginMap>& protected_runtime_charge_targets() {
     if (!runtime_charge_targets_prepared_) {
-      runtime_charge_targets_=protected_joint_runtime_charge_targets(items_,&flow_,&preloads_);
+      runtime_charge_targets_=protected_joint_runtime_charge_targets(items_,flow_.get(),&preloads_);
       runtime_charge_targets_prepared_=true;
     }
     return runtime_charge_targets_;
@@ -58,7 +58,7 @@ class PreparedJointProofInput {
     ++selector_proofs_;
     if (counts_) ++counts_->selector_proofs;
     auto result = rebind_stable_preloaded_indirect_flow_selector(
-        items_,selected,flow_,old_target,new_target,options_.address_space_model,&preloads_);
+        items_,selected,*flow_,old_target,new_target,options_.address_space_model,&preloads_);
     // Store only completed outcomes; exceptions never create a certificate.
     // Every input other than the selected word/targets is frozen in this owner.
     if (entries_.size() < capacity_)
@@ -83,7 +83,7 @@ class PreparedJointProofInput {
   const std::vector<MachineItem> items_;
   const std::vector<PreloadReport> preloads_;
   const PostLayoutControlFlowOptions options_;
-  const AuthoritativePostLayoutControlFlow flow_;
+  const std::shared_ptr<const AuthoritativePostLayoutControlFlow> flow_;
   JointProofPreparationCounts* counts_;
   const std::size_t capacity_;
   std::vector<Entry> entries_;

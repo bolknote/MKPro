@@ -1,5 +1,28 @@
 # MK-Pro Optimization and Lowering Strategy Reference
 
+## Continuing a completed optimizer root
+
+An exhaustive portfolio retains the completed bounded incumbent and can continue
+its actual emitted IR, rather than restarting only from default source lowering.
+The immutable continuation records the exact winning lowering options separately
+from nonwinning geometry checkpoints. A resumed root keeps those ABI, allocation,
+selector and memory-model choices; only exploration policy and requested budget
+change. Cross-model replay still requires the separate transport proof.
+
+The continuation uses the existing bounded joint representation/layout frontier,
+finalization fixed point and final static gates. It cannot publish an unresolved
+artifact, replace an incumbent with a larger result, or clear unrelated errors.
+JSON/explain reports `optimizer-search-root-continuation`, its actual before/after
+cell counts and whether the root was resumed, rejected or did not improve.
+
+Read-only proof/layout consumers share immutable authoritative CFG snapshots.
+Cache identity still includes every machine-item field and all CFG options; the
+16-entry/65536-state limits are unchanged. The mutable value API remains an
+independent copy, and outstanding snapshots survive eviction. Internal exact
+return-context keys store at most five frames inline, preserving active-frame
+lexicographic order, traversal, formal counters and all previous failure limits.
+These changes reduce allocation/copy work, not proof coverage or candidate cost.
+
 This is an implementation-level reference for the current translator in this
 repository. It describes what the compiler optimizes and lowers, where each
 optimization is applied, and how to read reported capabilities.

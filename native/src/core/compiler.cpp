@@ -99,9 +99,22 @@ struct OptimizerLayoutContinuation {
     bool unfrozen_geometry = false;
   };
   std::vector<Checkpoint> checkpoints;
+  // Exact owner of the completed artifact, separate from nonwinning roots.
+  // Resuming may change exploration policy, never guess lowering or a model.
+  std::optional<CompileOptions> completed_options;
 };
 
 namespace {
+
+void remember_completed_optimizer_context(CompileResult& result,
+                                           const CompileOptions& options) {
+  if (!result.implemented || result.items.empty()) return;
+  auto continuation = std::make_shared<OptimizerLayoutContinuation>();
+  if (result.layout_search_continuation)
+    continuation->checkpoints = result.layout_search_continuation->checkpoints;
+  continuation->completed_options = options;
+  result.layout_search_continuation = std::move(continuation);
+}
 
 using core::emit::abs_expression;
 using core::emit::add_expression;
@@ -75403,6 +75416,7 @@ apply_contextual_copy_layout_to_selected_result(
         source, std::move(*candidate), options, comparison_options);
     if (!candidate->implemented || (candidate_needs_static_proof_gate(options) &&
         optimizer_static_gate_rejection_reason(options, *candidate))) continue;
+    remember_completed_optimizer_context(*candidate, options);
     if (std::getenv("MKPRO_NATIVE_TRACE_COPY_TRANSPORT"))
       std::cerr << "[context-publication] closed " << core::machine_cell_count(layout.items)
                 << " -> finalized " << candidate->steps.size() << '\n';
@@ -75452,6 +75466,8 @@ void retain_optimizer_layout_checkpoints(
           address_space_model_for_options(options))))
     return;
   auto retained = std::make_shared<OptimizerLayoutContinuation>();
+  if (winner.layout_search_continuation)
+    retained->completed_options = winner.layout_search_continuation->completed_options;
   std::vector<OptimizerLayoutContinuation::Checkpoint> candidates;
   for (auto& root : roots)
     candidates.push_back({std::move(root), options});
@@ -81873,6 +81889,10 @@ CompileResult close_final_contextual_layout_roots(
     proof_options.budget = comparison_options.budget;
     const core::LayoutSearchArtifact artifact{
         seed.result.items, seed.result.preloads, seed.result.optimizations};
+    // Exploration policy is not part of the emitted ABI. Preserve every
+    // semantic lowering choice, but actually expand a bounded checkpoint.
+    proof_options.fast_candidate_search = comparison_options.fast_candidate_search;
+    proof_options.fast_candidate_threshold_ms = comparison_options.fast_candidate_threshold_ms;
     const auto key = reclaim_base_key(proof_options);
     if (std::any_of(seen.begin(), seen.end(), [&](const auto& old) {
           return old.options == key && old.registers == seed.result.registers &&
@@ -81927,7 +81947,68 @@ CompileResult close_final_contextual_layout_roots(
   return best;
 }
 
+CompileResult continue_completed_optimizer_root(
+    const std::string& source, CompileResult root,
+    const CompileOptions& comparison_options) {
+  if (comparison_options.fast_candidate_search || !root.implemented ||
+      root.items.empty() || root.manual_startup_sequence)
+    return root;
+  const auto limit = std::min(program_step_limit_size_for_options(comparison_options),
+      comparison_options.budget && *comparison_options.budget > 0
+          ? static_cast<std::size_t>(*comparison_options.budget)
+          : program_step_limit_size_for_options(comparison_options));
+  if (root.steps.size() <= limit) return root;
+  const auto before = root.steps.size();
+  std::string reason;
+  bool resumed = false;
+  if (!root.layout_search_continuation ||
+      !root.layout_search_continuation->completed_options) {
+    reason = "missing completed IR ownership; retained the independent artifact";
+  } else {
+    auto owner = *root.layout_search_continuation->completed_options;
+    if (root.feature_profile != comparison_options.feature_profile ||
+        effective_optimizer_feature_profile(owner) != root.feature_profile) {
+      reason = "completed IR memory model requires a separate transport proof";
+    } else if (candidate_needs_static_proof_gate(owner) &&
+               optimizer_static_gate_rejection_reason(owner, root)) {
+      reason = "completed IR no longer passes its owning static proof gate";
+    } else {
+      owner.fast_candidate_search = comparison_options.fast_candidate_search;
+      owner.fast_candidate_threshold_ms = comparison_options.fast_candidate_threshold_ms;
+      owner.budget = comparison_options.budget;
+      root = close_final_contextual_layout_roots(
+          source, std::move(root), owner, comparison_options);
+      resumed = true;
+      reason = root.steps.size() < before
+          ? "smaller fully finalized continuation of the completed bounded IR"
+          : "expanded the completed bounded IR; no smaller proof-valid closure";
+    }
+  }
+  root.candidates.push_back({.site = "optimizer-search-root-continuation",
+      .variant = resumed ? "completed-IR" : "rejected-IR",
+      .steps = static_cast<int>(root.steps.size()),
+      .selected = root.steps.size() < before, .reason = reason});
+  root.optimizations.push_back({.name = "optimizer-search-root-continuation",
+      .detail = std::to_string(before) + " -> " + std::to_string(root.steps.size()) +
+          " cells: " + reason +
+          ". Retained exact lowering ownership; changed only exploration policy and requested budget."});
+  return root;
+}
+
 } // namespace
+
+CompileResult continue_optimizer_layout_root_for_testing(
+    const std::string& source, CompileResult root,
+    const CompileOptions& owner, const CompileOptions& comparison_options) {
+  remember_completed_optimizer_context(root, owner);
+  return continue_completed_optimizer_root(source, std::move(root), comparison_options);
+}
+
+std::optional<CompileOptions> completed_optimizer_options_for_testing(
+    const CompileResult& result) {
+  return result.layout_search_continuation
+      ? result.layout_search_continuation->completed_options : std::nullopt;
+}
 
 CompileResult close_final_contextual_layouts_for_testing(
     const std::string& source, CompileResult result,
@@ -81953,6 +82034,8 @@ CompileResult compile_source(std::string source, const CompileOptions& requested
   const auto completed=[&](CompileResult result){
     if (bounded_incumbent && bounded_incumbent->implemented &&
         bounded_incumbent->feature_profile == options.feature_profile) {
+      *bounded_incumbent = continue_completed_optimizer_root(
+          source, std::move(*bounded_incumbent), options);
       const auto exhaustive_cells = result.steps.size();
       const bool selected_bounded = !result.implemented ||
           candidate_beats_best(*bounded_incumbent, result, options);
@@ -82054,6 +82137,7 @@ CompileResult compile_source(std::string source, const CompileOptions& requested
   CompileOptions expanded_lowering_options;
   CompileResult expanded = search_representation_roots(options, &expanded_lowering_options);
   expanded = close_dead_stack_producers(std::move(expanded), expanded_lowering_options);
+  remember_completed_optimizer_context(expanded, expanded_lowering_options);
   if (!feature_profile_has_rf_register(options.feature_profile) ||
       options.optimizer_feature_profile_override.has_value() ||
       options.optimizer_register_profile_override.has_value() ||
@@ -82077,6 +82161,7 @@ CompileResult compile_source(std::string source, const CompileOptions& requested
   CompileOptions standard_lowering_options;
   CompileResult standard = search_representation_roots(standard_options, &standard_lowering_options);
   standard = close_dead_stack_producers(std::move(standard), standard_lowering_options);
+  remember_completed_optimizer_context(standard, standard_lowering_options);
   const CompileResult* selected =
       candidate_beats_best(standard, expanded, options) ? &standard : &expanded;
   const CompileResult* previous = selected == &standard ? &expanded : &standard;
@@ -82101,6 +82186,7 @@ CompileResult compile_source(std::string source, const CompileOptions& requested
     restricted_options.budget = options.budget;
     restricted = search_representation_roots(restricted_options, &restricted_winning_options);
     *restricted = close_dead_stack_producers(std::move(*restricted), restricted_winning_options);
+    remember_completed_optimizer_context(*restricted, restricted_winning_options);
     if (candidate_needs_static_proof_gate(restricted_winning_options)) {
       if (const auto rejection =
               optimizer_static_gate_rejection_reason(restricted_winning_options, *restricted)) {
