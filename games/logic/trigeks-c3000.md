@@ -7,6 +7,7 @@
 - Исходный файл: `Logic2.c3`
 - Модель: МК-61
 - Программа: [trigeks-c3000.txt](trigeks-c3000.txt)
+- Дополнительный источник: «Электроника БРП-4», программа №42; [дамп ПЗУ](https://github.com/myak555/MK-52_Resurrect/blob/main/MK-52_Sample_Programs/BRP%20Expansion%20Modules/BRP4-2.BIN) — все 98 команд совпадают.
 
 ## Описание
 

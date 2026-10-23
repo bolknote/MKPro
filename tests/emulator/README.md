@@ -45,6 +45,20 @@ Smoke run:
 node tests/emulator/smoke-games.cjs
 ```
 
+BRP-4 ROM games and recreational programs:
+
+```sh
+node tests/emulator/brp4-games.cjs
+```
+
+Checks 15 delivered listings against the original ROM-byte fixture and the one
+manual-prescribed patch. Uses the keyboard setup printed in every card. Covers
+complete Bashe, Wythoff and three-heap Nim examples, number-guess grades, both
+lucky-ticket modes, all 31 day seeds for both lottery generators, Life
+generations, simulator scenarios and source error/recovery behavior. A complete
+torpedo game verifies the original nine-shot limit. See the
+[import audit](../../docs/29-brp4-games-import.md) for provenance and source quirks.
+
 Romanovskis's turtle, snail and millipede race:
 
 ```sh

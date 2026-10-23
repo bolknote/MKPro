@@ -7,6 +7,7 @@
 - Исходный файл: `Чет-нечет_2.c3`
 - Модель: МК-61
 - Программа: [chet-nechet-korrelyatsiya-c3000.txt](chet-nechet-korrelyatsiya-c3000.txt)
+- Дополнительный источник: «Электроника БРП-4», программа №37; [дамп ПЗУ](https://github.com/myak555/MK-52_Resurrect/blob/main/MK-52_Sample_Programs/BRP%20Expansion%20Modules/BRP4-2.BIN) — первые 72 команды совпадают; далее в БРП пять нулей.
 
 ## Описание
 

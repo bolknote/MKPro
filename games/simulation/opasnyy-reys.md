@@ -3,6 +3,7 @@
 - Автор: неизвестен
 - Источник: *Наука и жизнь*, №10, 1986, mirrored at [arbinada.ddns.net](http://arbinada.ddns.net/pmk-files/magazines/%D0%9D%D0%B0%D1%83%D0%BA%D0%B0%20%D0%B8%20%D0%B6%D0%B8%D0%B7%D0%BD%D1%8C%20%D0%9F%D0%9C%D0%9A.zip)
 - Программа: [opasnyy-reys.txt](opasnyy-reys.txt)
+- Дополнительный источник: «Электроника БРП-4», программа №46; [дамп ПЗУ](https://github.com/myak555/MK-52_Resurrect/blob/main/MK-52_Sample_Programs/BRP%20Expansion%20Modules/BRP4-2.BIN) — все 98 команд совпадают.
 
 ## Описание
 

@@ -4,6 +4,7 @@
 - Источник: А. Б. Бойко, «Игры с микрокалькулятором», *Математика, кибернетика*, 1987, № 11
 - Листинг: рис. 3
 - Программа: [magicheskiy-kvadrat.txt](magicheskiy-kvadrat.txt)
+- Дополнительный источник: «Электроника БРП-4», программа №41; [дамп ПЗУ](https://github.com/myak555/MK-52_Resurrect/blob/main/MK-52_Sample_Programs/BRP%20Expansion%20Modules/BRP4-2.BIN) — все 84 команды совпадают.
 
 ## Описание
 
