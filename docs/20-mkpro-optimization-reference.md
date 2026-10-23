@@ -6144,3 +6144,27 @@ certificate. The range proof checks every
 exact immediate predecessor rather than interpreting any false lift flag as
 permission. Compiler/ROM positives keep this Enter prefix and explicitly read
 physical last-X; open-entry and observed-stack counterexamples remain negative.
+
+## Addressed return pooling with selector placement
+
+An independently addressed plain `V/O` may share another identical return.
+This is a many-to-one command relocation, not a return-stack approximation:
+the authoritative rooted proof checks every labelled branch, nested frame,
+external entry and formal counter. Fallthrough, saved continuations, raw code
+and return observations remain barriers. No stack, X1/X2 or memory operation
+is changed by pooling.
+
+The removed return's labels move to the retained command, while their existing
+selector equations remain obligations. The complete-artifact solver then prices
+the new component order and every delivered selector word. In particular, a
+zero-underflow conditional return can reuse an existing return at its required
+address instead of reserving a separate copy there. The original unpooled
+candidate remains available, and only a smaller fully closed result is exported.
+
+Exhaustive candidate search also preserves the independently completed bounded
+root. The two searches have different admission orders, so a larger beam is
+not assumed to contain the bounded winner. Completed roots compete only under
+the same delivered memory model, setup contract and budget; no lowering flags
+or address proofs are transplanted. Cell count remains primary, runtime cost
+breaks equal-size ties, and JSON/explain records both roots and the selection.
+Explicitly disabled or pinned lowering searches do not gain an automatic root.

@@ -436,6 +436,99 @@ bool charged_constraint_consumer(const MachineItem& item) {
                    "late-decimal-selector-consumer") != item.roles.end();
 }
 
+// Identical V/O instructions have no data effects, but their incoming edges
+// and return frames are not interchangeable by assumption. Keep each proposed
+// many-to-one command relocation only after the rooted labelled proof accepts
+// it. Addresses here are conditional identities; the owner must close the
+// unchanged selector words before this becomes executable output.
+std::vector<ConstrainedRepresentation> pool_addressed_return_targets(
+    const ConstrainedRepresentation& parent,
+    const PostLayoutControlFlowOptions& control,
+    std::size_t maximum_candidates = 4) {
+  std::vector<ConstrainedRepresentation> result;
+  const auto& items = parent.artifact.items;
+  const auto plain = [](const MachineItem& item) {
+    return item.kind == MachineItemKind::Op && item.opcode == 0x52 &&
+        !item.raw && !item.manual_interaction && !item.procedure_boundary &&
+        !item.formal_opcode && item.semantic_call_origins.empty() &&
+        std::all_of(item.roles.begin(), item.roles.end(), [](const auto& role) {
+          return detail::is_cell_origin_provenance(role) ||
+              role == "empty-return-startup-edge";
+        });
+  };
+  std::vector<std::size_t> returns;
+  for (std::size_t i = 0; i < items.size(); ++i)
+    if (plain(items[i])) returns.push_back(i);
+  if (returns.size() < 2 || maximum_candidates == 0) return result;
+  const auto flow = build_post_layout_control_flow(items, control);
+  const auto external = resolve_post_layout_external_entry_contexts(flow);
+  if (!flow.proved || !external ||
+      flow.execution_edges.size() != flow.execution_states.size()) return result;
+  std::map<std::size_t, std::vector<std::size_t>> aliases;
+  std::vector<std::size_t> pending;
+  for (std::size_t i = 0; i < items.size(); ++i) {
+    if (items[i].kind == MachineItemKind::Label) pending.push_back(i);
+    else { aliases.emplace(i, std::move(pending)); pending.clear(); }
+  }
+  for (const auto removed : returns) {
+    bool reached = false, safe = true;
+    for (const auto label : aliases.at(removed)) {
+      const auto& item = items[label];
+      safe = safe && !item.procedure_boundary && !item.manual_interaction &&
+          !item.raw && item.roles.empty() && item.semantic_call_origins.empty();
+    }
+    for (std::size_t s = 0; s < flow.execution_states.size(); ++s) {
+      const auto& state = flow.execution_states[s];
+      if (state.item_index == removed) {
+        reached = true;
+        safe = safe && !external->external[s];
+      }
+      if (state.operand_item_index == removed) safe = false;
+      for (const auto& edge : flow.execution_edges[s]) {
+        if (edge.target_state >= flow.execution_states.size()) return {};
+        if (flow.execution_states[edge.target_state].item_index != removed) continue;
+        safe = safe && (edge.kind == PostLayoutExecutionEdgeKind::DirectTarget ||
+                        edge.kind == PostLayoutExecutionEdgeKind::IndirectTarget);
+      }
+    }
+    if (!reached || !safe) continue;
+    for (const auto retained : returns) {
+      if (retained == removed) continue;
+      std::vector<bool> move(items.size(), false);
+      for (const auto label : aliases.at(removed)) move[label] = true;
+      std::vector<MachineItem> rewritten;
+      std::vector<std::optional<std::size_t>> mapping(items.size());
+      for (std::size_t i = 0; i < items.size(); ++i) {
+        if (i == removed || move[i]) continue;
+        if (i == retained)
+          for (const auto label : aliases.at(removed)) {
+            mapping[label] = rewritten.size();
+            rewritten.push_back(items[label]);
+          }
+        mapping[i] = rewritten.size();
+        rewritten.push_back(items[i]);
+      }
+      mapping[removed] = mapping[retained];
+      const auto after = build_post_layout_control_flow(rewritten, control);
+      const auto proof = prove_post_layout_execution_relocation(
+          items, rewritten, flow, after, mapping);
+      if (!proof.proved) continue;
+      auto next = parent;
+      next.artifact.items = std::move(rewritten);
+      if (!refresh_constraint_targets(next)) continue;
+      next.artifact.optimizations.push_back({"joint-addressed-return-pooling",
+          "Shared an independently addressed plain V/O with an existing identical return; "
+          "proved the complete many-to-one rooted command relocation, labelled branches, "
+          "external entries, formal counters and every saved return frame. No stack, "
+          "X1/X2 or memory operation changed. Selector words and final placement remain "
+          "separate mandatory obligations."});
+      result.push_back(std::move(next));
+      if (result.size() == maximum_candidates) return result;
+    }
+  }
+  return result;
+}
+
 // Consume a register vacancy only as part of a complete allocation/layout
 // transaction. Literal/recall equivalence includes entry mode, X1/X2, all side
 // entries and matched returns; adding a setup word requires its own Main proof.
@@ -1479,6 +1572,9 @@ TransactionSearchResult<LayoutSearchArtifact> search_joint_representation_constr
     if (preload_environment_complete)
       if (auto folded=zero_underflow_conditional_return(parent,context,control_options))
         edges.push_back({std::move(*folded),"zero-underflow-conditional-return-equations",true});
+    if (coupled_geometry && preload_environment_complete)
+      for (auto& pooled : pool_addressed_return_targets(parent, control_options, 2))
+        edges.push_back({std::move(pooled), "addressed-return-pooling-equations", true});
     return edges;
   };
 
@@ -2215,6 +2311,31 @@ TransactionSearchResult<LayoutSearchArtifact> search_joint_representation_constr
 
 
 std::vector<ProvedSearchTransition<LayoutSearchArtifact>>
+addressed_return_pooling_layout_transactions(
+    const LayoutSearchArtifact& artifact, const CompileOptions& options) {
+  const auto view = representation_view(artifact, options);
+  if (!view) return {};
+  auto configured = options;
+  configured.defer_return_suffix_until_callee_hole = true;
+  PostLayoutControlFlowOptions control;
+  control.empty_return_target = 1;
+  control.address_space_model = address_space_model_for_feature_profile(
+      effective_optimizer_feature_profile(options));
+  ConstrainedRepresentation root{artifact, {}, {}};
+  root.artifact.items = lower_ir_to_machine(*view);
+  if (!refresh_constraint_targets(root)) return {};
+  std::vector<ProvedSearchTransition<LayoutSearchArtifact>> result;
+  for (const auto& candidate : pool_addressed_return_targets(root, control)) {
+    PreparedJointProofInput proof(candidate.artifact.items, candidate.artifact.preloads, control);
+    auto closed = close_representation_constraints(
+        candidate, {configured}, control, true, false, nullptr, proof, true);
+    if (closed && cells(*closed) < cells(artifact))
+      result.push_back({std::move(*closed), "addressed-return-pooling-layout", true});
+  }
+  return result;
+}
+
+std::vector<ProvedSearchTransition<LayoutSearchArtifact>>
 zero_underflow_conditional_return_layout_transactions(
     const LayoutSearchArtifact& artifact, const CompileOptions& options) {
   const auto view=representation_view(artifact,options);if(!view)return {};
@@ -2225,12 +2346,20 @@ zero_underflow_conditional_return_layout_transactions(
   auto positions=constraint_positions(lower_ir_to_machine(*view));if(!positions)return {};
   ConstrainedRepresentation root{artifact,*positions};root.artifact.items=lower_ir_to_machine(*view);
   auto folded=zero_underflow_conditional_return(root,context,control);if(!folded)return {};
-  PreparedJointProofInput proof(folded->artifact.items,folded->artifact.preloads,control);
-  auto closed=close_representation_constraints(*folded,context,control,true,false,nullptr,proof,true);
-  if(!closed || cells(*closed)>=cells(artifact))return {};
-  closed=rebind_layout_search_artifact(std::move(*closed));
-  if(!closed || !build_post_layout_control_flow(closed->items,control).proved)return {};
-  return {{std::move(*closed),"zero-underflow-conditional-return-layout",true}};
+  std::vector<ConstrainedRepresentation> candidates{*folded};
+  auto pooled = pool_addressed_return_targets(*folded, control);
+  candidates.insert(candidates.end(), std::make_move_iterator(pooled.begin()),
+                    std::make_move_iterator(pooled.end()));
+  std::vector<ProvedSearchTransition<LayoutSearchArtifact>> result;
+  for (const auto& candidate : candidates) {
+    PreparedJointProofInput proof(candidate.artifact.items,candidate.artifact.preloads,control);
+    auto closed=close_representation_constraints(candidate,context,control,true,false,nullptr,proof,true);
+    if(!closed || cells(*closed)>=cells(artifact))continue;
+    closed=rebind_layout_search_artifact(std::move(*closed));
+    if(!closed || !build_post_layout_control_flow(closed->items,control).proved)continue;
+    result.push_back({std::move(*closed),"zero-underflow-conditional-return-layout",true});
+  }
+  return result;
 }
 
 std::vector<ProvedSearchTransition<LayoutSearchArtifact>>
@@ -3323,6 +3452,9 @@ contextual_copy_transport_layout_transactions(const LayoutSearchArtifact& artifa
   // Independent complete-artifact portfolio: historical candidates retain
   // their entire budgets. No extra multiplier is added to fitting profiles.
   if (cells(artifact) <= official_program_step_limit(model)) return result;
+  auto pooled = addressed_return_pooling_layout_transactions(artifact, options);
+  result.insert(result.end(), std::make_move_iterator(pooled.begin()),
+                std::make_move_iterator(pooled.end()));
   auto view = representation_view(artifact, options);
   if (!view) return result;
   ConstrainedRepresentation root{artifact, {}, {}};

@@ -81939,7 +81939,41 @@ CompileResult close_final_contextual_layouts_for_testing(
 CompileResult compile_source(std::string source, const CompileOptions& requested_options) {
   const CompileOptions options = apply_source_feature_profile_hint(source, requested_options);
   if(auto cached=read_completed_compile_result_cache(source,options))return *cached;
+  // A wider search has different ABI/layout admission order. Its local beams
+  // are not a superset of the bounded search, so preserve that independently
+  // completed root rather than assuming more exploration is monotone. Do not
+  // reinterpret its lowering flags or replay its bytes under another model.
+  std::optional<CompileResult> bounded_incumbent;
+  if (!options.fast_candidate_search && !options.disable_candidate_search &&
+      !has_explicit_lowering_variant(options)) {
+    auto bounded_options = options;
+    bounded_options.fast_candidate_search = true;
+    bounded_incumbent = compile_source(source, bounded_options);
+  }
   const auto completed=[&](CompileResult result){
+    if (bounded_incumbent && bounded_incumbent->implemented &&
+        bounded_incumbent->feature_profile == options.feature_profile) {
+      const auto exhaustive_cells = result.steps.size();
+      const bool selected_bounded = !result.implemented ||
+          candidate_beats_best(*bounded_incumbent, result, options);
+      if (selected_bounded) result = *bounded_incumbent;
+      result.optimizations.push_back({"optimizer-search-root-portfolio",
+          "Compared independently completed bounded (" +
+          std::to_string(bounded_incumbent->steps.size()) + ") and exhaustive (" +
+          std::to_string(exhaustive_cells) + ") roots under the same delivered "
+          "memory model, setup contract and budget; retained the smaller proved "
+          "artifact, using runtime cost only at equal size. No selected lowering "
+          "or final-layout proof was transplanted between roots."});
+      result.candidates.push_back({.site="optimizer-search-root", .variant="bounded",
+          .steps=static_cast<int>(bounded_incumbent->steps.size()),
+          .selected=selected_bounded,
+          .reason=selected_bounded ? "retained independently proved bounded incumbent"
+                                  : "exhaustive root wins by final size/runtime cost"});
+      result.candidates.push_back({.site="optimizer-search-root", .variant="exhaustive",
+          .steps=static_cast<int>(exhaustive_cells), .selected=!selected_bounded,
+          .reason=selected_bounded ? "cannot replace the better bounded incumbent"
+                                  : "selected independently proved exhaustive root"});
+    }
     write_completed_compile_result_cache(source,options,result);return result;
   };
   const auto close_dead_stack_producers = [&](CompileResult result,

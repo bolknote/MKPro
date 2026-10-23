@@ -9,6 +9,13 @@
 
 namespace mkpro::core {
 
+// Share independently addressed plain returns, then solve all selector and
+// placement obligations. Fallthrough, manual/formal entries and saved return
+// continuations are not candidates. Only smaller fully closed artifacts escape.
+std::vector<ProvedSearchTransition<LayoutSearchArtifact>>
+addressed_return_pooling_layout_transactions(
+    const LayoutSearchArtifact& artifact, const CompileOptions& options);
+
 // Close a zero-tested D3/return materialization and its displaced selector
 // families atomically. Only a smaller, fully placed artifact is exported.
 std::vector<ProvedSearchTransition<LayoutSearchArtifact>>
