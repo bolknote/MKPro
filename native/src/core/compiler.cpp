@@ -81526,6 +81526,54 @@ void reformat_result_for_target_profile(CompileResult& result, FeatureProfile pr
   result.listing = combine_listing(result, model);
 }
 
+// A public target label is not the address model which owns an emitted root.
+// Transfer completed code only after proving the same execution, selector
+// writeback and return contexts in both models, then rebuild all public output.
+std::optional<CompileResult> transport_completed_optimizer_root(
+    const std::string& source, const CompileResult& original,
+    const CompileOptions& lowering_options, const CompileOptions& target_options,
+    std::string* rejection) {
+  const auto reject = [&](const std::string& reason) -> std::optional<CompileResult> {
+    if (rejection) *rejection = reason;
+    return std::nullopt;
+  };
+  const auto source_profile = effective_optimizer_feature_profile(lowering_options);
+  if (source_profile == target_options.feature_profile) return original;
+  if (original.manual_startup_sequence)
+    return reject("manual startup has no cross-model certificate");
+  const auto transported = core::transport_layout_search_artifact(
+      {original.items, original.preloads, original.optimizations},
+      source_profile, target_options.feature_profile, rejection);
+  if (!transported) return std::nullopt;
+
+  auto delivered_options = lowering_options;
+  delivered_options.feature_profile = target_options.feature_profile;
+  delivered_options.optimizer_feature_profile_override.reset();
+  delivered_options.optimizer_register_profile_override = source_profile;
+  delivered_options.budget = target_options.budget;
+  auto base = original;
+  base.feature_profile = target_options.feature_profile;
+  base.budget = target_options.budget;
+  SelectedAbsoluteDarkLayout layout{.items = transported->items,
+                                   .preloads = transported->preloads,
+                                   .optimizations = {}};
+  auto candidate = materialize_proved_layout_result(
+      source, base, delivered_options, layout,
+      FinalLayoutMaterialization::ProvedSearchIntermediate);
+  if (!candidate || candidate->steps.size() != original.steps.size())
+    return reject("completed root could not be materialized at its proved size");
+  if (const auto reason = optimizer_static_gate_rejection_reason(
+          delivered_options, *candidate))
+    return reject(*reason);
+  candidate->optimizations.push_back({
+      .name = "optimizer-root-memory-model-transport",
+      .detail = "Completed the optimizer root in its owning address model, then proved "
+                "cross-model opcode/selector/execution/return identity and regenerated "
+                "setup, addresses and public reports without changing its cell count.",
+  });
+  return candidate;
+}
+
 
 struct LayoutCheckpointReplayResult {
   std::optional<CompileResult> best;
@@ -81694,10 +81742,12 @@ CompileResult close_final_contextual_layout_roots(
   const std::size_t requested_budget = comparison_options.budget && *comparison_options.budget > 0
       ? static_cast<std::size_t>(*comparison_options.budget)
       : program_step_limit_size_for_options(comparison_options);
+  const auto owning_profile = effective_optimizer_feature_profile(lowering_options);
   const auto trigger = std::min(requested_budget,
-      program_step_limit_size_for_options(comparison_options));
+      program_step_limit_size_for_options(lowering_options));
   if ((!original.implemented && !soft_budget) || original.items.empty() ||
       original.feature_profile != comparison_options.feature_profile ||
+      original.feature_profile != lowering_options.feature_profile ||
       (!soft_budget && original.steps.size() <= trigger))
     return original;
 
@@ -81734,8 +81784,8 @@ CompileResult close_final_contextual_layout_roots(
       auto replay_options = lowering_options;
       replay_options.alternating_sign_toggle_args = true;
       replay_options.disable_candidate_search = true;
-      replay_options.feature_profile = original.feature_profile;
-      replay_options.optimizer_feature_profile_override.reset();
+       // Retain the owning model and allocation bank. A source-ABI replay is
+       // not a certificate for reinterpreting already emitted program PCs.
       replay_options.analysis = true;
       replay_options.budget = 999999;
       // Keep the memory-backed expression ABI as an independent lifetime root.
@@ -81812,15 +81862,14 @@ CompileResult close_final_contextual_layout_roots(
       seed.result.steps=resolved.steps;seed.result.labels=label_map(resolved.labels);
     }
     if (!seed.result.implemented || seed.result.feature_profile != original.feature_profile ||
+        effective_optimizer_feature_profile(seed.options) != owning_profile ||
         (!independent_lifetime_roots.contains(index) &&
          !core::transaction_growth_fits(static_cast<int>(original.steps.size()),
             static_cast<int>(seed.result.steps.size()), 4)))
       continue;
     CompileOptions proof_options = seed.options;
-    // These are already emitted artifacts. Interpret their PCs under the
-    // delivered model, not an earlier optimizer's restricted source model.
-    proof_options.feature_profile = original.feature_profile;
-    proof_options.optimizer_feature_profile_override.reset();
+    // These PCs belong to the seed's actual lowering model, not its public
+    // target label. Cross-model delivery is a separate proved transaction.
     proof_options.budget = comparison_options.budget;
     const core::LayoutSearchArtifact artifact{
         seed.result.items, seed.result.preloads, seed.result.optimizations};
@@ -81982,9 +82031,14 @@ CompileResult compile_source(std::string source, const CompileOptions& requested
   }
 
   CompileOptions standard_options = options;
-  standard_options.optimizer_feature_profile_override = FeatureProfile::Standard;
+  standard_options.feature_profile = FeatureProfile::Standard;
+  standard_options.optimizer_feature_profile_override.reset();
+  standard_options = apply_source_feature_profile_hint(source, standard_options);
+  if (standard_options.feature_profile != FeatureProfile::Standard)
+    standard_options.optimizer_feature_profile_override = FeatureProfile::Standard;
   const int standard_limit = feature_profile_program_step_limit(FeatureProfile::Standard);
-  if (standard_options.budget.has_value() && *standard_options.budget > 0)
+  if (standard_options.budget.has_value() && *standard_options.budget > 0 &&
+      *standard_options.budget <= feature_profile_program_step_limit(options.feature_profile))
     standard_options.budget = std::min(*standard_options.budget, standard_limit);
   CompileOptions standard_lowering_options;
   CompileResult standard = search_representation_roots(standard_options, &standard_lowering_options);
@@ -82051,13 +82105,24 @@ CompileResult compile_source(std::string source, const CompileOptions& requested
   expanded = close_final_contextual_layout_roots(
       source, std::move(expanded), expanded_lowering_options, options);
   standard = close_final_contextual_layout_roots(
-      source, std::move(standard), standard_lowering_options, options);
+      source, std::move(standard), standard_lowering_options, standard_options);
   if (restricted)
     *restricted = close_final_contextual_layout_roots(
         source, std::move(*restricted), restricted_winning_options, options);
   if (continuation.best)
     *continuation.best = close_final_contextual_layout_roots(
         source, std::move(*continuation.best), continuation.best_options, options);
+  if (standard.implemented) {
+    std::string rejection;
+    if (auto delivered = transport_completed_optimizer_root(
+            source, standard, standard_lowering_options, options, &rejection)) {
+      standard = std::move(*delivered);
+    } else {
+      standard.implemented = false;
+      standard.diagnostics.push_back(diagnostic(
+          DiagnosticSeverity::Error, "optimizer-root-memory-model", rejection));
+    }
+  }
   const auto retain_closed = [&](const CompileResult& candidate) {
     if (candidate_beats_best(candidate, *selected, options)) {
       previous = selected;

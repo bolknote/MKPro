@@ -236,6 +236,38 @@ void budget_publication_contracts() {
       require(!rejected.implemented && rejected.steps.size() == oversized.steps.size(),
               "an expanded artifact cannot acquire stock memory by changing proof options");
     }
+    if (test.profile == FeatureProfile::Standard) {
+      auto mixed_options = options;
+      mixed_options.feature_profile = FeatureProfile::Mk61SMiniExpanded;
+      mixed_options.optimizer_feature_profile_override = FeatureProfile::Standard;
+      auto mixed_root = oversized;
+      mixed_root.feature_profile = mixed_options.feature_profile;
+      const auto mixed_closed = close_final_contextual_layouts_for_testing(
+          high_level, mixed_root, mixed_options, mixed_options);
+      require(mixed_closed.implemented && mixed_closed.diagnostics.empty() &&
+                  mixed_closed.steps.size() == changed.steps.size(),
+              "an expanded public label must retain stock finalization and its saving");
+      require(observe(mixed_closed.items, mixed_closed.preloads) ==
+                  observe(changed.items, changed.preloads),
+              "mixed-profile finalization preserves stock ROM observations");
+      for (std::size_t i = 0; i < changed.steps.size(); ++i)
+        require(mixed_closed.steps[i].opcode == changed.steps[i].opcode,
+                "public target metadata cannot alter the owning-model byte sequence");
+      std::string rejection;
+      const auto transported = transport_layout_search_artifact(
+          {mixed_closed.items, mixed_closed.preloads, {}}, FeatureProfile::Standard,
+          FeatureProfile::Mk61SMiniExpanded, &rejection);
+      require(transported.has_value() && rejection.empty(),
+              "a compatible completed stock artifact has a separate model-transfer proof");
+      auto opaque = LayoutSearchArtifact{mixed_closed.items, mixed_closed.preloads, {}};
+      auto command = std::find_if(opaque.items.begin(), opaque.items.end(),
+          [](const auto& item) { return item.kind == MachineItemKind::Op; });
+      require(command != opaque.items.end(), "transport negative has a command");
+      command->raw = true;
+      require(!transport_layout_search_artifact(opaque, FeatureProfile::Standard,
+                  FeatureProfile::Mk61SMiniExpanded, &rejection) && !rejection.empty(),
+              "a target label cannot bypass an opaque cross-model effect");
+    }
     auto tight = options;
     tight.budget = 1;
     auto too_large = oversized;

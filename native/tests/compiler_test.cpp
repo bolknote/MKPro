@@ -1300,14 +1300,16 @@ void compiler_alternating_arguments_survive_parameter_elision() {
   }
 }
 
-void compiler_feature_profile_rf_optimizer_is_size_monotonic_contract() {
+namespace {
+void rf_optimizer_size_monotonic_contract(bool analysis) {
   const std::filesystem::path root = std::filesystem::current_path();
   const std::string source =
       read_file(root / "examples" / "pending-optimizer" / "tic-tac-toe-4x4.mkpro");
   const auto compile_full = &mkpro::compile_source;
 
   CompileOptions without_rf_options;
-  without_rf_options.budget = 105;
+  without_rf_options.budget = analysis ? 999999 : 105;
+  without_rf_options.analysis = analysis;
   without_rf_options.fast_candidate_search = true;
   const CompileResult without_rf = compile_full(source, without_rf_options);
   require(without_rf.implemented && !has_error_diagnostic(without_rf),
@@ -1325,13 +1327,13 @@ void compiler_feature_profile_rf_optimizer_is_size_monotonic_contract() {
 
   CompileOptions with_rf_options = without_rf_options;
   with_rf_options.feature_profile = FeatureProfile::Mk61SMiniExpanded;
-  with_rf_options.budget = 112;
+  with_rf_options.budget = analysis ? 999999 : 112;
   const CompileResult with_rf = compile_full(source, with_rf_options);
   require(with_rf.implemented && !has_error_diagnostic(with_rf),
           "RF-enabled expanded optimizer should compile the regression fixture");
   require(with_rf.feature_profile == FeatureProfile::Mk61SMiniExpanded,
           "selected standard optimizer root should retain the expanded target profile");
-  require(with_rf.budget.has_value() && *with_rf.budget == 112,
+  require(with_rf.budget == with_rf_options.budget,
           "selected standard optimizer root should retain the expanded target budget");
   require(with_rf.steps.size() <= without_rf.steps.size(),
           "enabling the RF/expanded-space target must not increase the optimized program: RF=" +
@@ -1376,6 +1378,9 @@ void compiler_feature_profile_rf_optimizer_is_size_monotonic_contract() {
   if (standard_root->selected)
     require(step_opcodes(with_rf) == step_opcodes(without_rf),
             "selected RF-free optimizer root should preserve its proved final byte sequence");
+  if (standard_root->selected)
+    require(has_optimization(with_rf, "optimizer-root-memory-model-transport"),
+            "a selected stock root needs an independent completed model-transfer proof");
   const std::set<std::string> expanded_addresses{"A5", "A6", "A7", "A8", "A9", "B0", "B1"};
   bool main_listing = false;
   bool expanded_row = false;
@@ -1409,6 +1414,18 @@ void compiler_feature_profile_rf_optimizer_is_size_monotonic_contract() {
                 cached_root->selected == original_root->selected,
             "cached RF-enabled search should retain both independent profile results");
   }
+  std::cout << "4x4 " << (analysis ? "analysis" : "official-budget")
+            << ": mk61=" << without_rf.steps.size()
+            << " mk61s-mini-expand=" << with_rf.steps.size() << '\n';
+}
+} // namespace
+
+void compiler_feature_profile_rf_optimizer_is_size_monotonic_contract() {
+  rf_optimizer_size_monotonic_contract(false);
+}
+
+void compiler_feature_profile_rf_analysis_is_size_monotonic_contract() {
+  rf_optimizer_size_monotonic_contract(true);
 }
 
 void compiler_lowers_initial_v2_subset() {

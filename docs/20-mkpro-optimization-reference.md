@@ -5383,7 +5383,16 @@ publication. A locally smaller but unplaceable candidate is not accepted.
 Only after ordinary ABI, profile and representation-root exploration is
 complete does a dedicated lane close retained artifacts. It cannot alter
 earlier pruning or spend an older beam. Each root carries its real lowering
-options; emitted PCs are proved under the delivered memory model. The lane
+options; emitted PCs remain in that owning memory model throughout finalization,
+including source-ABI replays and retained continuation seeds. A public feature
+label never resets the internal optimizer profile or changes a seed's PCs.
+Completed cross-model roots require the existing opcode/selector/execution/return
+identity certificate before target-model setup, addresses and reports are rebuilt.
+Rejected transfers remain rejected roots, not relabelled executable candidates.
+Hardware-sized budgets are projected to the stock root's physical window; an
+explicit larger analysis budget is retained unchanged. Both normal-budget and
+analysis-budget RF contracts compare complete finalized roots and cached results.
+The lane
 regenerates setup/listing and runs the ordinary static gate. Budget-only
 failures can be rescued only by a proved artifact fitting the requested limit;
 unrelated errors and non-fitting results are never relabelled successful.
