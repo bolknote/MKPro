@@ -45,6 +45,66 @@ Smoke run:
 node tests/emulator/smoke-games.cjs
 ```
 
+Romanovskis's turtle, snail and millipede race:
+
+```sh
+node tests/emulator/romanovskis-race.cjs
+```
+
+Checks the card's keyboard setup, the book's decimal generator against an
+independent integer model, reproducible seeded games, continuation across
+restarts, all seven winner combinations and recovery from invalid seeds.
+
+TI-59 book adaptations (Hamurabi, Solitaire and Star Trek):
+
+```sh
+node tests/emulator/book-adaptations.cjs
+```
+
+Loads the delivered listings (103–105 steps) and uses each card's keyboard setup.
+Checks rejected input without changing game resources, recovery, a complete
+Solitaire solution against an independent board model and rejection of malformed
+coordinates before any board writes. Hamurabi's annual events are checked with
+an integer oracle, including different plague outcomes for the same harvest,
+variable rat losses and three complete ten-year games. Star Trek must produce
+all three scan errors and win all four levels using only public scan displays.
+Resource checks, empty launchers, shield limits and terminal inspection are
+covered too. Pass `solitaire`, `hamurabi` or `trek` to run one group.
+
+Romanovskis's regularity rally:
+
+```sh
+node tests/emulator/romanovskis-regularity-rally.cjs
+```
+
+Checks the card's keyboard setup, all nine book stages, inclusive time limits,
+the strict 60-point failure threshold, cumulative penalties, invalid-speed
+correction and restarts in all three angle modes.
+
+Regularity rally with generated routes:
+
+```sh
+node tests/emulator/romanovskis-variable-rally.cjs
+```
+
+Checks complete nine-stage rallies against an independent decimal generator,
+different routes on restart, exact replay from a seed, independence from player
+speeds, failure of the old fixed answers, the 50/60-point boundary, invalid-input
+recovery and all angle modes. The original fixed book route remains separate.
+
+Romanovskis's soft lunar landing:
+
+```sh
+node tests/emulator/romanovskis-soft-landing.cjs
+```
+
+Checks keyboard setup and successful landings from all three book scenarios
+against an independent quadratic-root model. Contact must stop the last interval
+before post-impact braking, including a trajectory that would dip below the
+surface and then rise within a second. Fuel and elapsed time use the shortened
+interval. Also covers speed boundaries, empty tanks, ascent, invalid-input
+correction, terminal displays and a new flight in all three angle modes.
+
 Pustyshka / hidden-memory experiments:
 
 ```sh

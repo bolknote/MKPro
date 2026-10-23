@@ -60,6 +60,8 @@ Hardware internals and chip-level detail live separately in
 | [24-pustyshka-program-protocol.md](./24-pustyshka-program-protocol.md) | Executable hidden-memory write/read routines, register contracts, and tested layouts (Russian) |
 | [25-pustyshka-capacity.md](./25-pustyshka-capacity.md) | Four stored words, physical separation from program memory, and limits of further capacity claims (Russian) |
 | [26-ms-memory-purpose.md](./26-ms-memory-purpose.md) | Ms expansion reserve, M2 communication channel, ROM write traces, and reads before initialization (Russian) |
+| [27-foreign-programmable-calculator-book-registry.md](./27-foreign-programmable-calculator-book-registry.md) | Download registry for non-Russian programmable-calculator books and game sources (Russian) |
+| [28-downloaded-book-games-audit.md](./28-downloaded-book-games-audit.md) | Game inventory from the downloaded foreign books, matched against the current catalog (Russian) |
 
 ## Primary Sources
 
