@@ -2,7 +2,7 @@
 
 - Автор программы в руководстве не указан.
 - Источник: «Электроника БРП-4». Руководство по эксплуатации, программа №40. [Архив руководства](https://arbinada.com/pmk/pages/01057-library-docs.html).
-- Байт-код: [дамп BRP4-2.BIN, опубликованный myak555](https://github.com/myak555/MK-52_Resurrect/blob/main/MK-52_Sample_Programs/BRP%20Expansion%20Modules/BRP4-2.BIN); автор дампа — Сергей Фролов.
+- Байт-код: [дамп BRP4-2.BIN, опубликованный myak555](https://github.com/myak555/MK-52_Resurrect/blob/84693a122a2737169257edf6565b1aa8814b742e/MK-52_Sample_Programs/BRP%20Expansion%20Modules/BRP4-2.BIN); автор дампа — Сергей Фролов.
 - Исходный адрес загрузки: `1145670`, переключатель БРП в положении `2`.
 - Программа: [sportloto-6-iz-45-brp4.txt](sportloto-6-iz-45-brp4.txt)
 - Модель: **МК-61**; объём: **70 команд**, адреса `00…69`.

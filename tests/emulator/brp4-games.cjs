@@ -30,7 +30,9 @@ function settle(calc) {
   assert.ok(calc.runUntilStable({ maxFrames: 30000, stableFrames: 8 }).stopped,
     'a source program must reach its next stop');
   calc.runFrames(12);
-  return number(calc.displayText());
+  // The indicator can concatenate a negative exponent with the mantissa.
+  // readRegister separates them reliably, including values such as -0.2015.
+  return reg(calc, 'X');
 }
 function resume(calc) { calc.press('С/П'); return settle(calc); }
 function input(calc, value) {
@@ -41,17 +43,18 @@ function input(calc, value) {
 function near(actual, expected, tolerance = 0.0001) {
   assert.ok(Math.abs(actual - expected) <= tolerance, `${actual} ≈ ${expected}`);
 }
-function make(n, transform = text => text) {
+function make(n, transform = text => text, options = {}) {
   const e = entries.get(n);
   const text = fs.readFileSync(path.join(root, `games/${e.stem}.txt`), 'utf8');
   const card = fs.readFileSync(path.join(root, `games/${e.stem}.md`), 'utf8');
   const parsed = parseProgramText(text);
   assert.deepEqual(parsed.diagnostics, []);
   const original = Buffer.from(e.original_hex, 'hex');
+  assert.equal(original.length, e.original_length);
   assert.equal(crypto.createHash('sha256').update(original).digest('hex'), e.original_sha256);
   const expected = [...original];
   for (const patch of e.patches) {
-    assert.equal(expected[patch.address], parseInt(patch.before, 16));
+    assert.equal(expected[patch.address], patch.before === null ? undefined : parseInt(patch.before, 16));
     expected[patch.address] = parseInt(patch.after, 16);
   }
   assert.deepEqual(parsed.codes, expected, 'listing must retain ROM bytes and declared patches');
@@ -59,7 +62,10 @@ function make(n, transform = text => text) {
   assert.ok(e.length <= 105);
   const lines = text.trim().split('\n');
   assert.equal(lines.length, e.length);
-  lines.forEach((line, i) => assert.ok(line.startsWith(`${String(i).padStart(2, '0')}\t`)));
+  lines.forEach((line, i) => {
+    const address = i < 100 ? String(i).padStart(2, '0') : `A${i - 100}`;
+    assert.ok(line.startsWith(`${address}\t`));
+  });
   const row = manifest.find(row => row[0] === `${e.stem}.txt`);
   assert.ok(row, 'new listing must be indexed');
   assert.equal(row[1], `${e.stem}.md`);
@@ -67,9 +73,11 @@ function make(n, transform = text => text) {
   assert.equal(row[9], 'brp4');
   const preparation = card.split('## Подготовка\n')[1].split('\n## ')[0];
   const setup = preparation.match(/```text\n([\s\S]*?)\n```/)[1];
-  const calc = new MK61({ angleMode: [45, 47, 48].includes(n) ? 'deg' : 'rad' });
+  const calc = options.calc || new MK61({ angleMode: [45, 47, 48].includes(n) ? 'deg' : 'rad' });
   calc.loadProgram(text);
   calc.pressSequence(['F', '/-/']);
+  if (options.dirty) keyboard(calc, [...'0123456789abcde']
+    .map((r,i) => `${700 + i} хП${r}`).join(' '));
   keyboard(calc, transform(setup)); // The user's printed setup, without register injection.
   settle(calc);
   assert.deepEqual(calc.readProgramCodes(e.length), parsed.codes);
@@ -77,7 +85,16 @@ function make(n, transform = text => text) {
 }
 
 assert.equal(entries.size, 15);
-assert.deepEqual(provenance.entries.filter(e => e.patches.length).map(e => e.number), [47]);
+assert.deepEqual(provenance.entries.filter(e => e.patches.length).map(e => e.number), [48]);
+
+// Every card must initialize the registers it depends on after another program.
+const opening = new Map([[32,18], [33,43.86], [34,1293023], [35,10], [36,1099],
+  [38,123105], [39,5], [40,6], [43,1], [44,5], [45,3], [47,0],
+  [48,10700028], [50,1417.7838], [51,172278.95]]);
+for (const [n, expected] of opening) {
+  const dirty = make(n, text => text, {dirty: true});
+  near(reg(dirty, 'X'), expected, 0.01);
+}
 
 // Complete reference games from the BRP-4 manual, with explicit player/PMK stops.
 let calc = make(32);
@@ -121,7 +138,8 @@ for (const [human, computer] of [
   assert.equal(human.filter((v,i) => v !== computer[i]).length, 1);
 }
 
-for (const secret of [1, 10, 100]) {
+assert.equal(reg(make(35), 'X'), 10, 'use the printed card setup without replacing it');
+for (const secret of [1, 100]) {
   calc = make(35, () => `${secret % 3} хП7 ${secret % 5} хП8 ${secret % 7} хП9 В/О С/П`);
   assert.equal(reg(calc, 'X'), secret);
 }
@@ -165,14 +183,24 @@ for (const [n, count, maximum, reference] of [[39,5,36,[9,24,14,7,19]], [40,6,45
     assert.deepEqual(draw, draw.map((_,i) => reg(calc, 9 - i)));
     if (day === 4) assert.deepEqual(draw, reference);
   }
+  // Restart from the final-number stop, retaining the previous game state.
+  calc = make(n, text => text, {calc});
+  assert.equal(reg(calc, 'X'), count);
+  assert.deepEqual(Array.from({length: count}, () => resume(calc)), reference);
 }
 
 calc = make(43);
 assert.equal(reg(calc, 'X'), 1);
-keyboard(calc, 'В/О 1,3 С/П'); assert.equal(settle(calc), 3);
-keyboard(calc, 'В/О 3,9 С/П'); assert.equal(settle(calc), 0);
-assert.equal(reg(calc, 'C'), 3);
-assert.equal(reg(calc, 'D'), 1);
+for (const [list, passage, deadEnds, visited] of [
+  ['3,41',3,0,3.1], ['5,3',5,0,5.31], ['5',5,5,5.31],
+  ['5,3',3,3.5,5.31], ['3,41',4,3.5,4.531],
+  ['6,74',6,3.5,6.4531], ['9,86',0,3.5,6.4531],
+]) {
+  keyboard(calc, `В/О ${list} С/П`);
+  assert.equal(settle(calc), passage);
+  near(reg(calc, 'C'), deadEnds);
+  near(reg(calc, 'D'), visited);
+}
 
 calc = make(44);
 const lifeRegisters = ['A','9','8','7','6','5','4','3','2','1','0'];
@@ -190,6 +218,32 @@ keyboard(calc, `0 ${lifeRegisters.map(r => `хП${r.toLowerCase()}`).join(' ')} 
 assert.equal(settle(calc), 0);
 assert.deepEqual(lifeRegisters.map(r => reg(calc, r)), Array(11).fill(0));
 
+// A field model independent of the ROM's stack/register manipulation. The
+// source is an in-place automaton with explicitly defined, non-Moore neighbors.
+const lifeNeighbors = {
+  A:'789', 9:'A865', 8:'A975', 7:'A845', 6:'935', 5:'78912346',
+  4:'715', 3:'0265', 2:'0315', 1:'0245', 0:'123',
+};
+function lifeStep(previous) {
+  const state = {...previous};
+  for (const cell of lifeRegisters) {
+    const neighbors = [...lifeNeighbors[cell]].reduce((sum,r) => sum + state[r], 0);
+    state[cell] = Number(neighbors === 2 || (state[cell] && neighbors === 1));
+  }
+  return state;
+}
+for (const mask of [0,2047,0x005,0x00a,0x050,0x280,0x555,0x2aa,0x143,0x321]) {
+  let field = Object.fromEntries(lifeRegisters.map(r => [r, (mask >> parseInt(r,16)) & 1]));
+  calc = make(44, () => lifeRegisters.map(r => `${field[r]} хП${r.toLowerCase()}`)
+    .join(' ') + ' В/О С/П');
+  for (let i=0; i<2; i++) {
+    if (i) resume(calc);
+    field = lifeStep(field);
+    assert.deepEqual(lifeRegisters.map(r => reg(calc,r)), lifeRegisters.map(r => field[r]));
+    assert.equal(reg(calc,'X'), Object.values(field).reduce((a,b) => a+b,0));
+  }
+}
+
 calc = make(45);
 assert.equal(reg(calc, 'X'), 3);
 for (const [delta, angle, distance, speed] of [[1,0,2.8180926,1], [1,3,1.7128566,2], [1,45,2.0244867,3]]) {
@@ -204,6 +258,13 @@ near(resume(calc), 3.1415926);
 assert.equal(reg(calc, '5'), 1);
 assert.equal(resume(calc), 3, 'return to the ordinary input stop after the penalty');
 keyboard(calc, '1 В↑ 0 С/П'); near(settle(calc), 2.8180926);
+calc = make(45);
+for (let i=0; i<3; i++) { keyboard(calc, '1 В↑ 0 С/П'); settle(calc); }
+assert.equal(calc.displayText(), 'ЕГГ0Г');
+assert.ok(resume(calc) < 0, 'off-road cause is a valid negative fractional coordinate');
+assert.equal(resume(calc), 3);
+assert.equal(reg(calc,'9'), 0);
+assert.equal(reg(calc,'5'), 1);
 
 calc = make(47);
 assert.equal(reg(calc, 'X'), 0);
@@ -212,6 +273,11 @@ near(settle(calc), 843.4673);
 near(reg(calc, '4'), 843.4673);
 near(reg(calc, '5'), 843.4673);
 near(reg(calc, '8'), 717);
+assert.equal(reg(calc, '9'), 600, 'depth must change: read-only command 18 breaks this');
+assert.equal(reg(calc, '3'), 1200);
+keyboard(calc, '0 ПП 0 ПП 400 С/П'); settle(calc);
+assert.equal(reg(calc, '9'), 0, 'released ballast must cause ascent');
+assert.equal(reg(calc, '3'), 800);
 calc = make(47);
 keyboard(calc, '0 хП6 хП7 0 ПП 0 ПП 0 С/П');
 assert.equal(settle(calc), -2, 'numeric target-found marker from the card');
@@ -219,6 +285,23 @@ calc = make(47);
 keyboard(calc, '3100 хП9 0 ПП 0 ПП 0 С/П');
 assert.equal(settle(calc), -1, 'numeric emergency marker from the card');
 assert.equal(reg(calc, 'A'), 88);
+assert.equal(reg(calc, '9'), 4000);
+keyboard(calc, '3001 хПa С/П');
+assert.equal(settle(calc), 1000, 'repair restores the ordinary coordinate stop');
+assert.equal(reg(calc, '9'), 1000, 'emergency ascent decreases depth by 1000 * dt');
+assert.equal(reg(calc, 'A'), 3001);
+calc = make(47);
+keyboard(calc, '500 хПb 0 ПП 0 ПП 0 С/П');
+assert.equal(settle(calc), -1, 'sea-floor collision');
+assert.equal(reg(calc, '9'), 900);
+calc = make(47);
+keyboard(calc, '1 хП8 0 ПП 0 ПП 0 С/П');
+assert.equal(settle(calc), -1, 'life-support exhaustion');
+assert.equal(reg(calc, '8'), -2);
+keyboard(calc, '720 хП8 3001 хПa С/П');
+assert.equal(settle(calc), 1000);
+assert.equal(reg(calc, '9'), 0);
+assert.equal(reg(calc, '8'), 717);
 
 calc = make(48);
 assert.equal(reg(calc, 'X'), 10700028);
@@ -228,18 +311,29 @@ for (const [value, expected] of [[86,5.5555555], [null,11900028], [98,101], [80,
 assert.equal(reg(calc, '4'), 2);
 assert.equal(reg(calc, '7'), 7);
 calc = make(48);
-for (let shot = 1; shot <= 9; shot++) {
-  const bearing = reg(calc, '8'), speed = reg(calc, '9');
-  // Interception angle from the sine rule; independent of the ROM's next-bearing formula.
-  const aim = bearing - Math.asin(speed / 75 * Math.sin(bearing * Math.PI / 180)) * 180 / Math.PI;
-  assert.equal(input(calc, aim), 5.5555555);
-  assert.equal(reg(calc, '4'), shot);
-  assert.equal(reg(calc, '7'), 10 - shot);
-  resume(calc);
+assert.equal(input(calc, 84), 86, 'exactly two degrees is a miss');
+assert.equal(reg(calc, '4'), 0);
+calc = make(48);
+assert.equal(input(calc, 1), 1.1111111, 'target leaves the attack sector');
+assert.equal(resume(calc), 11900028);
+for (const finalShot of ['hit', 'miss', 'escape']) {
+  calc = make(48);
+  for (let shot = 1; shot <= 10; shot++) {
+    const bearing = reg(calc, '8'), speed = reg(calc, '9');
+    // Interception angle from the sine rule; independent of the ROM's next-bearing formula.
+    const aim = bearing - Math.asin(speed / 75 * Math.sin(bearing * Math.PI / 180)) * 180 / Math.PI;
+    const last = shot === 10;
+    const result = input(calc, last && finalShot === 'miss' ? 80 : last && finalShot === 'escape' ? 1 : aim);
+    const sunk = last && finalShot !== 'hit' ? 9 : shot;
+    assert.equal(result, last && finalShot === 'miss' ? sunk :
+      last && finalShot === 'escape' ? 1.1111111 : 5.5555555);
+    assert.equal(reg(calc, '4'), sunk);
+    assert.equal(reg(calc, '7'), 10 - shot);
+    if (!last) assert.ok(resume(calc) >= 10000000, 'next target after a hit');
+    else if (finalShot !== 'miss') assert.equal(resume(calc), sunk, 'final score after the tenth-shot message');
+  }
+  assert.equal(reg(calc, '7'), 0, 'no eleventh input is needed to finish');
 }
-assert.equal(input(calc, 0), 9, 'the tenth input ends the original game before another shot');
-assert.equal(reg(calc, '7'), 0);
-assert.equal(reg(calc, '4'), 9);
 
 calc = make(50);
 const fuel = 2000 - (500 / 5 + 12000 / 100);
@@ -268,9 +362,24 @@ for (const requested of [151, 999, -150]) {
   assert.deepEqual(['A','B','C','D'].map(r => calc.readRegister(r)),
     ['A','B','C','D'].map(r => capped.readRegister(r)));
 }
+let exhaustedState;
+for (const requested of [0, 150]) {
+  calc = make(51, text => text.replace('7000 хПd', '1000 хПd')
+    .replace('В/О 100 С/П', 'В/О 150 С/П'));
+  near(reg(calc,'6'), 1000 / 150);
+  assert.equal(reg(calc,'D'), 0);
+  const altitude = reg(calc,'B'), velocity = reg(calc,'A');
+  keyboard(calc, `1 хП6 ${requested} С/П`); settle(calc);
+  assert.equal(reg(calc,'6'), 10, 'partial fuel exhaustion switches to fixed ten-second falls');
+  near(reg(calc,'A'), velocity + 1.7 * 10, 0.001);
+  near(reg(calc,'B'), altitude - (velocity + reg(calc,'A')) / 2 * 10, 0.02);
+  const state = ['A','B','C','D'].map(r => calc.readRegister(r));
+  if (exhaustedState) assert.deepEqual(state, exhaustedState, 'new fuel demand is ignored after exhaustion');
+  exhaustedState = state;
+}
 calc = make(51, text => text.replace('3000 хПa', '20 хПa').replace('200000 хПb', '100 хПb')
   .replace('В/О 100 С/П', 'В/О 0 С/П'));
 assert.equal(calc.displayText(), 'ЕГГ0Г');
 assert.ok(reg(calc, 'B') < 0, 'impact preserves a negative crater depth');
 
-console.log('BRP-4: 15 ROM listings, card keyboard setups, complete reference games, 62 lottery seeds, Life generations, simulator scenarios and original edge cases OK');
+console.log('BRP-4: 15 listings, dirty-state card setups, complete reference games, 62 lottery seeds, Life model, submarine recovery, ten-shot endings and fuel exhaustion OK');

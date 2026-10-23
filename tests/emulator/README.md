@@ -49,15 +49,22 @@ BRP-4 ROM games and recreational programs:
 
 ```sh
 node tests/emulator/brp4-games.cjs
+node tests/emulator/brp4-source.cjs /path/to/BRP4-2.BIN
 ```
 
-Checks 15 delivered listings against the original ROM-byte fixture and the one
-manual-prescribed patch. Uses the keyboard setup printed in every card. Covers
-complete Bashe, Wythoff and three-heap Nim examples, number-guess grades, both
-lucky-ticket modes, all 31 day seeds for both lottery generators, Life
-generations, simulator scenarios and source error/recovery behavior. A complete
-torpedo game verifies the original nine-shot limit. See the
-[import audit](../../docs/29-brp4-games-import.md) for provenance and source quirks.
+Checks 15 delivered listings against the original ROM-byte fixture and declared
+torpedo repairs. Uses every card's keyboard setup, also after filling registers
+with unrelated values. Covers complete Bashe, Wythoff and three-heap Nim
+examples, number-guess grades, lucky tickets, all 31 day seeds and warm restarts
+for both lottery generators, the sequential Life field model, full maze
+backtracking, submarine descent/ascent and emergency recovery, landing fuel
+exhaustion and race penalties. Complete ten-shot torpedo games test a hit,
+miss and escaping target on the final shot.
+
+The separate source check takes a complete ROM downloaded from the pinned URL
+in the [import audit](../../docs/29-brp4-games-import.md). It verifies the whole
+file hash, extracts all 20 source addresses and checks 14 unchanged listings,
+the declared torpedo patch, five existing duplicates and catalog metadata.
 
 Romanovskis's turtle, snail and millipede race:
 
