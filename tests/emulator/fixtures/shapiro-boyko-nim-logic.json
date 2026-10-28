@@ -1,0 +1,63 @@
+{
+  "book": "С. И. Шапиро, А. Б. Бойко. Программируемые микрокалькуляторы в обучении. М.: Радио и связь, 1989.",
+  "source_url": "https://nzdr.ru/data/media/biblio/games/prog/pmk_/%D0%9A%D0%BD%D0%B8%D0%B3%D0%B8/%D0%9F%D0%9C%D0%9A%20%D0%B2%20%D0%BE%D0%B1%D1%83%D1%87%D0%B5%D0%BD%D0%B8%D0%B8%20%281989%29%20-%20%D0%A8%D0%B0%D0%BF%D0%B8%D1%80%D0%BE.djvu",
+  "source_sha256": "e20ae165d65ab561152634c9652a2dce052a9ce373c246e866cfe5d56d9895a3",
+  "transcription": "Printed mnemonic and hexadecimal columns checked against source images; the truncated FВx code at page 151 address 52 is resolved as 0F. No algorithm changes.",
+  "entries": [
+    {
+      "id": "nim98",
+      "stem": "logic/nim-uslozhnennyy-shapiro-boyko-1989",
+      "title": "Ним, усложнённый вариант",
+      "author": "",
+      "page": 116,
+      "scan": 60,
+      "length": 98,
+      "hex": "A75708A853855103D56043A757086543A75E41A866416B610213115E386B02134A4150A95122A8512066011053846B01115E41664B6B02134A50A96B6A02131157535141636C1340011042D2636C6212114A52664C6D43A750A9524B106D14114D52",
+      "printed_hex": "A75708A853855103D56043A757086543A75E41A866416B610213115E386B02134A4150A95122A8512066011053846B01115E41664B6B02134A50A96B6A02131157535141636C1340011042D2636C6212114A52664C6D43A750A9524B106D14114D52",
+      "sha256": "45238c43b64d944dca383ef8834f43ec0d0237efe7f4d9e51bda53af675e4e0f",
+      "errata": [],
+      "tags": "book;classic;original;vs-calculator",
+      "collection": "shapiro-boyko-1989",
+      "series": "nim"
+    },
+    {
+      "id": "partner71",
+      "stem": "logic/logika-mashina-partner-shapiro-boyko-1989",
+      "title": "Логика — машина-партнёр",
+      "author": "",
+      "page": 149,
+      "scan": 76,
+      "length": 71,
+      "hex": "4808460540680C091D1A2013480712011042D262B65D0500455048D50541004408460540004768D6115E546160115E520247515601475D38640100126710442050485B32645125",
+      "printed_hex": "4808460540680C091D1A2013480712011042D262B65D0500455048D50541004408460540004768D6115E546160115E520247515601475D38640100126710442050485B32645125",
+      "sha256": "d5c3a1f59c315c0f0ab0f75fcdbe0cdb59b437ce3d6101d7553cc1049d4e7bc5",
+      "errata": [],
+      "tags": "book;classic;original;variant;vs-calculator",
+      "collection": "shapiro-boyko-1989",
+      "series": "mastermind"
+    },
+    {
+      "id": "partner88",
+      "stem": "logic/logika-dvuznachnaya-podskazka-shapiro-boyko-1989",
+      "title": "Логика — суммарная подсказка",
+      "author": "",
+      "page": 151,
+      "scan": 77,
+      "length": 88,
+      "hex": "4808460540680C091D1A2013480712011042D262B65D0500455043D50541004446010442054063010013011043D32563110100120F1148004768D2115E726160115E70D4517801475D57666710465B336401001266105125",
+      "printed_hex": "4808460540680C091D1A2013480712011042D262B65D0500455043D50541004446010442054063010013011043D3256311010012001148004768D2115E726160115E70D4517801475D57666710465B336401001266105125",
+      "sha256": "90b452310337ab2954dfad8c6f42609e9d6b965932587da0ce70063a5b77cd95",
+      "errata": [
+        {
+          "address": 52,
+          "printed": "0",
+          "mnemonic": "FВx",
+          "resolved": "0F"
+        }
+      ],
+      "tags": "book;classic;original;variant;vs-calculator",
+      "collection": "shapiro-boyko-1989",
+      "series": "mastermind"
+    }
+  ]
+}

@@ -84,6 +84,23 @@ continuation prompts and repeated use of the same move table. These are original
 programs; the source's reliance on the human to validate input is preserved.
 Pass `barrel`, `river` or `puzzle` to run one group.
 
+Shapiro–Boyko's no-repeat Nim and two Logic/Machine Partner variants:
+
+```sh
+node tests/emulator/shapiro-boyko-nim-logic.cjs
+```
+
+Checks the 98-, 71- and 88-step source listings, card keyboard setups,
+provenance and the single truncated printed opcode. Nim is compared with an
+independent finite game graph: complete games, both first players, all angle
+modes, restarts and two documented failures of the author's strategy. These
+failures remain in the original listing; the card does not promise an optimal
+opponent for arbitrary parameters. Both Logic variants are checked against
+independent per-position and summed feedback rules, including their unusual
+treatment of repeated colors, leading zeros, attempt counts and restarts.
+Blind players complete games using only their own guesses and returned feedback.
+Pass `nim`, `positional` or `summed` to run one group. Tests do not need scans.
+
 Ochkov–Khmelyuk's eight-step Bridg-it and Sistepskiy's Kvant games:
 
 ```sh
