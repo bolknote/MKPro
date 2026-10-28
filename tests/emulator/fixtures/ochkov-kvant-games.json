@@ -1,0 +1,107 @@
+{
+  "entries": [
+    {
+      "stem": "logic/bridzh-it-raspopov-kuznetsov-1990",
+      "title": "Бридж-ит — 8 команд",
+      "author": "В. Распопов, С. Кузнецов",
+      "source_url": "https://nzdr.ru/data/media/biblio/games/prog/pmk_/%D0%9A%D0%BD%D0%B8%D0%B3%D0%B8/%D0%9E%D1%82%20%D0%BC%D0%B8%D0%BA%D1%80%D0%BE%D0%BA%D0%B0%D0%BB%D1%8C%D0%BA%D1%83%D0%BB%D1%8F%D1%82%D0%BE%D1%80%D0%B0%20%D0%BA%20%D0%BF%D0%B5%D1%80%D1%81%D0%BE%D0%BD%D0%B0%D0%BB%D1%8C%D0%BD%D0%BE%D0%BC%D1%83%20%D0%BA%D0%BE%D0%BC%D0%BF%D1%8C%D1%8E%D1%82%D0%B5%D1%80%D1%83%20%281990%29%20-%20%D0%A5%D0%BC%D0%B5%D0%BB%D1%8E%D0%BA.djvu",
+      "source_sha256": "b0aba52e6e184c598d6ff03c96c2d3646eacd60a05474b194101e9e2d8b190de",
+      "source": "В. Ф. Очков, В. А. Хмелюк. От микрокалькулятора к персональному компьютеру. Москва: Издательство МЭИ, 1990, с. 31–35, программа 1.3.",
+      "pages": [
+        35
+      ],
+      "length": 8,
+      "hex": "681049D911505100",
+      "errata": [],
+      "tags": "book;classic;variant;vs-calculator",
+      "collection": "ochkov-khmelyuk-1990",
+      "series": "bridg-it",
+      "sha256": "d28cf9cc66bf4ccb16db46cc25078c88269bc96e5a8e0c2ae0bd7a3ead433082",
+      "source_mnemonics": [
+        "ИП8",
+        "+",
+        "П9",
+        "КИП9",
+        "-",
+        "С/П",
+        "БП",
+        "00"
+      ],
+      "source_notation": "The book prints an eight-cell mnemonic table; hex is its encoding, not a separate printed code column."
+    },
+    {
+      "stem": "logic/igra-bashe-sistepskiy-1986",
+      "title": "Игра Баше — «Квант», 1986",
+      "author": "Л. Н. Систепский",
+      "source_url": "https://www.kvant.digital/issues/1986/6/sistepskiy-programmirovanie_na_mikrokalkulyatore_igryi-293c51b3/",
+      "source": "Л. Н. Систепский. Программирование на микрокалькуляторе: игры. Квант, 1986, №6, с. 42–43, таблица 1.",
+      "pages": [
+        42
+      ],
+      "length": 48,
+      "hex": "40500E011041005057150B0E6010406001116113681167100F11610B12601001115744420B0E60104062510701425136",
+      "errata": [
+        {
+          "address": 24,
+          "printed": "0",
+          "mnemonic": "FВx",
+          "resolved": "0F",
+          "reason": "The last hexadecimal digit is missing in the printed code; the mnemonic is full stack lift."
+        }
+      ],
+      "tags": "classic;magazine;variant;vs-calculator",
+      "collection": "kvant-1986-06",
+      "series": "bashe",
+      "sha256": "e245489b816566967b233a76ac04d2a6ed7a25447f6fb9d9dcdb799a50850d65",
+      "source_images": [
+        {
+          "page": 42,
+          "url": "https://www.kvant.digital/data/kvant_1986_6/jpg/0042.jpg",
+          "bytes": 564092,
+          "sha256": "2237a4dd1f65f6ea221e2668fceff4088ff9f1a402f50103feaae947dd3d5398"
+        }
+      ]
+    },
+    {
+      "stem": "action/ballisticheskaya-igra-sistepskiy-1986",
+      "title": "Баллистическая игра",
+      "author": "Л. Н. Систепский",
+      "source_url": "https://www.kvant.digital/issues/1986/6/sistepskiy-programmirovanie_na_mikrokalkulyatore_igryi-293c51b3/",
+      "source": "Л. Н. Систепский. Программирование на микрокалькуляторе: игры. Квант, 1986, №6, с. 42–43, таблица 2.",
+      "pages": [
+        42,
+        43
+      ],
+      "length": 67,
+      "hex": "631C621240631D62126812436042661C651240661D6512681246604500404B4D606810406A63104A6C66114C6069126210601261104B6069126510601264104D505132",
+      "errata": [
+        {
+          "address": 10,
+          "printed": "13",
+          "mnemonic": "×",
+          "resolved": "12",
+          "reason": "The mnemonic and the symmetric second-projectile calculation require multiplication by the time step."
+        }
+      ],
+      "tags": "classic;magazine;military;two-player",
+      "collection": "kvant-1986-06",
+      "series": "",
+      "sha256": "b50953fed45bfebb0f29fde7a64ae62a3f2abf21df483d70c97ea16ed0da4575",
+      "source_images": [
+        {
+          "page": 42,
+          "url": "https://www.kvant.digital/data/kvant_1986_6/jpg/0042.jpg",
+          "bytes": 564092,
+          "sha256": "2237a4dd1f65f6ea221e2668fceff4088ff9f1a402f50103feaae947dd3d5398"
+        },
+        {
+          "page": 43,
+          "url": "https://www.kvant.digital/data/kvant_1986_6/jpg/0043.jpg",
+          "bytes": 558381,
+          "sha256": "dd00a8f5b7f1810c202a6e9bb0b7e71493fe0c30c7c6ab39f34eddd43c7f96a3"
+        }
+      ],
+      "printed_hex": "631C621240631D62126813436042661C651240661D6512681246604500404B4D606810406A63104A6C66114C6069126210601261104B6069126510601264104D505132"
+    }
+  ]
+}

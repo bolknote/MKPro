@@ -84,6 +84,24 @@ continuation prompts and repeated use of the same move table. These are original
 programs; the source's reliance on the human to validate input is preserved.
 Pass `barrel`, `river` or `puzzle` to run one group.
 
+Ochkov–Khmelyuk's eight-step Bridg-it and Sistepskiy's Kvant games:
+
+```sh
+node tests/emulator/ochkov-kvant-games.cjs
+```
+
+Checks the 8-step Bridg-it, 48-step Bashe and 67-step Ballistic Game against
+source-code fixtures and the two declared printed-code corrections. Uses each
+card's keyboard setup after unrelated register values. Bridg-it checks every
+move and three board IDs in all angle modes, complete legal games, the card's
+numbered board and all 1,048,576 final pairing assignments against independent
+connectivity. Bashe checks 280 positions against integer misere rules, both first
+players, complete wins and losses and restarts. Ballistic Game checks both
+trajectories against analytical formulas, varied time steps/gravity, coordinate
+reads, ground crossing, full restarts and the fractional-step failure of the
+literal printed division opcode. Pass `bridge`, `bashe` or `ballistic` to run
+one group. No source scans or downloaded books are needed to run these tests.
+
 Romanovskis's turtle, snail and millipede race:
 
 ```sh
