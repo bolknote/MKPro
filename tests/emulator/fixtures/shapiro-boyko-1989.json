@@ -1,0 +1,32 @@
+{
+  "book": "С. И. Шапиро, А. Б. Бойко. Программируемые микрокалькуляторы в обучении. Москва: Радио и связь, 1989.",
+  "source_url": "https://nzdr.ru/data/media/biblio/games/prog/pmk_/%D0%9A%D0%BD%D0%B8%D0%B3%D0%B8/%D0%9F%D0%9C%D0%9A%20%D0%B2%20%D0%BE%D0%B1%D1%83%D1%87%D0%B5%D0%BD%D0%B8%D0%B8%20%281989%29%20-%20%D0%A8%D0%B0%D0%BF%D0%B8%D1%80%D0%BE.djvu",
+  "source_sha256": "e20ae165d65ab561152634c9652a2dce052a9ce373c246e866cfe5d56d9895a3",
+  "transcription": "Printed command-code columns manually checked against scan images; source bytes unchanged.",
+  "entries": [
+    {
+      "stem": "logic/bochonok-shapiro-boyko-1989",
+      "title": "Бочонок",
+      "page": 102,
+      "length": 67,
+      "hex": "0D04004D064648AD064647AD6668115721064648AD0946AD074A01056611460105DA11BAAD08512505450341D5010012D5105B455041694C6849674866476C465B5452",
+      "sha256": "fd1fc2b38f6a9bf8b0061027c11b4d86a9e5cdd66c2f00cd93c50c3eef8526a7"
+    },
+    {
+      "stem": "logic/igra-5-shapiro-boyko-1989",
+      "title": "Игра «5» — решатель",
+      "page": 182,
+      "length": 86,
+      "hex": "0C010B4ADA256A110100124B6A01115E466B02115E2561518201115E3562500506518201115E436350513164518201115E696B03115E5865518201115E656651826750515501115E856B04115E816851826750510027",
+      "sha256": "f8e829dc641f3a9801ad181799dbac30efeb66609390abc6dc2b8c62ae18aa6c"
+    },
+    {
+      "stem": "logic/missionery-i-lyudoedy-shapiro-boyko-1989",
+      "title": "Миссионеры и людоеды",
+      "page": 232,
+      "length": 55,
+      "hex": "41144064601144656111456260104263611043600100126110506465105E3320506365125E43D2D4010050D3D5635E500150D2D4010150",
+      "sha256": "9da96680c24664068e9397bb8d3839b109d4af49917bd1c09ab0a078c9bbb8e3"
+    }
+  ]
+}

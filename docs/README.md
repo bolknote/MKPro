@@ -63,6 +63,8 @@ Hardware internals and chip-level detail live separately in
 | [27-foreign-programmable-calculator-book-registry.md](./27-foreign-programmable-calculator-book-registry.md) | Download registry for non-Russian programmable-calculator books and game sources (Russian) |
 | [28-downloaded-book-games-audit.md](./28-downloaded-book-games-audit.md) | Game inventory from the downloaded foreign books, matched against the current catalog (Russian) |
 | [29-brp4-games-import.md](./29-brp4-games-import.md) | BRP-4 game imports, duplicate comparison, ROM provenance and verified source quirks (Russian) |
+| [31-nzdr-source-audit.md](./31-nzdr-source-audit.md) | New and previously used PMK books and magazine archives in the nzdr.ru collection (Russian) |
+| [32-nzdr-games-audit.md](./32-nzdr-games-audit.md) | New game candidates, known variants, solvers and magazine errata in the downloaded nzdr.ru sources (Russian) |
 
 ## Primary Sources
 

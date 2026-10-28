@@ -66,6 +66,24 @@ in the [import audit](../../docs/29-brp4-games-import.md). It verifies the whole
 file hash, extracts all 20 source addresses and checks 14 unchanged listings,
 the declared torpedo patch, five existing duplicates and catalog metadata.
 
+Original Shapiro–Boyko book programs (1989):
+
+```sh
+node tests/emulator/shapiro-boyko-1989.cjs
+```
+
+Checks three unchanged printed listings: Bochonok, Missionaries and Cannibals,
+and the Game 5 sliding-puzzle helper. Source-byte fixtures retain the book URL,
+DjVu checksum, printed page numbers and command codes. Each card's keyboard
+setup is exercised after unrelated register values. Covers the printed examples
+in all angle modes, 96 complete barrel games across all 16 initial positions,
+the reachable legal river-crossing graph and complete crossings with restarts.
+Game 5 is checked against an independent physical-board graph: all 120 starting
+positions with empty cell 6, 60 solutions, 60 impossibility reports, legal moves,
+continuation prompts and repeated use of the same move table. These are original
+programs; the source's reliance on the human to validate input is preserved.
+Pass `barrel`, `river` or `puzzle` to run one group.
+
 Romanovskis's turtle, snail and millipede race:
 
 ```sh
