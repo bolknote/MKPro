@@ -1,0 +1,166 @@
+{
+  "book": "С. И. Шапиро, А. Б. Бойко. Программируемые микрокалькуляторы в обучении. Москва: Радио и связь, 1989.",
+  "source_url": "https://nzdr.ru/data/media/biblio/games/prog/pmk_/%D0%9A%D0%BD%D0%B8%D0%B3%D0%B8/%D0%9F%D0%9C%D0%9A%20%D0%B2%20%D0%BE%D0%B1%D1%83%D1%87%D0%B5%D0%BD%D0%B8%D0%B8%20%281989%29%20-%20%D0%A8%D0%B0%D0%BF%D0%B8%D1%80%D0%BE.djvu",
+  "source_sha256": "e20ae165d65ab561152634c9652a2dce052a9ce373c246e866cfe5d56d9895a3",
+  "transcription": "369 printed code bytes. Only Hanoi address 42 is corrected from 6B to 6A according to its printed mnemonic. Bridge address 48 retains printed byte 63; the mnemonic incorrectly names R8. No MK-52-specific patch is applied to the MK-61 listing.",
+  "entries": [
+    {
+      "id": "wild71",
+      "stem": "logic/krestiki-noliki-variatsiya-shapiro-boyko-1989",
+      "title": "Крестики-нолики — вариация",
+      "author": "",
+      "kind": "game",
+      "pages": [
+        167,
+        169
+      ],
+      "page": 168,
+      "scan": 86,
+      "length": 71,
+      "printed_hex": "4009001050AB53555E146A5051236A50AB535557246A50AB6D500100134CDC256C110100124D096C110100126D104A606D115E546D50526C01116C0311126C0611126C08111252",
+      "hex": "4009001050AB53555E146A5051236A50AB535557246A50AB6D500100134CDC256C110100124D096C110100126D104A606D115E546D50526C01116C0311126C0611126C08111252",
+      "sha256": "18fec9acc942384450e8e4028ea881ae0a4e38d1c98eaf3e31c2606e24150ba3",
+      "tags": "book;classic;original;variant;vs-calculator",
+      "collection": "shapiro-boyko-1989",
+      "series": "tic-tac-toe",
+      "angle_mode": "any"
+    },
+    {
+      "id": "digits28",
+      "stem": "logic/pmk-otgadyvaet-tsifry-shapiro-boyko-1989",
+      "title": "ПМК отгадывает цифры",
+      "author": "",
+      "kind": "game",
+      "pages": [
+        138,
+        141
+      ],
+      "page": 140,
+      "scan": 72,
+      "length": 28,
+      "printed_hex": "0D454604141140572565B65D10D504400D46010012D6105D18505102",
+      "hex": "0D454604141140572565B65D10D504400D46010012D6105D18505102",
+      "sha256": "f2c6b8a743b742d91d534098792631187a38be5a4a83a1ab4152fb34becb0d38",
+      "tags": "book;classic;original;vs-calculator",
+      "collection": "shapiro-boyko-1989",
+      "series": "number-guessing",
+      "angle_mode": "any"
+    },
+    {
+      "id": "trihex82",
+      "stem": "logic/trigeks-shapiro-boyko-1989",
+      "title": "Тригекс",
+      "author": "",
+      "kind": "game",
+      "pages": [
+        171,
+        174
+      ],
+      "page": 171,
+      "scan": 87,
+      "length": 82,
+      "printed_hex": "0108004A02504B05115E16080750512303115E360501506A121D6A6B121D1203121020506B01116B06114C126B0911125E616C5E5705092050050620506B04115E700905205003115E780805205008062050",
+      "hex": "0108004A02504B05115E16080750512303115E360501506A121D6A6B121D1203121020506B01116B06114C126B0911125E616C5E5705092050050620506B04115E700905205003115E780805205008062050",
+      "sha256": "810745bff2eaa3a49722f3a46d218aa4ba25bb54df8710c08343f111eb5bfd27",
+      "tags": "book;classic;original;variant;vs-calculator",
+      "collection": "shapiro-boyko-1989",
+      "series": "trihex",
+      "angle_mode": "deg"
+    },
+    {
+      "id": "classic41",
+      "stem": "logic/krestiki-noliki-shapiro-boyko-1989",
+      "title": "Крестики-нолики",
+      "author": "",
+      "kind": "game",
+      "pages": [
+        164,
+        166
+      ],
+      "page": 165,
+      "scan": 84,
+      "length": 41,
+      "printed_hex": "0D095041425326610900121C5E20610211532827532653262050D2625E3108504211222104115E1952",
+      "hex": "0D095041425326610900121C5E20610211532827532653262050D2625E3108504211222104115E1952",
+      "sha256": "9b79977788fc9d2679f516c026d3657d448e60795b9624eac478f302d7ecd8c9",
+      "tags": "book;classic;original;variant;vs-calculator",
+      "collection": "shapiro-boyko-1989",
+      "series": "tic-tac-toe",
+      "angle_mode": "deg"
+    },
+    {
+      "id": "hanoi49",
+      "stem": "logic/khanoiskaya-bashnya-pomoshchnik-shapiro-boyko-1989",
+      "title": "Ханойская башня — помощник",
+      "author": "",
+      "kind": "utility",
+      "pages": [
+        120,
+        124
+      ],
+      "page": 122,
+      "scan": 63,
+      "length": 49,
+      "printed_hex": "410D4243014ADA0900121C5E226A01115731014B51336A02115731024B5133034BDA0111BADB0110BB6B6B0C0110505105",
+      "hex": "410D4243014ADA0900121C5E226A01115731014B51336A02115731024B5133034BDA0111BADB0110BB6B6A0C0110505105",
+      "sha256": "cf46fe983d70d18890efb459eb563c1507c8fc5c998b663ecb9ffcc6631a5b96",
+      "tags": "book;classic;original;variant",
+      "collection": "shapiro-boyko-1989",
+      "series": "hanoi",
+      "angle_mode": "deg",
+      "code_errata": [
+        {
+          "address": 42,
+          "printed_code": "6B",
+          "printed_mnemonic": "П→ХА",
+          "resolved_code": "6A",
+          "resolved_mnemonic": "Пхa"
+        }
+      ]
+    },
+    {
+      "id": "bridge98",
+      "stem": "logic/bridzh-it-shapiro-boyko-1989",
+      "title": "Бридж-ит",
+      "author": "",
+      "kind": "game",
+      "pages": [
+        174,
+        180
+      ],
+      "page": 178,
+      "scan": 91,
+      "length": 98,
+      "printed_hex": "01506C5041114961641347D761646712114569222168115E70140111465E43695C36615139D1614C681052695C5561666312104C01115265576164651161146312114C01105261681347D767621261681214114C695991146810521463114C681152",
+      "hex": "01506C5041114961641347D761646712114569222168115E70140111465E43695C36615139D1614C681052695C5561666312104C01115265576164651161146312114C01105261681347D767621261681214114C695991146810521463114C681152",
+      "sha256": "a00a19575d9ffa1c613467b82063ee74d403bdf4a21231deee0c0852da65ac90",
+      "tags": "book;classic;original;variant;vs-calculator",
+      "collection": "shapiro-boyko-1989",
+      "series": "bridg-it",
+      "angle_mode": "any",
+      "mnemonic_errata": [
+        {
+          "address": 48,
+          "printed_mnemonic": "П→Х8",
+          "printed_code": "63",
+          "resolved_mnemonic": "Пх3"
+        }
+      ],
+      "author_model_patch": {
+        "model": "МК-52",
+        "addresses": [
+          42,
+          54,
+          69,
+          90,
+          97
+        ],
+        "from": "52",
+        "to": "50",
+        "manual_read_x": "БП 02 С/П",
+        "applied_to_this_listing": false,
+        "tested_on_mk52": false
+      }
+    }
+  ]
+}

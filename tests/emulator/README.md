@@ -118,6 +118,26 @@ legal-move graph and all eight initial columns. Reverse Bulls covers all
 the actual maximum of 11 questions and keyboard restarts. Printed examples run
 in all three angle modes. Pass `road`, `queen` or `bulls` for one group.
 
+Shapiro–Boyko's Tic-tac-toe variants, Digits, Trihex, Hanoi helper and Bridg-it:
+
+```sh
+node tests/emulator/shapiro-boyko-board-digits-hanoi.cjs
+```
+
+Checks 369 printed code bytes with one declared Hanoi opcode correction,
+unchanged MK-61 Bridg-it return instructions, provenance and all six card
+setups after unrelated register values. The ordinary and wild Tic-tac-toe
+strategies use independent paper-board game trees, including early win
+signals and all first moves. Digits uses independent multiset feedback with
+repeats and leading zeros. Hanoi uses physical disk stacks and reproduces
+the literal printed-code failure. Trihex checks its nine lines, implied
+defensive moves, packed replies and XY reads. Bridg-it checks a complete
+printed game, relative replies, 80 distinct pairings and 12 games on four sizes.
+Geometric edge legality and corner connectivity account for the unpreventable
+horizontal boundary extensions that the original program does not output.
+Pass `classic`, `wild`, `digits`, `hanoi`, `trihex` or `bridge` for one group.
+The source book and OCR files are not needed to run the tests.
+
 Ochkov–Khmelyuk's eight-step Bridg-it and Sistepskiy's Kvant games:
 
 ```sh
