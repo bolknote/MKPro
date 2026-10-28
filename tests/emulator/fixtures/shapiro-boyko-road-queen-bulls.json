@@ -1,0 +1,72 @@
+{
+  "book": "С. И. Шапиро, А. Б. Бойко. Программируемые микрокалькуляторы в обучении. Москва: Радио и связь, 1989.",
+  "source_url": "https://nzdr.ru/data/media/biblio/games/prog/pmk_/%D0%9A%D0%BD%D0%B8%D0%B3%D0%B8/%D0%9F%D0%9C%D0%9A%20%D0%B2%20%D0%BE%D0%B1%D1%83%D1%87%D0%B5%D0%BD%D0%B8%D0%B8%20%281989%29%20-%20%D0%A8%D0%B0%D0%BF%D0%B8%D1%80%D0%BE.djvu",
+  "source_sha256": "e20ae165d65ab561152634c9652a2dce052a9ce373c246e866cfe5d56d9895a3",
+  "transcription": "All 284 printed code bytes preserved. At page 143 address 68 the printed 64 is correct; its mnemonic incorrectly names Ra instead of R4.",
+  "entries": [
+    {
+      "id": "road55",
+      "stem": "logic/dorozhka-shapiro-boyko-1989",
+      "title": "Дорожка — 55 команд",
+      "author": "",
+      "page": 109,
+      "scan": 56,
+      "length": 55,
+      "hex": "0D48D2D2D5626513011043D363651262144211476268105E27205067504622210E6511125C276662114A5C276668105927486A0B425106",
+      "sha256": "0335967aadb479e2fb7071be910f086239787b6144ef26acec3f5a018739f149",
+      "tags": "book;classic;original;variant;vs-calculator",
+      "collection": "shapiro-boyko-1989",
+      "series": "road-game"
+    },
+    {
+      "id": "road83",
+      "stem": "logic/dorozhka-modifikatsiya-shapiro-boyko-1989",
+      "title": "Дорожка — модификация",
+      "author": "",
+      "page": 113,
+      "scan": 58,
+      "length": 83,
+      "hex": "0E0211421445D50D444849675046222165115C756266114A59756966105975496A4268105E3950626513011043D362656312115E61625759015161010B476810486267114269105E112050D464031159122050",
+      "sha256": "a76f6a071b3a3fdb7628079a59988e2e2a1035b0262daff060a8231147fd5116",
+      "tags": "book;classic;original;variant;vs-calculator",
+      "collection": "shapiro-boyko-1989",
+      "series": "road-game"
+    },
+    {
+      "id": "queen67",
+      "stem": "logic/ferz-shapiro-boyko-1989",
+      "title": "Ферзь",
+      "author": "",
+      "page": 119,
+      "scan": 61,
+      "length": 67,
+      "hex": "4B144A04115E11504B144A6A6B116A6B12125E2220506A4C6B4D53535E34010251506A4D6B4C53535E4602015150030551075051206C01116D0211126D6C1101111252",
+      "sha256": "f7d054dc66b2527f76b4b0ff289cbbd6b757c856d75946cec75a585b1e116ead",
+      "tags": "book;classic;original;variant;vs-calculator",
+      "collection": "shapiro-boyko-1989",
+      "series": "wythoff"
+    },
+    {
+      "id": "bulls79",
+      "stem": "logic/byki-i-korovy-obratnye-shapiro-boyko-1989",
+      "title": "Быки и коровы — ПМК отгадывает",
+      "author": "",
+      "page": 143,
+      "scan": 73,
+      "length": 79,
+      "hex": "0D45014414A8504A144BA76B02115E20A9A8516601105E27A951376A6B105E37D4D5655105650110A8504AA701105E53D565A85141D465A8504AA751536A02115E722050646D121052646544144552",
+      "sha256": "96fb9fd749b2c3e563db9e9768f6daa1a93724da8746ef03a8d1a7f49791787b",
+      "tags": "book;classic;original;variant;vs-calculator",
+      "collection": "shapiro-boyko-1989",
+      "series": "bulls-and-cows",
+      "mnemonic_errata": [
+        {
+          "address": 68,
+          "printed_mnemonic": "П→ХА",
+          "printed_code": "64",
+          "resolved_mnemonic": "Пх4"
+        }
+      ]
+    }
+  ]
+}

@@ -101,6 +101,23 @@ treatment of repeated colors, leading zeros, attempt counts and restarts.
 Blind players complete games using only their own guesses and returned feedback.
 Pass `nim`, `positional` or `summed` to run one group. Tests do not need scans.
 
+Shapiro–Boyko's two Road games, Queen and Reverse Bulls and Cows:
+
+```sh
+node tests/emulator/shapiro-boyko-road-queen-bulls.cjs
+```
+
+Checks all 284 unchanged source bytes, provenance, the corrected mnemonic at
+page 143 address 68 and each card's keyboard setup after dirty registers.
+The Road variants use an independent physical-board graph with retrograde
+analysis for backward moves and cycles. Covers complete games, first-player
+choice, both outcomes, rejected integer moves, the three-error penalty and
+documented gaps in the original input checks. Queen uses an independent
+legal-move graph and all eight initial columns. Reverse Bulls covers all
+99 secrets with proper digit multiplicity, leading zeros, reversal completion,
+the actual maximum of 11 questions and keyboard restarts. Printed examples run
+in all three angle modes. Pass `road`, `queen` or `bulls` for one group.
+
 Ochkov–Khmelyuk's eight-step Bridg-it and Sistepskiy's Kvant games:
 
 ```sh
