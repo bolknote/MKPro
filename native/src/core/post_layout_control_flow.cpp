@@ -1907,7 +1907,9 @@ PostLayoutExecutionRelocationProof prove_post_layout_execution_relocation(
   if (!options.inserted_copy_prefixes.empty())
     for (std::size_t state = 0; state < after_control.execution_states.size(); ++state)
       for (const auto next : after_control.execution_successors[state]) new_predecessors[next].push_back(state);
-  for (const auto& [read, store] : options.inserted_copy_prefixes) {
+  for (const auto& copy_prefix : options.inserted_copy_prefixes) {
+    const auto read = copy_prefix.first;
+    const auto store = copy_prefix.second;
     if (read >= after.size() || store >= after.size() || read == store ||
         after[read].kind != MachineItemKind::Op || after[store].kind != MachineItemKind::Op ||
         after[read].opcode < 0x60 || after[read].opcode > 0x6e ||

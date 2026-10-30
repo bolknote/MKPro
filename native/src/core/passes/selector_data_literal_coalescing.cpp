@@ -215,7 +215,9 @@ bool transport_is_exact(const AuthoritativePostLayoutControlFlow& before,
   const auto mapped = [&](std::size_t item) {
     return item < mapping.size() ? mapping[item] : std::nullopt;
   };
-  for (const auto& [source, targets] : before.indirect_flow_targets) {
+  for (const auto& flow_targets : before.indirect_flow_targets) {
+    const auto source = flow_targets.first;
+    const auto& targets = flow_targets.second;
     const auto output = mapped(source);
     if (!output) return false;
     const auto found = after.indirect_flow_targets.find(*output);
@@ -416,7 +418,9 @@ SelectorChargeLiteralLayoutResult layout_after_literal_erasure(
   auto delivered_preloads = preloads;
   std::map<int, std::pair<int, int>> moved_targets;
   std::set<std::size_t> staged_companions;
-  for (const auto& [source, targets] : before.indirect_flow_targets) {
+  for (const auto& flow_targets : before.indirect_flow_targets) {
+    const auto source = flow_targets.first;
+    const auto& targets = flow_targets.second;
     const int selector = items[source].opcode & 15;
     if (selector == reg) continue;
     if (std::any_of(layout_options.deferred_selector_reconciliations.begin(),

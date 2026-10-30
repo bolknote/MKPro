@@ -114,10 +114,10 @@ struct Leaf {
   Index begin = 0, end = 0;
   std::vector<IrOp> body;
 };
-std::optional<Leaf> leaf(const std::vector<IrOp>& ops, const std::string& name) {
+std::optional<Leaf> leaf(const std::vector<IrOp>& ops, const std::string& helper_name) {
   std::optional<Index> label;
   for (Index i = 0; i < ops.size(); ++i)
-    if (ops[i].kind == IrKind::Label && ops[i].name == name) {
+    if (ops[i].kind == IrKind::Label && ops[i].name == helper_name) {
       if (label)
         return {};
       label = i;
