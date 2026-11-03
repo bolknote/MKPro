@@ -1,5 +1,33 @@
 # MK-Pro Optimization and Lowering Strategy Reference
 
+## Scalar ordinary-value closure
+
+Scalar range queries retain a separate ordinary-decimal value invariant even
+when an interval widens or a literal exceeds the interval domain. A subsequent
+`K frac` can recover `[-1, 1]`, allowing normal arithmetic consumers to establish
+new finite bounds. Requesting only X does not discard this value-class proof.
+Unknown input and raw words remain unknown; no machine-magnitude bound or loop
+count is invented. Normal-result closure is not arithmetic totality, canonical
+memory equality or permission to replace the hardware's zero-sensitive `Kmax`.
+Existing representation, liveness and final-layout proofs still price and
+validate every optimization enabled by the recovered ranges.
+
+## In-place finite-epoch exit decoding
+
+A finite carrier can be restored by an exact unary decoder followed by its
+original-register store, not only by exponent adjustment or a literal seed.
+Every admitted row must decode to the original value at the same true-predicate
+fallthrough, with no extra external entry. The complete relational proof checks
+the changed last-X, X2, stack and subsequent consumers. The decoder and store are
+both charged, and historical recovery candidates keep their independent search.
+An exact-context read-before-overwrite analysis filters unnecessary carrier
+stores; value-only exit decoding retains its original candidates and budget.
+
+Raw coefficient epochs remain unsupported across opaque reductions or
+predicates: ordinary decoders do not establish an ordinary-real interpretation
+of a raw BCD word. In particular, this does not
+replace hardware `Kmax` with safe mathematical maximum or alter its zero quirks.
+
 ## Continuing a completed optimizer root
 
 An exhaustive portfolio retains the completed bounded incumbent and can continue

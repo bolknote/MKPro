@@ -1,6 +1,7 @@
 #include "mkpro/core/callee_hole_boundary_normalization.hpp"
 #include "mkpro/core/emit/machine_emitter.hpp"
 #include "mkpro/core/post_layout_numeric_ranges.hpp"
+#include "mkpro/core/raw_bcd_word.hpp"
 #include "mkpro/core/stable_register_value_flow.hpp"
 #include "mkpro/core/stack_value_equivalence.hpp"
 #include "mkpro/emulator/mk61.hpp"
@@ -373,6 +374,61 @@ void scientific_selector_spelling() {
   }
 }
 
+void scalar_ordinary_reduction_contracts() {
+  for (const std::string value : {"1E40", "-1E40", "9.8765432E70", "7.25", "-7.25"}) {
+    std::vector<MachineItem> items;
+    append(items, {0x68, 0x35, 2, 0x10});
+    const auto query = items.size();
+    stop(items, StopDisposition::Terminal);
+    const std::vector<PreloadReport> preloads{{.register_name = "8", .value = value}};
+    const auto proof = ranges(items, {query}, preloads);
+    require(!proof.exhausted && proof.x_before.contains(query) &&
+                proof.x_before.at(query).lower >= 1 && proof.x_before.at(query).upper <= 3,
+            "a scalar quantizer recovers a positive enclosure without an input magnitude bound");
+    emulator::MK61 calc;
+    require(calc.load_program(bytecode(items)).diagnostics.empty(), "ordinary closure ROM load");
+    calc.set_register("8", value);
+    calc.press_sequence({"В/О", "С/П"});
+    require(calc.run_until_stable(3000, 8).stopped, "ordinary closure ROM stop");
+    const auto actual = numeric(calc.read_register("X"));
+    require(actual >= static_cast<double>(proof.x_before.at(query).lower) &&
+                actual <= static_cast<double>(proof.x_before.at(query).upper),
+            "the scalar enclosure includes the actual ROM result");
+    require(ranges(items, {query}, {}).x_before.empty(),
+            "an uninitialized register is not an ordinary decimal assumption");
+    const auto raw = decode_raw_single_hex_word("0xDE-2");
+    require(raw.has_value(), "the negative input must be a valid nonnumeric BCD word");
+    const std::vector<PreloadReport> raw_preloads{
+        {.register_name = "8", .value = raw->canonical_word}};
+    require(ranges(items, {query}, raw_preloads).x_before.empty(),
+            "a nonnumeric BCD word cannot inherit the ordinary producer certificate");
+  }
+
+  std::vector<MachineItem> items;
+  items.push_back(MachineItem::label("again"));
+  append(items, {0x68, 1, 0, 0x12, 0x48});
+  target(items, 0x5d, "again");
+  append(items, {0x68, 0x35, 2, 0x10});
+  const auto query = items.size();
+  stop(items, StopDisposition::Terminal);
+  const std::vector<PreloadReport> preloads{
+      {.register_name = "0", .value = "16"}, {.register_name = "8", .value = "1"}};
+  const auto proof = ranges(items, {query}, preloads);
+  require(!proof.exhausted && proof.x_before.contains(query) &&
+              proof.x_before.at(query).lower >= 1 && proof.x_before.at(query).upper <= 3,
+          "widening a decimal recurrence preserves its class, not an invented iteration bound");
+  const auto flow = build_post_layout_control_flow(items);
+  const auto lift = analyze_post_layout_automatic_entry_lift(items, flow, 100000);
+  require(lift.has_value(), "ordinary recurrence needs independently proved entry facts");
+  const auto exhausted = prove_post_layout_numeric_ranges(items, flow, *lift, {query},
+      &preloads, 1, NumericRangeInputPolicy::ValidatedRegisterTransport);
+  require(exhausted.exhausted && exhausted.x_before.empty(),
+          "ordinary closure does not export partially proved ranges on exhaustion");
+  const auto maximum = bound_ordinary_binary(0x36, {0, 0, true}, {2, 3, false});
+  require(maximum && maximum->lower == 0 && maximum->upper == 3,
+          "a positive range does not replace the MK-61 zero-sensitive max with safe max");
+}
+
 void selector_edges_and_weak_stores() {
   std::vector<MachineItem> items;
   append(items, {0x45, 1, 4, 0x47});
@@ -434,6 +490,7 @@ int main() {
     fl_rom_and_range_contracts();
     input_context_contracts();
     scientific_selector_spelling();
+    scalar_ordinary_reduction_contracts();
     selector_edges_and_weak_stores();
     std::cout << "numeric range transport and ROM contracts passed\n";
     return 0;

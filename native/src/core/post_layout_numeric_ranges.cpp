@@ -855,7 +855,7 @@ static PostLayoutNumericRangeProof prove_numeric_ranges_on_graph(
     bool operator==(const Fact&) const = default;
   };
   const Fact unknown{true, std::nullopt, std::nullopt};
-  const auto constant = [complete_stack](Range range, Quantum quantum = std::nullopt) {
+  const auto constant = [](Range range, Quantum quantum = std::nullopt) {
     if (quantum && (!range || quantum->denominator == 1)) {
       const auto precise = quantized_enclosure(*quantum);
       if (range && precise)
@@ -872,13 +872,13 @@ static PostLayoutNumericRangeProof prove_numeric_ranges_on_graph(
     const bool integer_word = range && range->integral && range->lower >= 1;
     const auto mantissa = range ? ordinary_mantissa() : MantissaShape{};
     auto fact = Fact{true, std::move(range), std::move(quantum), integer_word, mantissa};
-    fact.ordinary_value = complete_stack && fact.range.has_value();
+    fact.ordinary_value = fact.range.has_value();
     return fact;
   };
   const auto decimal = [&](std::string_view text) {
     auto fact = constant(bound_ordinary_decimal(text), quantized_literal(text));
     fact.mantissa = literal_mantissa(text);
-    if (complete_stack && normalized_finite_ordinary_word(std::string(text))) fact.ordinary_value = true;
+    if (normalized_finite_ordinary_word(std::string(text))) fact.ordinary_value = true;
     fact.nonnegative_word = fact.range && !text.starts_with("-");
     fact.canonical_small_integer = text.size()==1U && text[0]>='1' && text[0]<='9';
     if (fact.integer_selector_word) {
@@ -1183,12 +1183,12 @@ static PostLayoutNumericRangeProof prove_numeric_ranges_on_graph(
         fact.nonnegative_word = code == 0x10 && y.nonnegative_word && x.nonnegative_word;
         // Only the value on normal completion is ordinary. This is NOT a
         // totality certificate for a new arithmetic instruction.
-        fact.ordinary_value = complete_stack && y.ordinary_value && x.ordinary_value &&
+        fact.ordinary_value = y.ordinary_value && x.ordinary_value &&
             ((code >= 0x10 && code <= 0x13) || code == 0x36);
         // Ordinary arithmetic normalizes its completed 1..9 result to the
         // same full word as a fresh digit. An interval without this producer
         // theorem, a raw operand or a numeric zero supplies no such fact.
-        fact.canonical_small_integer = fact.ordinary_value && code >= 0x10 && code <= 0x13 &&
+        fact.canonical_small_integer = complete_stack && fact.ordinary_value && code >= 0x10 && code <= 0x13 &&
             fact.range && fact.range->integral && fact.range->lower >= 1 && fact.range->upper <= 9;
         return fact;
       }
@@ -1209,10 +1209,14 @@ static PostLayoutNumericRangeProof prove_numeric_ranges_on_graph(
       // Squaring clears the sign independently of the mantissa. Unknown raw
       // values remain nonnumeric; only the sign-byte invariant is exported.
       fact.nonnegative_word = code == 0x22;
-      fact.ordinary_value = complete_stack && (code == 0x15 ||
+      fact.ordinary_value = code == 0x15 ||
           (x.ordinary_value && (code == 0x31 || code == 0x32 ||
-           code == 0x34 || code == 0x35 || code == 0x22)));
-      if (complete_stack && x.ordinary_value && !fact.range && code == 0x35)
+           code == 0x34 || code == 0x35 || code == 0x22));
+      // Ordinary-value closure is independent of the requested stack slots.
+      // In particular, widening a recurrence's magnitude does not make its
+      // normal decimal result raw. A quantizer can recover a finite range;
+      // an unproved/manual/raw operand still supplies no such certificate.
+      if (x.ordinary_value && !fact.range && code == 0x35)
         fact.range = bounded(-1, 1, false);
       return fact;
     }

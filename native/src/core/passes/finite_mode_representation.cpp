@@ -317,7 +317,7 @@ struct Macro {
 
 enum class ExitRecoveryKind {
   ExponentAdjustment, LiteralRematerialization,
-  ExponentObservation, UnaryObservation,
+  ExponentObservation, UnaryObservation, UnaryCarrier,
 };
 
 struct ExitRecovery {
@@ -2592,7 +2592,7 @@ bool prove(const std::vector<MachineItem>& items,
       if (!roots || !state.initialized || state.entry)
         return fail("exit recovery requires a proved finite epoch and closed numeric entry");
       const auto kind = recovery->second->kind;
-      if (kind == ExitRecoveryKind::UnaryObservation) {
+      if (kind == ExitRecoveryKind::UnaryObservation || kind == ExitRecoveryKind::UnaryCarrier) {
         // Decode only the predicate's recalled X. The carrier is STILL encoded:
         // a later read, input or exit must prove its own representation relation.
         // Equal numerical output does not restore last-X or the entry shadow.
@@ -3099,6 +3099,51 @@ std::map<std::size_t, ExitRecovery> finite_exit_recoveries(
     literal_rejected.insert(graph.flow.execution_states[root].item_index);
   for (const auto root : graph.roots)
     rejected.insert(graph.flow.execution_states[root].item_index);
+  // A carrier-restoring store is not a value-only decoder. Build its demand
+  // once over exact return contexts instead of pricing an extra store at every
+  // predicate exit. Direct writes end the old lifetime; possible indirect reads
+  // and opaque external observations remain conservative demands.
+  std::optional<std::set<std::size_t>> carrier_demands;
+  const auto needs_carrier = [&](std::size_t target_item) {
+  if (!carrier_demands) {
+  carrier_demands.emplace();
+  const auto image = lower_ir_to_machine(ops);
+  std::vector<std::vector<std::size_t>> predecessors(graph.rows.size());
+  std::vector<bool> demanded(graph.rows.size(), false), killed(graph.rows.size(), false);
+  std::deque<std::size_t> demand_work;
+  for (std::size_t state = 0; state < graph.rows.size(); ++state) {
+    const auto item = graph.flow.execution_states[state].item_index;
+    const auto& command = image.at(item);
+    killed[state] = command.kind == MachineItemKind::Op && command.opcode == 0x40 + plan.reg;
+    bool reads = command.kind == MachineItemKind::Op && command.opcode == 0x60 + plan.reg;
+    const int family = command.opcode & 0xf0;
+    if (command.kind == MachineItemKind::Op && family >= 0x70 && family <= 0xe0 &&
+        (command.opcode & 15) == plan.reg) reads = true;
+    constexpr std::array<int, 4> loop_reads{0x5d, 0x5b, 0x58, 0x5a};
+    if (command.kind == MachineItemKind::Op && plan.reg < 4 &&
+        command.opcode == loop_reads[static_cast<std::size_t>(plan.reg)]) reads = true;
+    if (command.kind == MachineItemKind::Op && (command.opcode & 0xf0) == 0xd0) {
+      const auto aliases = graph.flow.indirect_memory_targets.find(item);
+      reads = reads || aliases == graph.flow.indirect_memory_targets.end() ||
+          std::find(aliases->second.begin(), aliases->second.end(), plan.reg) != aliases->second.end();
+    }
+    const bool opaque_exit = graph.flow.execution_successors[state].empty() &&
+        std::find(command.roles.begin(), command.roles.end(), kTypedDisplayObservationRole) == command.roles.end();
+    if (reads || opaque_exit) { demanded[state] = true; demand_work.push_back(state); }
+    for (const auto next : graph.flow.execution_successors[state]) predecessors[next].push_back(state);
+  }
+  while (!demand_work.empty()) {
+    const auto state = demand_work.front(); demand_work.pop_front();
+    for (const auto previous : predecessors[state])
+      if (!killed[previous] && !demanded[previous]) {
+        demanded[previous] = true; demand_work.push_back(previous);
+      }
+  }
+  for (std::size_t state = 0; state < graph.rows.size(); ++state)
+    if (demanded[state]) carrier_demands->insert(graph.flow.execution_states[state].item_index);
+  }
+  return carrier_demands->contains(target_item);
+  };
   for (std::size_t state = 0; state < graph.rows.size(); ++state) {
     const auto item = graph.flow.execution_states[state].item_index;
     if (graph.rows[state] < 0)
@@ -3142,8 +3187,17 @@ std::map<std::size_t, ExitRecovery> finite_exit_recoveries(
             const auto value = exact_projection(code, plan.finite_encoding.at(at), std::nullopt);
             return value && *value == plan.finite_values.at(at);
           });
-          if (exact)
+          if (exact) {
             observations->emplace_back(i, ExitRecovery{ExitRecoveryKind::UnaryObservation, {code}});
+            // Restore the physical carrier too. Unlike value-only decoding,
+            // this closes its relation before later ordinary consumers. The
+            // same exact-row/fallthrough requirement applies; the relational
+            // proof still owns last-X, X2, deep stack and all future reads.
+            if (!(ops[i].kind == IrKind::Store && ops[i].opcode == 0x40 + plan.reg) &&
+                needs_carrier(machine[i]))
+              observations->emplace_back(i, ExitRecovery{
+                  ExitRecoveryKind::UnaryCarrier, {code, 0x40 + plan.reg}});
+          }
         }
       }
     }
@@ -4066,6 +4120,18 @@ static std::vector<DeferredFiniteModeRepresentation> finite_mode_candidates_impl
         plan.exit_recoveries.begin(), plan.exit_recoveries.end(), [](const auto& recovery) {
           return recovery.second.kind == ExitRecoveryKind::LiteralRematerialization;
         });
+    const auto carrier_recoveries = std::count_if(
+        plan.exit_recoveries.begin(), plan.exit_recoveries.end(), [](const auto& recovery) {
+          return recovery.second.kind == ExitRecoveryKind::UnaryCarrier;
+        });
+    if (carrier_recoveries != 0)
+      alternatives.back().transformation.optimizations.push_back({
+          "finite-mode-exit-carrier-decoder",
+          "Restored " + std::to_string(carrier_recoveries) +
+              " finite carrier epochs in place with exact unary/store code. Proved every "
+              "incoming logical row and true-fallthrough context, charged both commands, "
+              "and checked all later register/stack/X1/X2 observations. Opaque arithmetic "
+              "receives original values; no raw or zero-sensitive Kmax ordering is assumed."});
     if (literal_recoveries != 0)
       alternatives.back().transformation.optimizations.push_back({
           "finite-mode-boundary-rematerialization",

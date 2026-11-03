@@ -22,6 +22,9 @@ namespace mkpro::core::passes {
 // At a proved true predicate exit, the decoded X may be restored independently
 // of the carrier. Exponent adjustment preserves last-X; exact unary decoders
 // must prove their changed last-X/X2 unobserved. The encoded carrier relation
+// may also end at an exact unary/store recovery on a true predicate exit:
+// subsequent opaque arithmetic receives the original register value. Raw
+// coefficient epochs still require their separate, closed observation proof.
 // stays live until an independently proved overwrite or private exit.
 // Other unsupported or unprojected observations fail closed. Calls retain their exact
 // return contexts; aliases, external entries and hidden stack state are proof

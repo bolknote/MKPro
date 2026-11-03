@@ -84,6 +84,10 @@ enum class NumericRangeInputPolicy {
 // Logical operations may certify ordinary 8.x results even for unknown inputs;
 // hexadecimal alternatives remain nonnumeric. Widening an interval does not
 // erase the independent digit invariant or assume an input range.
+// Ordinary-value closure is also independent of interval widening and of
+// whether X alone or the entire stack was requested. K frac can recover the
+// enclosure [-1, 1] from a proved ordinary value of unknown magnitude. This
+// does not certify raw memory shape, arithmetic totality or an unknown input.
 // Preload facts apply only to Main, never to resume/manual entries. No host
 // floating point. Budget exhaustion discards all facts, never a partial iterate.
 PostLayoutNumericRangeProof prove_post_layout_numeric_ranges(
