@@ -549,7 +549,9 @@ std::vector<ConstrainedRepresentation> pool_allocation_exposed_literals(
   }
   for(const auto& word:parent.artifact.preloads)used.insert(word.register_name);
   std::optional<int> free;
-  for(int r=7;r<15;++r){const std::string name(1,"0123456789abcde"[r]);
+  // Keep historical high homes first; a genuinely unused low home is also
+  // legal for direct data. The complete alias/setup proof below is unchanged.
+  for(const int r:{7,8,9,10,11,12,13,14,0,1,2,3,4,5,6}){const std::string name(1,"0123456789abcde"[r]);
     if(!used.contains(name) && !context.options.preloaded_constant_registers.contains(name)){free=r;break;}}
   if(!free)return result;
   const auto flow=build_post_layout_control_flow(items,control);
@@ -1314,6 +1316,49 @@ std::optional<ConstrainedRepresentation> zero_underflow_conditional_return(
 // A separate closure family: changing a private reduction seed may enable
 // address/data sharing only after placement. Never let these alternatives
 // consume the historical beam or replace its equal-size winner.
+std::optional<ConstrainedRepresentation> reopen_order_reduction_input(
+    const ConstrainedRepresentation& node,std::size_t store,const std::string& literal,
+    const PostLayoutControlFlowOptions& control) {
+  const auto& items=node.artifact.items;
+  const auto next_command=[&](std::size_t at) {
+    do{++at;}while(at<items.size() && items[at].kind==MachineItemKind::Label);
+    return at;
+  };
+  const auto first=next_command(store),last=next_command(first);
+  if(last<items.size() && items[first].kind==MachineItemKind::Op &&
+      items[last].kind==MachineItemKind::Op && !items[first].raw && !items[last].raw &&
+      items[first].opcode==literal[0]-'0' && items[last].opcode==literal[1]-'0')return node;
+  constexpr std::string_view id_prefix="selector-sunk-literal-id:";
+  std::string family;
+  for(const auto& role:items[store].roles)if(role.starts_with(id_prefix)) {
+    if(!family.empty())return std::nullopt;
+    family=role.substr(id_prefix.size());
+  }
+  if(family.empty())return std::nullopt;
+  auto opened=node;
+  std::erase(opened.artifact.items[store].roles,std::string("selector-sunk-literal-coalesced"));
+  std::vector<MachineItem> digits;
+  for(const char digit:literal)digits.push_back(MachineItem::op(digit-'0',std::string(1,digit)));
+  opened.artifact.items.insert(opened.artifact.items.begin()+static_cast<std::ptrdiff_t>(store+1U),
+                              digits.begin(),digits.end());
+  auto coalesced=items;
+  std::erase(coalesced[store].roles,std::string("selector-sunk-literal-coalesced"));
+  coalesced[store].roles.push_back("selector-sunk-literal-coalesced");
+  const auto flow=build_post_layout_control_flow(coalesced,control);
+  if(!flow.proved)return std::nullopt;
+  bool inverse=false;
+  for(const auto& pending:passes::prepare_deferred_selector_data_literal_layouts(
+          opened.artifact.items,control,4))
+    if(pending.family_id==family && passes::prove_deferred_selector_data_literal_layout(
+          pending,coalesced,flow))inverse=true;
+  if(!inverse || !refresh_constraint_targets(opened))return std::nullopt;
+  opened.artifact.optimizations.push_back({"reopened-order-data-address-entry",
+      "Reconstructed a compiler-owned implicit data/address input by the inverse "
+      "complete-family entry theorem. Preserved every mode, labelled entry, stack, "
+      "X1/X2 and matched return; the temporary literal debt must be repaid by final layout."});
+  return opened;
+}
+
 std::vector<ConstrainedRepresentation> order_reduction_translation_roots(
     const ConstrainedRepresentation& node, const CompileOptions& options,
     const PostLayoutControlFlowOptions& control) {
@@ -1336,34 +1381,37 @@ std::vector<ConstrainedRepresentation> order_reduction_translation_roots(
     if (marker == owner.roles.end()) continue;
     const auto literal = marker->substr(prefix.size());
     if (literal.size() != 2 || literal[0] < '1' || literal[0] > '9' || literal[1] < '0' || literal[1] > '9') continue;
+    const auto opened=reopen_order_reduction_input(node,store,literal,control);
+    if(!opened)continue;
+    const auto& input=opened->artifact.items;
     const auto next_command = [&](std::size_t at) {
-      do { ++at; } while (at < node.artifact.items.size() && node.artifact.items[at].kind == MachineItemKind::Label);
+      do { ++at; } while (at < input.size() && input[at].kind == MachineItemKind::Label);
       return at;
     };
     const auto first = next_command(store), last = next_command(first);
-    if (last >= node.artifact.items.size() || node.artifact.items[first].opcode != literal[0] - '0' ||
-        node.artifact.items[last].opcode != literal[1] - '0') continue;
-    auto flow = build_post_layout_control_flow(node.artifact.items, control);
-    const auto origins = detail::joint_target_origins(node.artifact.items, node.targets, node.encoded_selectors);
+    if (last >= input.size() || input[first].opcode != literal[0] - '0' ||
+        input[last].opcode != literal[1] - '0') continue;
+    auto flow = build_post_layout_control_flow(input, control);
+    const auto origins = detail::joint_target_origins(input, opened->targets, opened->encoded_selectors);
     if (!flow.proved || !origins) continue;
     const auto selected = build_deferred_selector_consistent_execution_graph(
-        node.artifact.items, flow, *origins, 20000, true).execution;
+        input, flow, *origins, 20000, true).execution;
     if (!selected.proved) continue;
     const auto original = flow.execution_states;
     flow.execution_states.clear();
     for (const auto state : selected.original_states) flow.execution_states.push_back(original[state]);
     flow.execution_successors = selected.successors; flow.execution_edges = selected.execution_edges;
-    const auto lift = analyze_post_layout_automatic_entry_lift(node.artifact.items, flow, 200000);
+    const auto lift = analyze_post_layout_automatic_entry_lift_with_indirect_store_facts(input, flow, 200000);
     if (!lift) continue;
     std::vector<std::size_t> queries;
-    for (std::size_t at = 0; at < node.artifact.items.size(); ++at)
-      if (node.artifact.items[at].kind == MachineItemKind::Op) queries.push_back(at);
+    for (std::size_t at = 0; at < input.size(); ++at)
+      if (input[at].kind == MachineItemKind::Op) queries.push_back(at);
     const auto policy = options.ordinary_decimal_keyboard_input
         ? NumericRangeInputPolicy::ValidatedOrdinaryDecimalInput
         : NumericRangeInputPolicy::ValidatedRegisterTransport;
     const auto bounds = prove_post_layout_bounded_stack_numeric_values(
-        node.artifact.items, flow, *lift, queries, node.artifact.preloads, 2000000, policy);
-    const auto proof = prove_order_reduction_translation(node.artifact.items, flow, *lift, bounds, first, last);
+        input, flow, *lift, queries, opened->artifact.preloads, 2000000, policy);
+    const auto proof = prove_order_reduction_translation(input, flow, *lift, bounds, first, last);
     if (!proof.proved) {
       if (std::getenv("MKPRO_NATIVE_TRACE_ORDER_REDUCTION"))
         for (const auto& reason : proof.reasons) std::cerr << "[order-reduction] " << reason << '\n';
@@ -1372,7 +1420,7 @@ std::vector<ConstrainedRepresentation> order_reduction_translation_roots(
     const int old = (literal[0] - '0') * 10 + literal[1] - '0';
     for (int seed = proof.minimum_seed; seed <= proof.maximum_seed; ++seed) {
       if (seed == old) continue;
-      auto candidate = node;
+      auto candidate = *opened;
       auto& changed = candidate.artifact.items;
       changed[first].opcode = seed / 10; changed[first].mnemonic = std::to_string(seed / 10);
       changed[last].opcode = seed % 10; changed[last].mnemonic = std::to_string(seed % 10);

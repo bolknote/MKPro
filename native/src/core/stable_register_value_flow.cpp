@@ -100,6 +100,27 @@ std::optional<std::string> negated_value(const std::optional<std::string>& value
   return "-" + *value;
 }
 
+// Recall normalizes ordinary fractions in X without rewriting their source
+// memory. A fixed-point spelling must not survive a later store as an order-0
+// selector: for example, -0.1 and -1.0000000e-1 have different addressing.
+std::optional<std::string> recalled_value(const std::optional<std::string>& value) {
+  if(!value)return std::nullopt;
+  const auto normalized=normalized_finite_ordinary_word(*value);
+  if(!normalized)return value;
+  const auto exponent_at=normalized->find('e');
+  const int exponent=std::stoi(normalized->substr(exponent_at+1U));
+  int position=0;
+  for(std::size_t i=normalized->starts_with('-')?1U:0U;i<exponent_at;++i) {
+    const char digit=(*normalized)[i];
+    if(digit=='.')continue;
+    if(digit!='0' && position>exponent)return normalized;
+    ++position;
+  }
+  // Integer spellings are already equivalent selector representatives. Keep
+  // their established canonical-small-integer facts and entry-buffer policy.
+  return value;
+}
+
 std::optional<std::string> selector_write_back(const std::string& register_name_value,
                                                const std::optional<std::string>& value,
                                                IndirectOperationKind kind,
@@ -177,7 +198,7 @@ AbstractState transfer(const AbstractState& input, const MachineItem& item,
   if (opcode >= 0x60 && opcode <= 0x6e) {  // П->X r
     const int register_index_value = opcode - 0x60;
     state.x = register_index_value >= 7
-                  ? state.registers[static_cast<std::size_t>(register_index_value - 7)]
+                  ? recalled_value(state.registers[static_cast<std::size_t>(register_index_value - 7)])
                   : std::nullopt;
     return state;
   }

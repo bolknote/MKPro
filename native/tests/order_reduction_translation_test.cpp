@@ -48,7 +48,7 @@ Fixture fixture(const std::string& increment, int observation = 0, bool multiply
 OrderReductionTranslationProof prove(const Fixture& f, std::size_t budget = 100000) {
   const auto flow = build_post_layout_control_flow(f.items);
   require(flow.proved, "translation fixture must have a complete CFG");
-  const auto lift = analyze_post_layout_automatic_entry_lift(f.items, flow, 100000);
+  const auto lift = analyze_post_layout_automatic_entry_lift_with_indirect_store_facts(f.items, flow, 100000);
   require(lift.has_value(), "translation fixture must have proved entry mode");
   std::vector<std::size_t> queries;
   for (std::size_t at = 0; at < f.items.size(); ++at)
@@ -139,6 +139,26 @@ void rounding_and_ties() {
             "ROM winner and tie direction must survive one-ULP and rounding-boundary inputs");
   }
 }
+
+void indirect_store_literal_contract() {
+  MachineEmitter e;e.emit_op(0x60);
+  const auto first=e.items.size();e.emit_number("98");const auto last=e.items.size()-1U;
+  e.emit_op(0x61);e.emit_op(0xb3);e.items.back().indirect_memory_targets=std::vector<int>{7};
+  e.emit_number("12345678");e.emit_op(0x37);e.emit_op(0x35);e.emit_op(0x10);e.emit_op(0x10);e.emit_op(0x48);
+  e.emit_op(0x6b);e.emit_op(0x36);e.emit_op(0x49);e.emit_op(0x11);
+  e.emit_op(0x62);e.emit_op(0x60);e.emit_stop(StopDisposition::Terminal);
+  e.items.back().roles.push_back(kTypedDisplayObservationRole);
+  const Fixture f{e.items,{{.register_name="0",.value="0"},{.register_name="1",.value="0.125"},
+      {.register_name="2",.value="0"},{.register_name="3",.value="8"},
+      {.register_name="7",.value="0"},{.register_name="b",.value="-1"}},first,last};
+  const auto proof=prove(f);
+  require(proof.proved,"a fresh literal after proved indirect storage must preserve a translated stack value");
+  require(observe(f,98)==observe(f,52),"ROM agrees across the indirect-store literal boundary");
+  auto raw=f;
+  for(auto& item:raw.items)if(item.opcode==0xb3)item.raw=true;
+  require(!prove(raw).proved,"an opaque indirect store supplies no fresh-literal permission");
+}
+
 void input_contract() {
   const std::string source = R"(program DecimalInput {
     state { value: packed }
@@ -310,7 +330,7 @@ int main(int argc, char** argv) {
     if (argc == 2 && std::string(argv[1]) == "--pending-decimal-baseline") {
       pending_decimal_size_baseline(); return 0;
     }
-    translation_contracts(); rounding_and_ties(); input_contract(); selector_class_contract(); read_only_word_contract();
+    translation_contracts(); rounding_and_ties(); indirect_store_literal_contract(); input_contract(); selector_class_contract(); read_only_word_contract();
     negative_divisor_enclosure();
     std::cout << "order-only reduction translation compiler and ROM contracts passed\n";
     return 0;

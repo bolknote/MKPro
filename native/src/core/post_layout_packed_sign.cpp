@@ -14,6 +14,7 @@
 #include <optional>
 #include <set>
 #include <string>
+#include <utility>
 
 namespace mkpro::core {
 
@@ -194,19 +195,25 @@ PackedSignInputProof prove_post_layout_packed_sign_inputs(
   return result;
 }
 
-ToggleSignInputProof prove_post_layout_toggle_sign_inputs(
+namespace {
+struct ToggleCarrierInputProof : ToggleSignInputProof {
+  std::map<std::size_t,std::vector<std::string>> numeric_values;
+  std::map<std::size_t,std::string> numeric_carriers;
+};
+
+ToggleCarrierInputProof prove_toggle_carrier_inputs(
     const std::vector<MachineItem>& items,
     const AuthoritativePostLayoutControlFlow& flow,
     const std::vector<std::size_t>& requested_states,
     const std::vector<PreloadReport>& preloads, std::size_t maximum_work) {
-  ToggleSignInputProof result;
-  const auto unproved=[&]{result.signs.clear();result.carriers.clear();result.values.clear();result.value_carriers.clear();return result;};
+  ToggleCarrierInputProof result;
+  const auto unproved=[&]{result.signs.clear();result.carriers.clear();result.values.clear();result.value_carriers.clear();result.numeric_values.clear();result.numeric_carriers.clear();return result;};
   const bool trace=std::getenv("MKPRO_NATIVE_TRACE_REGISTER_WEBS")!=nullptr;
   const auto count=flow.execution_states.size();
   if(requested_states.empty() || !flow.proved || !count ||
       flow.execution_successors.size()!=count) {if(trace){std::cerr<<"[toggle-sign] initial CFG="<<flow.proved<<" states="<<count<<" demands="<<requested_states.size()<<"\n";for(const auto& reason:flow.reasons)std::cerr<<reason<<"\n";}return result;}
   const auto charge=[&] {
-    if(result.work>=maximum_work){result.exhausted=true;result.signs.clear();result.carriers.clear();result.values.clear();result.value_carriers.clear();return false;}
+    if(result.work>=maximum_work){result.exhausted=true;result.signs.clear();result.carriers.clear();result.values.clear();result.value_carriers.clear();result.numeric_values.clear();result.numeric_carriers.clear();return false;}
     ++result.work;return true;
   };
   const auto entries=resolve_post_layout_external_entry_contexts(flow);
@@ -266,6 +273,10 @@ ToggleSignInputProof prove_post_layout_toggle_sign_inputs(
     if(!value || !std::any_of(mantissa.begin(),mantissa.end(),[](const char digit){return digit>='1' && digit<='9';}))continue;
     const int sign=word.value.starts_with('-')?-1:1;
     const int reg=static_cast<int>(std::string_view{"0123456789abcde"}.find(word.register_name[0]));
+    const auto normalized = normalized_finite_ordinary_word(word.value);
+    const auto opposite = normalized ? std::optional<std::string>{
+        normalized->starts_with('-') ? normalized->substr(1) : "-" + *normalized} : std::nullopt;
+    bool numeric_orbit = normalized.has_value();
     std::map<std::size_t,std::pair<std::size_t,std::size_t>> updates;
     bool valid=true;
     for(std::size_t i=0;i<items.size() && valid;++i) {
@@ -286,7 +297,27 @@ ToggleSignInputProof prove_post_layout_toggle_sign_inputs(
         if(aliases==flow.indirect_memory_targets.end() ||
             std::find(aliases->second.begin(),aliases->second.end(),reg)!=aliases->second.end())valid=false;
       }
-      if(family>=0x70 && family<=0xe0 && (op&15)==reg && reg<=6)valid=false;
+      if(family>=0x70 && family<=0xe0 && (op&15)==reg) {
+        if(reg<=6)valid=false;
+        else if(numeric_orbit) {
+          const auto operation = family==0xb0 || family==0xd0
+              ? IndirectOperationKind::Memory : IndirectOperationKind::Flow;
+          // These are words produced by a complete direct transition.
+          // Initial delivery is checked separately on unwritten paths.
+          for(const auto& spelling : {*normalized, *opposite}) {
+            if(!charge())return result;
+            const auto addressed = evaluate_indirect_address(
+                word.register_name, spelling, operation, flow.address_space_model);
+            const auto expected = normalized_finite_ordinary_word(spelling);
+            const auto after = addressed && addressed->result_value
+                ? normalized_finite_ordinary_word(*addressed->result_value) : std::nullopt;
+            if(!expected || after != expected ||
+                !indirect_writeback_preserves_literal_word(*addressed,spelling)) {
+              numeric_orbit=false;break;
+            }
+          }
+        }
+      }
       if(reg<4 && op==(reg==0?0x5d:reg==1?0x5b:reg==2?0x58:0x5a))valid=false;
     }
     if(trace)std::cerr<<"[toggle-sign] R"<<reg<<" updates="<<updates.size()<<" valid="<<valid<<"\n";
@@ -307,21 +338,39 @@ ToggleSignInputProof prove_post_layout_toggle_sign_inputs(
     }
     if(!valid){if(trace)std::cerr<<"[toggle-sign] transition side entry R"<<reg<<"\n";continue;}
     std::vector<unsigned> rows(count,0);
+    std::vector<bool> delivered_unwritten(count,false);
     std::vector<bool> queued(count,false);
     std::deque<std::size_t> pending;
-    for(std::size_t s=0;s<count;++s)if(entries->main[s]){rows[s]=1;queued[s]=true;pending.push_back(s);}
+    for(std::size_t s=0;s<count;++s)if(entries->main[s]){rows[s]=1;delivered_unwritten[s]=true;queued[s]=true;pending.push_back(s);}
     while(!pending.empty()) {
       if(!charge())return result;
       const auto s=pending.front();pending.pop_front();queued[s]=false;
       const unsigned in=rows[s];
       const unsigned out=updates.contains(flow.execution_states[s].item_index)
           ? ((in&1U)?2U:0U)|((in&2U)?1U:0U):in;
+      const bool unwritten=delivered_unwritten[s] && !updates.contains(flow.execution_states[s].item_index);
       for(const auto next:flow.execution_successors[s]) {
         if(!charge())return result;
         const unsigned joined=rows[next]|out;
-        if(joined==rows[next])continue;
-        rows[next]=joined;if(!queued[next]){queued[next]=true;pending.push_back(next);}
+        const bool joined_unwritten=delivered_unwritten[next] || unwritten;
+        if(joined==rows[next] && joined_unwritten==delivered_unwritten[next])continue;
+        rows[next]=joined;delivered_unwritten[next]=joined_unwritten;
+        if(!queued[next]){queued[next]=true;pending.push_back(next);}
       }
+    }
+    // The initial delivery can have a different word shape from a direct
+    // recall/negate/store result. Check it only on paths that have not yet
+    // completed that normalizing transition, and require a word fixed point.
+    for(std::size_t s=0;s<count && numeric_orbit;++s) {
+      if(!charge())return result;
+      if(!delivered_unwritten[s])continue;
+      const int op=items[flow.execution_states[s].item_index].opcode;
+      const int family=op&0xf0;
+      if(family<0x70 || family>0xe0 || (op&15)!=reg)continue;
+      const auto addressed=evaluate_indirect_address(word.register_name,word.value,
+          family==0xb0 || family==0xd0 ? IndirectOperationKind::Memory : IndirectOperationKind::Flow,
+          flow.address_space_model);
+      if(!addressed || !indirect_writeback_preserves_literal_word(*addressed,word.value))numeric_orbit=false;
     }
     for(const auto s:requested_states) {
       if(!charge())return result;
@@ -329,11 +378,26 @@ ToggleSignInputProof prove_post_layout_toggle_sign_inputs(
       const auto& item=items[flow.execution_states[s].item_index];
       if(trace)std::cerr<<"[toggle-sign] R"<<reg<<" query="<<s<<" rows="<<rows[s]<<" predecessors="<<predecessors[s].size()<<"\n";
       if(item.kind!=MachineItemKind::Op || item.manual_interaction ||
-          (rows[s]!=1U && rows[s]!=2U) || predecessors[s].empty())continue;
+          rows[s]==0U || predecessors[s].empty())continue;
       // This component is a value certificate, not a sign substituted for an
       // arbitrary number. Each producer reads the exact closed carrier; the
       // source transition and all of its side entries were verified above.
-      if(value->integral && value->lower==value->upper &&
+      if(numeric_orbit) {
+        const bool recall=item.opcode==0x60+reg;
+        const bool negate=item.opcode==0x0b && std::any_of(updates.begin(),updates.end(),[&](const auto& update){
+            return update.second.second==flow.execution_states[s].item_index;
+          });
+        const bool store=item.opcode==0x40+reg && updates.contains(flow.execution_states[s].item_index);
+        if(recall || negate || store) {
+          auto& values=result.numeric_values[s];
+          const auto out=recall ? rows[s] : ((rows[s]&1U)?2U:0U)|((rows[s]&2U)?1U:0U);
+          if(out&1U)values.push_back(*normalized);
+          if(out&2U)values.push_back(*opposite);
+          result.numeric_carriers.emplace(s,word.register_name);
+        }
+      }
+      if(rows[s]!=1U && rows[s]!=2U)continue;
+      if(numeric_orbit && value->integral && value->lower==value->upper &&
           value->lower>=-1024 && value->upper<=1024){
         const int before=static_cast<int>(rows[s]==1U?value->lower:-value->lower);
         std::optional<int> after;
@@ -359,6 +423,26 @@ ToggleSignInputProof prove_post_layout_toggle_sign_inputs(
     }
   }
   return result;
+}
+
+} // namespace
+
+ToggleSignInputProof prove_post_layout_toggle_sign_inputs(
+    const std::vector<MachineItem>& items,
+    const AuthoritativePostLayoutControlFlow& flow,
+    const std::vector<std::size_t>& requested_states,
+    const std::vector<PreloadReport>& preloads,std::size_t maximum_work) {
+  return prove_toggle_carrier_inputs(items,flow,requested_states,preloads,maximum_work);
+}
+
+ToggleNumericInputProof prove_post_layout_toggle_numeric_inputs(
+    const std::vector<MachineItem>& items,
+    const AuthoritativePostLayoutControlFlow& flow,
+    const std::vector<std::size_t>& requested_states,
+    const std::vector<PreloadReport>& preloads,std::size_t maximum_work) {
+  auto proof=prove_toggle_carrier_inputs(items,flow,requested_states,preloads,maximum_work);
+  return {.values=std::move(proof.numeric_values),.carriers=std::move(proof.numeric_carriers),
+          .work=proof.work,.exhausted=proof.exhausted};
 }
 
 } // namespace mkpro::core

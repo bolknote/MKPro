@@ -61,4 +61,20 @@ ToggleSignInputProof prove_post_layout_toggle_sign_inputs(
     const std::vector<PreloadReport>& preloads,
     std::size_t maximum_work = 100000);
 
+// Exact ordinary numeric results of the same closed carrier automaton.
+// This is not a certificate of source memory shape or raw selector words.
+struct ToggleNumericInputProof {
+  std::map<std::size_t,std::vector<std::string>> values;
+  std::map<std::size_t,std::string> carriers;
+  std::size_t work=0;
+  bool exhausted=false;
+};
+
+ToggleNumericInputProof prove_post_layout_toggle_numeric_inputs(
+    const std::vector<MachineItem>& items,
+    const AuthoritativePostLayoutControlFlow& flow,
+    const std::vector<std::size_t>& requested_states,
+    const std::vector<PreloadReport>& preloads,
+    std::size_t maximum_work=100000);
+
 } // namespace mkpro::core

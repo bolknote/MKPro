@@ -194,6 +194,8 @@ Quantum unary_quantized(int opcode, const Quantum& q) {
     return quantized(-hi, -lo, den);
   if (opcode == 0x31)
     return quantized(lo >= 0 ? lo : hi <= 0 ? -hi : 0, std::max(-lo, hi), den);
+  if (opcode == 0x32)
+    return quantized(lo<0?-1:lo>0?1:0,hi<0?-1:hi>0?1:0,1);
   if (opcode == 0x34)
     return quantized(lo / den, hi / den, 1);
   if (opcode == 0x35) {
@@ -297,6 +299,8 @@ Enclosure unary_enclosure(int code, const Enclosure& x) {
   const auto lo = x->lower, hi = x->upper;
   if (code == 0x0b) return enclosure(-hi, -lo);
   if (code == 0x31) return enclosure(lo >= 0 ? lo : hi <= 0 ? -hi : 0, std::max(-lo, hi));
+  if (code == 0x32) return enclosure(lo<0?-enclosure_scale:lo>0?enclosure_scale:0,
+                                      hi<0?-enclosure_scale:hi>0?enclosure_scale:0);
   if (code == 0x34) return enclosure((lo / enclosure_scale) * enclosure_scale,
                                       (hi / enclosure_scale) * enclosure_scale);
   if (code == 0x35) {
@@ -865,6 +869,33 @@ static PostLayoutNumericRangeProof prove_numeric_ranges_on_graph(
     }
     if (preserved) invariant_high_preloads.emplace(selected, preload.value);
   }
+  // A closed sign automaton is independent of the range fixed point. In
+  // particular, stable indirect flow must not erase a proved fractional
+  // coefficient. Import only numeric recall results, never canonical source
+  // memory or selector-word shape. Keep this optional precision demand-driven.
+  std::map<std::size_t,std::vector<std::string>> toggle_numeric_values;
+  if(complete_stack && precise_memory_values && transport && preloads && complete_memory_effects) {
+    std::set<int> carriers;
+    for(std::size_t i=2;i<items.size();++i) {
+      const auto& read=items[i-2U];const auto& neg=items[i-1U];const auto& store=items[i];
+      if(read.kind==MachineItemKind::Op && neg.kind==MachineItemKind::Op &&
+          store.kind==MachineItemKind::Op && !read.raw && !neg.raw && !store.raw &&
+          read.opcode>=0x60 && read.opcode<=0x6e && neg.opcode==0x0b &&
+          store.opcode==read.opcode-0x20)carriers.insert(read.opcode-0x60);
+    }
+    if(!carriers.empty()) {
+      std::vector<std::size_t> queries;
+      for(std::size_t state=0;state<count;++state) {
+        const auto& item=items[flow.execution_states[state].item_index];
+        if(item.kind==MachineItemKind::Op && item.opcode>=0x60 && item.opcode<=0x6e &&
+            carriers.contains(item.opcode-0x60))queries.push_back(state);
+      }
+      const auto budget=std::min<std::size_t>(200000,maximum_work/8U);
+      const auto proof=prove_post_layout_toggle_numeric_inputs(items,flow,queries,*preloads,budget);
+      result.work+=proof.work;
+      if(!proof.exhausted)toggle_numeric_values=proof.values;
+    }
+  }
   const auto command_item = [&](std::size_t at) {
     return at < items.size() && items[at].kind == MachineItemKind::Op &&
         !items[at].raw && (transport || !items[at].manual_interaction);
@@ -1142,6 +1173,13 @@ static PostLayoutNumericRangeProof prove_numeric_ranges_on_graph(
       canonical_memory_loads[state]=recalled_memory->grounded &&
           recalled_memory->canonical_small_integer;
     }
+    if(slot==0 && family==0x60) {
+      const auto phase=toggle_numeric_values.find(state);
+      if(phase!=toggle_numeric_values.end()) {
+        Fact fact;for(const auto& word:phase->second)fact=merge(fact,recalled_word(decimal(word)));
+        return fact;
+      }
+    }
     // Keep exact entry results on their incoming edge, before different
     // literal results meet at one successor and lose exact-word equality.
     if (stable.proved && slot == 0 && stable.x_after_state.at(state)) {
@@ -1308,8 +1346,11 @@ static PostLayoutNumericRangeProof prove_numeric_ranges_on_graph(
                     items[item].opcode >= 0x60 && items[item].opcode <= 0x6e;
               });
       const auto x = input(0);
-      return !x.grounded ? Fact{} : recalled
-          ? constant(unary(code, x.range), unary_quantized(code, x.quantum)) : unknown;
+      if(!x.grounded)return Fact{};
+      if(!recalled)return unknown;
+      auto fact=constant(unary(code,x.range),unary_quantized(code,x.quantum));
+      fact.ordinary_value=x.ordinary_value;
+      return fact;
     }
     if (code == 0x14)
       return input(slot < 2 ? 1 - slot : slot);

@@ -6220,6 +6220,29 @@ or address proofs are transplanted. Cell count remains primary, runtime cost
 breaks equal-size ties, and JSON/explain records both roots and the selection.
 Explicitly disabled or pinned lowering searches do not gain an automatic root.
 
+## Closed coefficient values and implicit data/address continuations
+
+A closed recall/negate/store carrier can supply exact ordinary numeric values
+at its uses, including the union of both phases. The proof starts from delivered
+initializers and checks every alias, side entry, typed resume and return frame.
+Initial, unwritten words remain separate from normalized transition words;
+each possible stable indirect access must preserve the appropriate complete
+word. Numeric equality never certifies canonical source-memory or raw selector
+shape. Exhausted optional precision exports no partial facts.
+
+Direct recall normalizes ordinary fractions in X without changing source memory.
+Rational and decimal enclosures project strict fractional signs exactly, and
+proved recall/sign edits retain ordinary-value closure after range widening.
+These facts let existing order-only reduction proofs choose private accumulator
+origins together with selector placement, rather than freezing an early origin.
+
+An already shared argument/address entry may be reopened only by the inverse
+complete-family data-literal theorem. Every candidate must repay the temporary
+literal and close the final data/address, stack, X1/X2 and return obligations.
+Literal pooling preserves the historical high-register preference but can use
+a genuinely vacant R0-R6 home after the same full alias and Main-setup proofs.
+Only the independently finalized complete artifact competes by cell count.
+
 
 ## Order-only reduction translation
 
