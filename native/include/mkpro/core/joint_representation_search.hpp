@@ -72,6 +72,13 @@ inline constexpr TransactionSearchLimits joint_representation_search_limits(bool
 
 using JointRepresentationFinalizer =
     std::function<std::optional<LayoutSearchArtifact>(const LayoutSearchArtifact&)>;
+// Rebase a private order-only reduction and solve selector/literal placement
+// as one late edge. Only smaller, fully closed artifacts escape; this does not
+// consume or recursively replay the historical representation search beams.
+std::vector<ProvedSearchTransition<LayoutSearchArtifact>>
+order_reduction_selector_layout_transactions(const LayoutSearchArtifact& root,
+                                             const CompileOptions& options);
+
 TransactionSearchResult<LayoutSearchArtifact> search_joint_representation_constraints(
     const LayoutSearchArtifact& root, const CompileOptions& options,
     const JointRepresentationFinalizer& finalize = {},

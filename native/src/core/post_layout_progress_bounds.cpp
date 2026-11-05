@@ -312,7 +312,7 @@ std::optional<ProgressExpandedControlFlow> expand_post_layout_progress(
     return std::nullopt;
   const auto boundaries = prove_post_layout_input_boundaries(items, flow);
   if (!boundaries.proved) return std::nullopt;
-  ProgressExpandedControlFlow result{flow, {}, {}};
+  ProgressExpandedControlFlow result{flow, {}, {}, {}};
   auto& out = result.control;
   out.execution_states.clear(); out.execution_successors.clear(); out.execution_edges.clear();
   std::vector<std::vector<std::size_t>> copies(size);
@@ -323,6 +323,7 @@ std::optional<ProgressExpandedControlFlow> expand_post_layout_progress(
     for (std::size_t visit = 0; visit < count; ++visit) {
       copies[state].push_back(out.execution_states.size());
       out.execution_states.push_back(flow.execution_states[state]);
+      result.original_states.push_back(state);
       result.automatic_entry_lift.push_back(automatic_entry_lift[state]);
       result.analysis_order.push_back(forward[state] && backward[state] ? visit + 1U
           : backward[state] ? 0U : witness.maximum_traversals + 2U);
@@ -359,7 +360,7 @@ std::optional<ProgressExpandedControlFlow> expand_post_layout_progress(
     for (const auto next : out.execution_successors[state]) pending.push_back(next);
   }
   std::vector<std::size_t> remap(live.size(), 0);
-  ProgressExpandedControlFlow pruned{flow, {}, {}};
+  ProgressExpandedControlFlow pruned{flow, {}, {}, {}};
   auto& final = pruned.control;
   final.execution_states.clear(); final.execution_successors.clear(); final.execution_edges.clear();
   for (std::size_t state = 0; state < live.size(); ++state)
@@ -368,6 +369,7 @@ std::optional<ProgressExpandedControlFlow> expand_post_layout_progress(
       final.execution_states.push_back(out.execution_states[state]);
       pruned.automatic_entry_lift.push_back(result.automatic_entry_lift[state]);
       pruned.analysis_order.push_back(result.analysis_order[state]);
+      pruned.original_states.push_back(result.original_states[state]);
       final.execution_successors.emplace_back(); final.execution_edges.emplace_back();
     }
   for (std::size_t state = 0; state < live.size(); ++state)

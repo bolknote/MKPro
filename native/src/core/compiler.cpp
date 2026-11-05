@@ -53874,6 +53874,14 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
                     std::to_string(ast.v2->rules.size()) +
                     " rules through the generic intent pipeline.",
       });
+      if (options.ordinary_decimal_keyboard_input) {
+        context.optimizations.push_back(OptimizationReport{
+            .name = "ordinary-decimal-keyboard-input-contract",
+            .detail = "Explicit runtime assumption: fresh X at validated typed keyboard phases "
+                      "is an ordinary decimal; sign, magnitude and integrality remain unrestricted. "
+                      "Raw BCD words and supernumbers are excluded. No input command is changed.",
+        });
+      }
       eliminate_unreachable_v2_procs(*ast.v2, context.optimizations);
       if (options.canonicalize_repeated_unary_update_args) {
         canonicalize_repeated_unary_update_args(*ast.v2, context.optimizations);
@@ -55525,6 +55533,7 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
     append_field(std::to_string(options.maximum_natural_target_anchors));
     append_field(std::to_string(static_cast<int>(address_space_model_for_options(options))));
     append_field(options.analysis ? "1" : "0");
+    append_field(options.ordinary_decimal_keyboard_input ? "1" : "0");
     *final_layout_input_fingerprint = std::move(fingerprint).str();
   }
 
@@ -57968,6 +57977,7 @@ bool can_retry_lowering_attempt_in_analysis(const CompileResult& result,
 std::string reclaim_base_key(const CompileOptions& options) {
   std::ostringstream out;
   out << "aggressive_terminal_direct=" << options.aggressive_terminal_direct
+      << ";ordinary_decimal_keyboard_input=" << options.ordinary_decimal_keyboard_input
       << ";invert_branch_order=" << options.invert_branch_order
       << ";canonicalize_if_chains=" << options.canonicalize_if_chains
       << ";free_residual_dispatch_scratch=" << options.free_residual_dispatch_scratch
@@ -82020,6 +82030,42 @@ CompileResult close_final_contextual_layouts_for_testing(
 CompileResult compile_source(std::string source, const CompileOptions& requested_options) {
   const CompileOptions options = apply_source_feature_profile_hint(source, requested_options);
   if(auto cached=read_completed_compile_result_cache(source,options))return *cached;
+  if (options.ordinary_decimal_keyboard_input) {
+    // A weaker input contract adds legal transformations, not a different
+    // pruning order for the historical optimizer portfolio. First retain its
+    // independently completed winner, then price the new atomic late edges.
+    auto ordinary_options = options;
+    ordinary_options.ordinary_decimal_keyboard_input = false;
+    CompileResult result = compile_source(source, ordinary_options);
+    CompileOptions lowering_options = result.layout_search_continuation &&
+            result.layout_search_continuation->completed_options
+        ? *result.layout_search_continuation->completed_options : ordinary_options;
+    lowering_options.ordinary_decimal_keyboard_input = true;
+    const core::LayoutSearchArtifact root{result.items, result.preloads, result.optimizations};
+    if (result.implemented)
+      for (const auto& transaction : core::order_reduction_selector_layout_transactions(
+               root, lowering_options)) {
+        CompileResult base = result;
+        base.optimizations = transaction.node.optimizations;
+        const auto candidate = materialize_proved_layout_result(source, base, lowering_options,
+            SelectedAbsoluteDarkLayout{.items = transaction.node.items,
+                                      .preloads = transaction.node.preloads,
+                                      .optimizations = {}});
+        if (candidate && candidate->steps.size() < result.steps.size() &&
+            !optimizer_static_gate_rejection_reason(lowering_options, *candidate))
+          result = *candidate;
+      }
+    if (!has_optimization_named(result.optimizations, "ordinary-decimal-keyboard-input-contract"))
+      result.optimizations.push_back({"ordinary-decimal-keyboard-input-contract",
+          "Explicit runtime input contract: keyboard numbers are ordinary decimal values, "
+          "without any bound, sign or integrality assumption. Raw BCD words and "
+          "supernumbers are outside this contract; commands and the user interface are unchanged."});
+    remember_completed_optimizer_context(result, lowering_options);
+    result.runtime_cost = runtime_cost_for_result(result);
+    refresh_rejection_dependent_reports(result, options);
+    write_completed_compile_result_cache(source, options, result);
+    return result;
+  }
   // A wider search has different ABI/layout admission order. Its local beams
   // are not a superset of the bounded search, so preserve that independently
   // completed root rather than assuming more exploration is monotone. Do not

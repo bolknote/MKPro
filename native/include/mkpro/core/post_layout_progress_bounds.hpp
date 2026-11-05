@@ -40,6 +40,8 @@ struct ProgressExpandedControlFlow {
   AuthoritativePostLayoutControlFlow control;
   std::vector<bool> automatic_entry_lift;
   std::vector<std::size_t> analysis_order;
+  // Exact provenance, including repeated physical/return contexts.
+  std::vector<std::size_t> original_states;
 };
 
 // An analysis-only product graph. It removes just the proved impossible

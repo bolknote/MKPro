@@ -6219,3 +6219,75 @@ the same delivered memory model, setup contract and budget; no lowering flags
 or address proofs are transplanted. Cell count remains primary, runtime cost
 breaks equal-size ties, and JSON/explain records both roots and the selection.
 Explicitly disabled or pinned lowering searches do not gain an automatic root.
+
+
+## Order-only reduction translation
+
+A private accumulator may change its integer seed only when a relational
+post-layout proof closes every use. The first implementation keeps old and
+new accumulators strictly inside the same positive two-digit exponent band
+through every addition. Translation then preserves the eight-significant-digit
+rounding grid; equal-offset subtraction cancels exactly, positive ordinary
+Kmax preserves order/ties, and negative equal sentinels remain dominated.
+Crossing 10 or 100, zero-sensitive maximum inputs, unknown consumers, selector
+uses, external literal-interior entries and observable stack/X1/X2 differences
+reject. Equal numeric endpoints do not certify integral values or BCD words.
+
+The independent fixed-point enclosure uses checked portable 128-bit arithmetic,
+outward division and conservative decimal rounding. It is not the exact
+quantized lattice. Growing recurrences widen to unknown. A finite OR-growth
+resource may bound the analysis product graph; exact origin IDs transport
+source sign facts and join results back without exporting private product IDs.
+
+The CLI flag `--ordinary-decimal-input` (API:
+`CompileOptions::ordinary_decimal_keyboard_input`) is an explicit opt-in
+runtime contract: fresh X at validated typed keyboard phases is an ordinary
+decimal, with no assumed sign, magnitude, integrality or coordinate range.
+Without it `entered()` remains unknown, including raw BCD/supernumbers.
+The flag does not change program source or emitted input commands. Untyped
+manual interaction does not inherit the contract. Results under this contract
+must be reported separately from unrestricted compilation.
+
+The translation family competes with data/address literal coalescing in a
+separate final-layout lane, not in the historical optimization beam. Only a
+smaller, fully rebound artifact that passes the existing final CFG/selector/
+return-context gates may replace the incumbent. JSON/explain records the seed
+change and whether the decimal-input contract was required. There is no source
+name, game, coordinate formula or fixed replacement constant recognizer.
+
+The ordinary-decimal compilation first completes the unrestricted optimizer
+portfolio unchanged. The new contract is applied to that retained winner at
+the complete-artifact boundary: a certified sharing inverse, seed translation,
+literal coalescing and final placement form one atomic edge. Intermediate
+seeds never rerun the whole lowering/finalization portfolio, and the original
+winner remains available if every new edge is rejected. Publication requires
+strict size improvement, the owning lowering options and the existing final
+static gate; local seed or padding savings alone are not a result.
+
+Additional decimal enclosures and protected preload invariants belong only to
+`prove_post_layout_bounded_stack_numeric_values`. The older scalar/stack range
+APIs keep their conservative alias and rounding contracts. A read-only high
+register invariant requires preservation of the complete preload machine word
+through indirect writeback, not merely equality of its numeric value.
+
+The complete-source regression for `tic-tac-toe-4x4.mkpro` measures 120 cells
+with `analysis`, planning budget 999999, the stock register profile and the
+explicit ordinary-decimal contract, versus the independently completed
+122-cell unrestricted planning result. The source is unchanged. This is a
+measured planning baseline, not a claim that the program fits 105 physical
+cells or that a 120-cell artifact can be loaded into the stock ROM emulator.
+
+Source intervals travel with the relational accumulator through copies and
+maximum joins; a scalar join with the unrelated negative sentinel cannot
+erase their positive-band invariant. Context-specific indirect memory targets
+may be refined only from independently proved selector word classes and must
+remain members of the authoritative alias set. Equal self-selectors retain
+their real pre-mutation/writeback order, including zero underflow.
+
+Read-only high-register preloads may supply numeric facts during deferred
+placement only after every direct/aliased writer has been excluded and every
+selector access preserves the complete literal word. Numerically equal decimal
+and scientific spellings are not interchangeable. The certificate does not
+manufacture a canonical memory or integer-selector class. Input-domain options
+participate in candidate/result caches and final-layout fingerprints; the
+explicit contract is also declared in JSON/explain before any reduction wins.

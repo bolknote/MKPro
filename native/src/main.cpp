@@ -49,6 +49,7 @@ Output and execution model:
                                   from the full mk61 and expanded optimizer roots.
   --analysis                      Include optimizer analysis/report data. With
                                   --out all, also print a human-readable report.
+  --ordinary-decimal-input        Declare decimal (not raw BCD) typed keyboard input.
   --strict                        Treat undeclared allocation as an error.
   --behavior-digest               Print a stable behavior digest instead of the
                                   selected output format.
@@ -1260,6 +1261,8 @@ int run_compile_like(const std::string& command, std::vector<std::string> args) 
     const std::string& arg = args[index];
     if (arg == "--analysis") {
       options.analysis = true;
+    } else if (arg == "--ordinary-decimal-input") {
+      options.ordinary_decimal_keyboard_input = true;
     } else if (arg == "--behavior-digest") {
       behavior_digest = true;
     } else if (arg == "--disable-candidate-search") {

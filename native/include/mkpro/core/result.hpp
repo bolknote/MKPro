@@ -360,6 +360,9 @@ struct CompileOptions {
   std::optional<int> budget;
   bool analysis = false;
   bool strict = false;
+  // Opt-in runtime contract for normal decimal keyboard input. Does not bound
+  // coordinates or alter the source; raw BCD/supernumber input is excluded.
+  bool ordinary_decimal_keyboard_input = false;
   bool aggressive_terminal_direct = false;
   bool invert_branch_order = false;
   bool canonicalize_if_chains = false;

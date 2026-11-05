@@ -3,6 +3,7 @@
 #include "mkpro/core/post_layout_progress_bounds.hpp"
 
 #include "mkpro/core/opcodes.hpp"
+#include "mkpro/core/int128.hpp"
 #include "mkpro/core/indirect_addressing.hpp"
 #include "mkpro/core/stable_register_value_flow.hpp"
 #include "mkpro/core/passes/liveness_analysis.hpp"
@@ -255,6 +256,84 @@ Quantum binary_quantized(int opcode, const Quantum& y, const Quantum& x) {
                      denominator / common);
   }
   return std::nullopt;
+}
+
+// A rounded enclosure is independent of the exact decimal lattice above.
+using Enclosure = std::optional<OrdinaryDecimalEnclosure>;
+constexpr auto enclosure_scale = OrdinaryDecimalEnclosure::scale;
+constexpr auto enclosure_limit = limit * enclosure_scale;
+Int128 enclosure_floor(Int128 n, Int128 d) { return n / d - (n % d < 0 ? 1 : 0); }
+Int128 enclosure_ceil(Int128 n, Int128 d) { return n / d + (n % d > 0 ? 1 : 0); }
+Enclosure enclosure(Int128 lo, Int128 hi) {
+  if (lo > hi || lo < -enclosure_limit || hi > enclosure_limit) return {};
+  return OrdinaryDecimalEnclosure{static_cast<std::int64_t>(static_cast<long long>(lo)), static_cast<std::int64_t>(static_cast<long long>(hi))};
+}
+Enclosure range_enclosure(const Range& r) {
+  return r ? enclosure(Int128(r->lower) * enclosure_scale,
+                       Int128(r->upper) * enclosure_scale) : Enclosure{};
+}
+Enclosure quantum_enclosure(const Quantum& q) {
+  return q ? enclosure(enclosure_floor(Int128(q->lower) * enclosure_scale, q->denominator),
+                       enclosure_ceil(Int128(q->upper) * enclosure_scale, q->denominator)) : Enclosure{};
+}
+Enclosure join_enclosure(const Enclosure& a, const Enclosure& b) {
+  return a && b ? enclosure(std::min(a->lower, b->lower), std::max(a->upper, b->upper)) : Enclosure{};
+}
+Range enclosure_range(const Enclosure& e) {
+  return e ? bounded(static_cast<std::int64_t>(static_cast<long long>(enclosure_floor(e->lower, enclosure_scale))),
+                     static_cast<std::int64_t>(static_cast<long long>(enclosure_ceil(e->upper, enclosure_scale))), false) : Range{};
+}
+Enclosure rounded_enclosure(Int128 lo, Int128 hi) {
+  if (!enclosure(lo, hi)) return {};
+  auto magnitude = std::max(lo < 0 ? -lo : lo, hi < 0 ? -hi : hi) / enclosure_scale + 1;
+  std::int64_t ulp = 1;
+  while (magnitude >= 100) { magnitude /= 10; ulp *= 10; }
+  // Two outward ULPs also enclose the ROM's intermediate rounding. For
+  // magnitudes below 10 the fixed-point unit deliberately overestimates it.
+  return enclosure(lo - 2 * ulp, hi + 2 * ulp);
+}
+Enclosure unary_enclosure(int code, const Enclosure& x) {
+  if (!x) return {};
+  const auto lo = x->lower, hi = x->upper;
+  if (code == 0x0b) return enclosure(-hi, -lo);
+  if (code == 0x31) return enclosure(lo >= 0 ? lo : hi <= 0 ? -hi : 0, std::max(-lo, hi));
+  if (code == 0x34) return enclosure((lo / enclosure_scale) * enclosure_scale,
+                                      (hi / enclosure_scale) * enclosure_scale);
+  if (code == 0x35) {
+    if (lo / enclosure_scale == hi / enclosure_scale)
+      return enclosure(lo % enclosure_scale, hi % enclosure_scale);
+    return enclosure(lo < 0 ? -enclosure_scale : 0, hi > 0 ? enclosure_scale : 0);
+  }
+  if (code == 0x22) {
+    const Int128 a = Int128(lo) * lo, b = Int128(hi) * hi;
+    return rounded_enclosure(enclosure_floor(lo <= 0 && hi >= 0 ? Int128(0) : std::min(a, b), enclosure_scale),
+                             enclosure_ceil(std::max(a, b), enclosure_scale));
+  }
+  return {};
+}
+Enclosure binary_enclosure(int code, const Enclosure& y, const Enclosure& x) {
+  if (!x || !y) return {};
+  if (code == 0x36) return join_enclosure(x, y);
+  if (code == 0x10) return rounded_enclosure(Int128(y->lower) + x->lower, Int128(y->upper) + x->upper);
+  if (code == 0x11) return rounded_enclosure(Int128(y->lower) - x->upper, Int128(y->upper) - x->lower);
+  if (code == 0x12) {
+    const std::array<Int128, 4> products{Int128(x->lower) * y->lower, Int128(x->lower) * y->upper,
+        Int128(x->upper) * y->lower, Int128(x->upper) * y->upper};
+    const auto [lo, hi] = std::minmax_element(products.begin(), products.end());
+    return rounded_enclosure(enclosure_floor(*lo, enclosure_scale), enclosure_ceil(*hi, enclosure_scale));
+  }
+  if (code == 0x13 && (x->lower > 0 || x->upper < 0)) {
+    Int128 lo = enclosure_limit, hi = -enclosure_limit;
+    for (const auto n : {y->lower, y->upper}) for (const auto d : {x->lower, x->upper}) {
+      // Do not mutate n across denominator alternatives (especially negative divisors).
+      const Int128 numerator = Int128(d < 0 ? -n : n) * enclosure_scale;
+      const Int128 denominator = d < 0 ? -d : d;
+      lo = std::min(lo, enclosure_floor(numerator, denominator));
+      hi = std::max(hi, enclosure_ceil(numerator, denominator));
+    }
+    return rounded_enclosure(lo, hi);
+  }
+  return {};
 }
 
 Quantum quantized_literal(std::string_view text) {
@@ -697,7 +776,9 @@ static PostLayoutNumericRangeProof prove_numeric_ranges_on_graph(
     const std::vector<std::size_t>* analysis_order = nullptr,
     std::set<std::size_t>* widened_queries = nullptr,
     const GuardedRecallRanges* guarded = nullptr,
-    std::set<std::size_t>* recalled_states = nullptr, bool complete_stack = false) {
+    std::set<std::size_t>* recalled_states = nullptr, bool complete_stack = false,
+    const std::map<std::size_t, int>* imported_signs = nullptr,
+    bool precise_memory_values = false) {
   PostLayoutNumericRangeProof result;
   const auto count = flow.execution_states.size();
   if (!flow.proved || automatic_entry_lift.size() != count ||
@@ -725,7 +806,7 @@ static PostLayoutNumericRangeProof prove_numeric_ranges_on_graph(
     if (!inserted)
       found->second = found->second && main;
   }
-  const bool transport = input_policy == NumericRangeInputPolicy::ValidatedRegisterTransport;
+  const bool transport = input_policy != NumericRangeInputPolicy::Forget;
   PostLayoutInputBoundaryProof boundaries;
   StableRegisterValueFlow stable;
   std::vector<bool> main_states(count, false);
@@ -742,6 +823,47 @@ static PostLayoutNumericRangeProof prove_numeric_ranges_on_graph(
           literals_only.push_back(preload);
     stable = analyze_stable_register_value_flow(items, literals_only, flow,
                                                 flow.address_space_model);
+  }
+  // A read-only high-register preload is an inductive WORD invariant. Its
+  // writeback certificate does not depend on where a symbolic callee will be
+  // placed. The general stable-flow interpreter may correctly refuse that
+  // provisional geometry; do not lose the independent memory-value fact.
+  std::map<int, std::string> invariant_high_preloads;
+  const bool complete_memory_effects = std::all_of(flow.execution_states.begin(), flow.execution_states.end(),
+      [&](const auto& state) { return state.item_index < items.size() &&
+          items[state.item_index].kind == MachineItemKind::Op && !items[state.item_index].raw; });
+  if (precise_memory_values && transport && preloads && complete_memory_effects)
+  for (const auto& preload : *preloads) {
+    if (preload.register_name.size() != 1U || preload.setup_expression || preload.setup_target_name)
+      continue;
+    const int selected = register_index(preload.register_name);
+    if (selected < 7 || selected >= 15 || !bound_ordinary_decimal(preload.value) ||
+        std::count_if(preloads->begin(), preloads->end(), [&](const auto& other) {
+          return other.register_name == preload.register_name; }) != 1) continue;
+    bool preserved = true;
+    for (std::size_t at = 0; at < items.size() && preserved; ++at) {
+      const auto& op = items[at];
+      if (op.kind != MachineItemKind::Op) continue;
+      const int code = op.opcode, family = code & 0xf0, reg = code & 15;
+      if (op.raw || (code != 0x50 && !transports_untouched_registers(code)) || code == 0x40 + selected) {
+        preserved = false; break;
+      }
+      if (family == 0xb0) {
+        const auto aliases = flow.indirect_memory_targets.find(at);
+        if (aliases == flow.indirect_memory_targets.end() ||
+            std::find(aliases->second.begin(), aliases->second.end(), selected) != aliases->second.end()) {
+          preserved = false; break;
+        }
+      }
+      if (family >= 0x70 && family <= 0xe0 && reg == selected) {
+        const auto kind = family == 0xb0 || family == 0xd0
+            ? IndirectOperationKind::Memory : IndirectOperationKind::Flow;
+        const auto decoded = evaluate_indirect_address(preload.register_name, preload.value,
+                                                       kind, flow.address_space_model);
+        if (!decoded || !indirect_writeback_preserves_literal_word(*decoded, preload.value)) preserved = false;
+      }
+    }
+    if (preserved) invariant_high_preloads.emplace(selected, preload.value);
   }
   const auto command_item = [&](std::size_t at) {
     return at < items.size() && items[at].kind == MachineItemKind::Op &&
@@ -852,11 +974,12 @@ static PostLayoutNumericRangeProof prove_numeric_ranges_on_graph(
     bool normalized_or_payload = false;
     bool nonnegative_word = false;
     bool ordinary_value = false;
+    Enclosure enclosure = std::nullopt;
     bool operator==(const Fact&) const = default;
   };
   const Fact unknown{true, std::nullopt, std::nullopt};
-  const auto constant = [](Range range, Quantum quantum = std::nullopt) {
-    if (quantum && (!range || quantum->denominator == 1)) {
+  const auto constant = [precise_memory_values](Range range, Quantum quantum = std::nullopt) {
+    if (quantum && (precise_memory_values || !range || quantum->denominator == 1)) {
       const auto precise = quantized_enclosure(*quantum);
       if (range && precise)
         range = bounded(std::max(range->lower, precise->lower),
@@ -873,6 +996,10 @@ static PostLayoutNumericRangeProof prove_numeric_ranges_on_graph(
     const auto mantissa = range ? ordinary_mantissa() : MantissaShape{};
     auto fact = Fact{true, std::move(range), std::move(quantum), integer_word, mantissa};
     fact.ordinary_value = fact.range.has_value();
+    if (precise_memory_values) {
+      fact.enclosure = quantum_enclosure(fact.quantum);
+      if (!fact.enclosure) fact.enclosure = range_enclosure(fact.range);
+    }
     return fact;
   };
   const auto decimal = [&](std::string_view text) {
@@ -901,6 +1028,7 @@ static PostLayoutNumericRangeProof prove_numeric_ranges_on_graph(
     joined.nonnegative_word = a.nonnegative_word && b.nonnegative_word;
     joined.ordinary_value = a.ordinary_value && b.ordinary_value;
     joined.mantissa = join_mantissa(a.mantissa, b.mantissa);
+    joined.enclosure = join_enclosure(a.enclosure, b.enclosure);
     return joined;
   };
   const auto recalled_word = [](Fact fact) {
@@ -925,6 +1053,10 @@ static PostLayoutNumericRangeProof prove_numeric_ranges_on_graph(
   };
   std::optional<std::map<std::size_t,int>> packed_signs;
   const auto packed_sign = [&](std::size_t state) -> std::optional<int> {
+    if (imported_signs) {
+      const auto found = imported_signs->find(state);
+      return found == imported_signs->end() ? std::nullopt : std::optional<int>{found->second};
+    }
     if(!packed_signs) {
       std::vector<std::size_t> queries;
       for(std::size_t q=0;q<flow.execution_states.size();++q)
@@ -969,6 +1101,28 @@ static PostLayoutNumericRangeProof prove_numeric_ranges_on_graph(
     const int code = items[at].opcode;
     const int family = code & 0xf0, reg = code & 15;
     const auto input = [&](int index) { return before(state, index); };
+    std::optional<std::vector<int>> memory_targets;
+    if ((family == 0xb0 || family == 0xd0) && reg < 15) {
+      if (const auto declared = flow.indirect_memory_targets.find(at);
+          declared != flow.indirect_memory_targets.end()) memory_targets = declared->second;
+    }
+    if (precise_memory_values && (family == 0xb0 || family == 0xd0) && reg < 15) {
+      const auto counter = input(4 + reg);
+      if (!counter.grounded) return {};
+      std::optional<int> selected;
+      if (reg < 4 && counter.normalized_or_payload) selected = 7;
+      else if (counter.integer_selector_word && counter.range && counter.range->integral &&
+               counter.range->lower == counter.range->upper) {
+        const auto decoded = evaluate_indirect_address(std::string(1, "0123456789abcde"[reg]),
+            std::to_string(counter.range->lower), IndirectOperationKind::Memory, flow.address_space_model);
+        if (decoded) selected = decoded->memory_target;
+      }
+      if (selected) {
+        if (!memory_targets || std::find(memory_targets->begin(), memory_targets->end(), *selected) == memory_targets->end())
+          return unknown;
+        memory_targets = std::vector<int>{*selected};
+      }
+    }
     if (code == 0x50 || code == 0x29)
       return transport && slot >= 4 ? input(slot) : unknown;
     if (code == 0x4f || code == 0x6f ||
@@ -1023,11 +1177,9 @@ static PostLayoutNumericRangeProof prove_numeric_ranges_on_graph(
                                    counter.range->upper + delta, true));
         }
         if (family == 0xb0) {
-          const auto targets = flow.indirect_memory_targets.find(at);
-          if (targets == flow.indirect_memory_targets.end() || targets->second.empty())
-            return unknown;
-          if (std::find(targets->second.begin(), targets->second.end(), reg) != targets->second.end())
-            return targets->second.size() == 1U ? input(0) : merge(updated, input(0));
+          if (!memory_targets || memory_targets->empty()) return unknown;
+          if (std::find(memory_targets->begin(), memory_targets->end(), reg) != memory_targets->end())
+            return memory_targets->size() == 1U ? input(0) : merge(updated, input(0));
         }
         return updated;
       }
@@ -1065,11 +1217,9 @@ static PostLayoutNumericRangeProof prove_numeric_ranges_on_graph(
         return labelled ? outgoing : unknown;
       }
       if (family == 0xb0) {
-        const auto targets = flow.indirect_memory_targets.find(at);
-        if (targets == flow.indirect_memory_targets.end() || targets->second.empty())
-          return unknown;
-        if (std::find(targets->second.begin(), targets->second.end(), wanted) != targets->second.end())
-          return targets->second.size() == 1U ? input(0) : merge(input(slot), input(0));
+        if (!memory_targets || memory_targets->empty()) return unknown;
+        if (std::find(memory_targets->begin(), memory_targets->end(), wanted) != memory_targets->end())
+          return memory_targets->size() == 1U ? input(0) : merge(input(slot), input(0));
       }
       // Unknown/dark opcodes cannot carry register facts across themselves.
       if (transports_untouched_registers(code))
@@ -1123,11 +1273,9 @@ static PostLayoutNumericRangeProof prove_numeric_ranges_on_graph(
     if (family == 0xd0) {
       if (slot != 0)
         return input(slot - 1);
-      const auto targets = flow.indirect_memory_targets.find(at);
-      if (targets == flow.indirect_memory_targets.end() || targets->second.empty())
-        return unknown;
+      if (!memory_targets || memory_targets->empty()) return unknown;
       Fact range;
-      for (const int target : targets->second) {
+      for (const int target : *memory_targets) {
         if (target < 0 || target >= 15 || (reg <= 6 && target == reg))
           return unknown;
         const auto value = input(4 + target);
@@ -1178,6 +1326,12 @@ static PostLayoutNumericRangeProof prove_numeric_ranges_on_graph(
         if (code >= 0x37 && code <= 0x39) return bitwise(code, y, x);
         if (!y.grounded || !x.grounded) return Fact{};
         auto fact = constant(binary(code, y.range, x.range), binary_quantized(code, y.quantum, x.quantum));
+        if (precise_memory_values && !fact.quantum) if (auto tight = binary_enclosure(code, y.enclosure, x.enclosure)) {
+          fact.enclosure = tight;
+          if (const auto r = enclosure_range(tight))
+            fact.range = fact.range ? bounded(std::max(r->lower, fact.range->lower),
+                std::min(r->upper, fact.range->upper), fact.range->integral) : r;
+        }
         // Positive-sign addition cannot acquire a negative sign from BCD
         // mantissa carries. This does not certify ordinary digits or order.
         fact.nonnegative_word = code == 0x10 && y.nonnegative_word && x.nonnegative_word;
@@ -1206,6 +1360,12 @@ static PostLayoutNumericRangeProof prove_numeric_ranges_on_graph(
       }
       if (!x.grounded) return Fact{};
       auto fact = constant(unary(code, x.range), unary_quantized(code, x.quantum));
+      if (precise_memory_values && !fact.quantum) if (auto tight = unary_enclosure(code, x.enclosure)) {
+        fact.enclosure = tight;
+        if (const auto r = enclosure_range(tight))
+          fact.range = fact.range ? bounded(std::max(r->lower, fact.range->lower),
+              std::min(r->upper, fact.range->upper), fact.range->integral) : r;
+      }
       // Squaring clears the sign independently of the mantissa. Unknown raw
       // values remain nonnumeric; only the sign-byte invariant is exported.
       fact.nonnegative_word = code == 0x22;
@@ -1216,8 +1376,10 @@ static PostLayoutNumericRangeProof prove_numeric_ranges_on_graph(
       // In particular, widening a recurrence's magnitude does not make its
       // normal decimal result raw. A quantizer can recover a finite range;
       // an unproved/manual/raw operand still supplies no such certificate.
-      if (x.ordinary_value && !fact.range && code == 0x35)
+      if (x.ordinary_value && !fact.range && code == 0x35) {
         fact.range = bounded(-1, 1, false);
+        if (precise_memory_values) fact.enclosure = range_enclosure(fact.range);
+      }
       return fact;
     }
     if (effect == StackEffect::ConsumeYDrop || effect == StackEffect::Exposes)
@@ -1230,9 +1392,12 @@ static PostLayoutNumericRangeProof prove_numeric_ranges_on_graph(
   };
   for (const auto item : requested_items)
     if (const auto found = contexts.find(item); found != contexts.end())
-      for (const auto state : found->second)
-        for (int slot = 0; slot < (complete_stack ? 4 : 1); ++slot)
-          (void)before(state, slot);
+      for (const auto state : found->second) {
+        for (int slot = 0; slot < (complete_stack ? 4 : 1); ++slot) (void)before(state, slot);
+        const int code = items[item].opcode, family = code & 0xf0, reg = code & 15;
+        if (complete_stack && precise_memory_values && (family == 0xb0 || family == 0xd0) && reg < 15)
+          (void)before(state, 4 + reg);
+      }
   while (!work.empty() || !ordered_work.empty()) {
     if (result.work >= maximum_work) {
       result.exhausted = true;
@@ -1254,6 +1419,13 @@ static PostLayoutNumericRangeProof prove_numeric_ranges_on_graph(
     const bool input_boundary = transport && boundaries.input_boundary_states[state];
     if (is_main || (!transport && admitted_entries->external[state]) || (input_boundary && slot < 4)) {
       value = unknown;
+      if (input_boundary && slot == 0 &&
+          input_policy == NumericRangeInputPolicy::ValidatedOrdinaryDecimalInput &&
+          items[at].manual_interaction && items[at].manual_interaction->kind !=
+              ManualInteractionAnchorKind::PromptStop) {
+        value.ordinary_value = true;
+        value.mantissa = ordinary_mantissa();
+      }
       if (is_main && preloads && slot >= 4 &&
           flow.execution_states[state].return_stack.empty()) {
         constexpr std::string_view names = "0123456789abcde";
@@ -1276,6 +1448,15 @@ static PostLayoutNumericRangeProof prove_numeric_ranges_on_graph(
         exact_stable = true;
       }
     }
+    if (slot >= 11) if (const auto invariant = invariant_high_preloads.find(slot - 4);
+        invariant != invariant_high_preloads.end()) {
+      value = decimal(invariant->second);
+      // The certificate preserves the numeric value, not canonical memory
+      // encoding, exact payload digits, or an integer-selector word class.
+      value.canonical_small_integer = false; value.integer_selector_word = false;
+      value.mantissa = ordinary_mantissa(); value.nonnegative_word = false;
+      exact_stable = true;
+    }
     if (stable.proved && slot >= 11) {
       const auto found = stable.before_item.find(at);
       if (found != stable.before_item.end()) {
@@ -1286,7 +1467,8 @@ static PostLayoutNumericRangeProof prove_numeric_ranges_on_graph(
         }
       }
     }
-    if (!exact_stable)
+    if (!exact_stable && !(input_boundary && slot < 4 &&
+        input_policy == NumericRangeInputPolicy::ValidatedOrdinaryDecimalInput))
       for (const auto predecessor : predecessors[state]) {
         value = merge(value, after(predecessor, slot, state));
         if (is_top(value))
@@ -1300,9 +1482,11 @@ static PostLayoutNumericRangeProof prove_numeric_ranges_on_graph(
     // never to an assumed machine limit or an invented iteration bound.
     // Losing only the word-representation certificate is not range growth.
     if (previous.grounded && previous.range && value.range &&
-        (previous.range != value.range || previous.quantum != value.quantum) && ++changes[key] > 8U) {
+        (previous.range != value.range || previous.quantum != value.quantum ||
+         (precise_memory_values && previous.enclosure != value.enclosure)) && ++changes[key] > 8U) {
       value.range.reset();
       value.quantum.reset();
+      value.enclosure.reset();
       value.integer_selector_word = false;
       value.canonical_small_integer = false;
       // The digit-set domain is finite. Keep its independently proved facts
@@ -1338,11 +1522,17 @@ static PostLayoutNumericRangeProof prove_numeric_ranges_on_graph(
       continue;
     for (const auto state : found->second) {
       if (complete_stack) {
+        const int code = items[item].opcode, family = code & 0xf0, reg = code & 15;
+        if (precise_memory_values && (family == 0xb0 || family == 0xd0) && reg < 15) {
+          const auto& word = cache.at(Key{state, 4 + reg});
+          result.memory_selector_before_state[state] = {word.range,
+              word.grounded && word.integer_selector_word, word.grounded && word.normalized_or_payload};
+        }
         auto& values = result.stack_before_state[state];
         for (int slot = 0; slot < 4; ++slot) {
           const auto& value = cache.at(Key{state, slot});
           values[static_cast<std::size_t>(slot)] = {value.range,
-              value.grounded && value.ordinary_value};
+              value.grounded && value.ordinary_value, value.enclosure};
         }
       }
       const auto& fact = cache.at(Key{state,0});
@@ -1371,6 +1561,7 @@ static PostLayoutNumericRangeProof prove_numeric_ranges_on_graph(
       result.x_before.emplace(item, *range);
     if (result.exhausted) {
       result.stack_before_state.clear();
+      result.memory_selector_before_state.clear();
       result.x_before.clear();
       result.x_before_state.clear();
       result.canonical_small_integer_states.clear();
@@ -1487,6 +1678,68 @@ PostLayoutNumericRangeProof prove_post_layout_stack_numeric_values(
   return prove_numeric_ranges_on_graph(items, flow, automatic_entry_lift,
       requested_items, preloads, maximum_work, input_policy, nullptr, nullptr,
       nullptr, nullptr, true);
+}
+
+PostLayoutNumericRangeProof prove_post_layout_bounded_stack_numeric_values(
+    const std::vector<MachineItem>& items, const AuthoritativePostLayoutControlFlow& flow,
+    const std::vector<bool>& automatic_entry_lift, const std::vector<std::size_t>& requested_items,
+    const std::vector<PreloadReport>& preloads, std::size_t maximum_work,
+    NumericRangeInputPolicy input_policy) {
+  const auto progress = prove_post_layout_monotone_progress(
+      items, flow, automatic_entry_lift, preloads, maximum_work);
+  if (progress.exhausted) return {.work = progress.work, .exhausted = true};
+  if (progress.work >= maximum_work) return {.work = progress.work, .exhausted = true};
+  if (!progress.witness) {
+    auto direct = prove_numeric_ranges_on_graph(items, flow, automatic_entry_lift, requested_items,
+        &preloads, maximum_work - progress.work, input_policy, nullptr, nullptr, nullptr, nullptr, true, nullptr, true);
+    direct.work += progress.work; return direct;
+  }
+  const auto expanded = expand_post_layout_progress(items, flow, automatic_entry_lift,
+                                                   *progress.witness, 20000);
+  if (!expanded || expanded->original_states.size() != expanded->control.execution_states.size()) return {};
+  std::vector<std::size_t> sign_queries;
+  for (std::size_t state = 0; state < flow.execution_states.size(); ++state) {
+    const auto& item = items[flow.execution_states[state].item_index];
+    if (item.opcode == 0x32 && std::find(item.roles.begin(), item.roles.end(),
+        kUnitProjectionDemandRole) != item.roles.end()) sign_queries.push_back(state);
+  }
+  const auto signs = prove_post_layout_packed_sign_inputs(items, flow, automatic_entry_lift,
+      sign_queries, &preloads, maximum_work - std::min(maximum_work, progress.work));
+  const auto spent = progress.work + signs.work;
+  if (signs.exhausted || spent >= maximum_work) return {.work = spent, .exhausted = true};
+  std::map<std::size_t, int> imported;
+  for (std::size_t state = 0; state < expanded->original_states.size(); ++state)
+    if (const auto found = signs.signs.find(expanded->original_states[state]); found != signs.signs.end())
+      imported.emplace(state, found->second);
+  auto bounded = prove_numeric_ranges_on_graph(items, expanded->control, expanded->automatic_entry_lift,
+      requested_items, &preloads, maximum_work - spent, input_policy, &expanded->analysis_order,
+      nullptr, nullptr, nullptr, true, &imported, true);
+  if (bounded.exhausted) return {.work = spent + bounded.work, .exhausted = true};
+  PostLayoutNumericRangeProof result;
+  result.work = spent + bounded.work;
+  result.x_before = std::move(bounded.x_before);
+  for (const auto& [state, slots] : bounded.stack_before_state) {
+    const auto origin = expanded->original_states.at(state);
+    const auto [entry, fresh] = result.stack_before_state.emplace(origin, slots);
+    if (!fresh) for (std::size_t slot = 0; slot < slots.size(); ++slot) {
+      auto& target = entry->second[slot];
+      target.range = join(target.range, slots[slot].range);
+      target.ordinary = target.ordinary && slots[slot].ordinary;
+      target.enclosure = join_enclosure(target.enclosure, slots[slot].enclosure);
+    }
+  }
+  for (const auto& [state, fact] : bounded.memory_selector_before_state) {
+    const auto origin = expanded->original_states.at(state);
+    const auto [entry, fresh] = result.memory_selector_before_state.emplace(origin, fact);
+    if (!fresh) {
+      entry->second.range = join(entry->second.range, fact.range);
+      entry->second.integer_selector_word = entry->second.integer_selector_word && fact.integer_selector_word;
+      entry->second.normalized_or_payload = entry->second.normalized_or_payload && fact.normalized_or_payload;
+    }
+  }
+  for (const auto& [state, slots] : result.stack_before_state)
+    if (slots[0].range) result.x_before_state.emplace(state, *slots[0].range);
+  return result;
 }
 
 std::optional<OrdinaryNumericRange> bound_ordinary_unary(

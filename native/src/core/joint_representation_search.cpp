@@ -3,6 +3,7 @@
 #include "mkpro/core/joint_constraint_origins.hpp"
 #include "mkpro/core/detail/cell_provenance.hpp"
 #include "mkpro/core/post_layout_packed_sign.hpp"
+#include "mkpro/core/order_reduction_translation.hpp"
 
 #include "mkpro/core/callee_hole_boundary_normalization.hpp"
 #include "mkpro/core/indirect_addressing.hpp"
@@ -1310,6 +1311,85 @@ std::optional<ConstrainedRepresentation> zero_underflow_conditional_return(
   return std::nullopt;
 }
 
+// A separate closure family: changing a private reduction seed may enable
+// address/data sharing only after placement. Never let these alternatives
+// consume the historical beam or replace its equal-size winner.
+std::vector<ConstrainedRepresentation> order_reduction_translation_roots(
+    const ConstrainedRepresentation& node, const CompileOptions& options,
+    const PostLayoutControlFlowOptions& control) {
+  std::vector<ConstrainedRepresentation> result;
+  if (!options.ordinary_decimal_keyboard_input && std::any_of(node.artifact.items.begin(),
+      node.artifact.items.end(), [](const auto& item) { return item.manual_interaction.has_value(); }))
+    return result;
+  // The relational proof requires an actually used typed Kmax. Reject this
+  // impossible case before building the expensive resource product graph.
+  if (std::none_of(node.artifact.items.begin(), node.artifact.items.end(), [](const auto& item) {
+        return item.kind == MachineItemKind::Op && !item.raw && item.opcode == 0x36;
+      })) return result;
+  constexpr std::string_view prefix = "selector-sunk-literal-value:";
+  for (std::size_t store = 0; store < node.artifact.items.size(); ++store) {
+    const auto& owner = node.artifact.items[store];
+    if (owner.raw || owner.kind != MachineItemKind::Op || owner.opcode < 0x47 || owner.opcode > 0x4e ||
+        std::find(owner.roles.begin(), owner.roles.end(), "order-only-reduction-rebased") != owner.roles.end()) continue;
+    const auto marker = std::find_if(owner.roles.begin(), owner.roles.end(),
+        [&](const auto& role) { return role.starts_with(prefix); });
+    if (marker == owner.roles.end()) continue;
+    const auto literal = marker->substr(prefix.size());
+    if (literal.size() != 2 || literal[0] < '1' || literal[0] > '9' || literal[1] < '0' || literal[1] > '9') continue;
+    const auto next_command = [&](std::size_t at) {
+      do { ++at; } while (at < node.artifact.items.size() && node.artifact.items[at].kind == MachineItemKind::Label);
+      return at;
+    };
+    const auto first = next_command(store), last = next_command(first);
+    if (last >= node.artifact.items.size() || node.artifact.items[first].opcode != literal[0] - '0' ||
+        node.artifact.items[last].opcode != literal[1] - '0') continue;
+    auto flow = build_post_layout_control_flow(node.artifact.items, control);
+    const auto origins = detail::joint_target_origins(node.artifact.items, node.targets, node.encoded_selectors);
+    if (!flow.proved || !origins) continue;
+    const auto selected = build_deferred_selector_consistent_execution_graph(
+        node.artifact.items, flow, *origins, 20000, true).execution;
+    if (!selected.proved) continue;
+    const auto original = flow.execution_states;
+    flow.execution_states.clear();
+    for (const auto state : selected.original_states) flow.execution_states.push_back(original[state]);
+    flow.execution_successors = selected.successors; flow.execution_edges = selected.execution_edges;
+    const auto lift = analyze_post_layout_automatic_entry_lift(node.artifact.items, flow, 200000);
+    if (!lift) continue;
+    std::vector<std::size_t> queries;
+    for (std::size_t at = 0; at < node.artifact.items.size(); ++at)
+      if (node.artifact.items[at].kind == MachineItemKind::Op) queries.push_back(at);
+    const auto policy = options.ordinary_decimal_keyboard_input
+        ? NumericRangeInputPolicy::ValidatedOrdinaryDecimalInput
+        : NumericRangeInputPolicy::ValidatedRegisterTransport;
+    const auto bounds = prove_post_layout_bounded_stack_numeric_values(
+        node.artifact.items, flow, *lift, queries, node.artifact.preloads, 2000000, policy);
+    const auto proof = prove_order_reduction_translation(node.artifact.items, flow, *lift, bounds, first, last);
+    if (!proof.proved) {
+      if (std::getenv("MKPRO_NATIVE_TRACE_ORDER_REDUCTION"))
+        for (const auto& reason : proof.reasons) std::cerr << "[order-reduction] " << reason << '\n';
+      continue;
+    }
+    const int old = (literal[0] - '0') * 10 + literal[1] - '0';
+    for (int seed = proof.minimum_seed; seed <= proof.maximum_seed; ++seed) {
+      if (seed == old) continue;
+      auto candidate = node;
+      auto& changed = candidate.artifact.items;
+      changed[first].opcode = seed / 10; changed[first].mnemonic = std::to_string(seed / 10);
+      changed[last].opcode = seed % 10; changed[last].mnemonic = std::to_string(seed % 10);
+      for (auto& annotation : changed[store].roles)
+        if (annotation.starts_with(prefix)) annotation = std::string(prefix) + std::to_string(seed);
+      changed[store].roles.push_back("order-only-reduction-rebased");
+      candidate.artifact.optimizations.push_back({"order-only-reduction-translation",
+          "Translated private order-only reduction seed " + std::to_string(old) + " to " + std::to_string(seed) +
+          "; proved identical exponent bands, maximum/tie/branch decisions and all resumed stack/X1/X2 uses. " +
+          (options.ordinary_decimal_keyboard_input ? "Uses explicit ordinary-decimal keyboard input contract. " : "No keyboard assumption. ") +
+          "Final data/address sharing still requires the independent complete-artifact layout proof."});
+      result.push_back(std::move(candidate));
+    }
+  }
+  return result;
+}
+
 enum class ProloguePartitionLane { Disabled, Enabled };
 
 TransactionSearchResult<LayoutSearchArtifact> search_joint_representation_constraints_impl(
@@ -1802,14 +1882,15 @@ TransactionSearchResult<LayoutSearchArtifact> search_joint_representation_constr
     if (!preload_environment_complete || limits.maximum_expansions == 0 ||
         limits.maximum_candidates == 0 || limits.maximum_depth == 0)
       return;
+    const auto& literal_root = node;
     for (const auto& pending : passes::prepare_deferred_selector_data_literal_layouts(
-             node.artifact.items, control_options,
+             literal_root.artifact.items, control_options,
              std::min<std::size_t>(4, limits.maximum_candidates))) {
-      PreparedJointProofInput proof_input(pending.items,node.artifact.preloads,
+      PreparedJointProofInput proof_input(pending.items,literal_root.artifact.preloads,
                                          control_options,&proof_counts);
       for (const bool projected : {false, true}) {
         auto closed = close_representation_constraints(
-            node, context, control_options, true, projected, &pending, proof_input, pending_root != nullptr);
+            literal_root, context, control_options, true, projected, &pending, proof_input, pending_root != nullptr);
         if (!closed) continue;
         // A temporarily larger placement can still repay its bounded debt in
         // finalization. Only the complete artifact competes with incumbents.
@@ -3497,6 +3578,69 @@ contextual_copy_transport_layout_transactions(const LayoutSearchArtifact& artifa
         "portfolio is not recursively replayed."});
     result.push_back({std::move(*semantic), "joint-edge-return-selector-layout", true});
   }
+  std::stable_sort(result.begin(), result.end(), [](const auto& a, const auto& b) {
+    return cells(a.node) < cells(b.node);
+  });
+  return result;
+}
+
+std::vector<ProvedSearchTransition<LayoutSearchArtifact>>
+order_reduction_selector_layout_transactions(const LayoutSearchArtifact& root,
+                                             const CompileOptions& options) {
+  std::vector<ProvedSearchTransition<LayoutSearchArtifact>> result;
+  if (std::none_of(root.items.begin(), root.items.end(), [](const auto& item) {
+        return item.kind == MachineItemKind::Op && !item.raw && item.opcode == 0x36;
+      })) return result;
+  const auto view = representation_view(root, options);
+  if (!view) return result;
+  auto symbolic = lower_ir_to_machine(*view);
+  const auto origins = constraint_positions(symbolic);
+  if (!origins) return result;
+  CompileOptions configured = options;
+  configured.coalesce_copies = true;
+  configured.defer_return_suffix_until_callee_hole = true;
+  const passes::PassContext context{configured};
+  PostLayoutControlFlowOptions control;
+  control.address_space_model = address_space_model_for_feature_profile(
+      effective_optimizer_feature_profile(options));
+  control.empty_return_target = 1;
+  ConstrainedRepresentation initial{{std::move(symbolic), root.preloads,
+                                      root.optimizations}, *origins, {}};
+  if (!refresh_constraint_targets(initial)) return result;
+  std::vector<ConstrainedRepresentation> sources{initial};
+  auto reopened = reopen_shared_helper_dual_mode_layout(initial.artifact.items, control);
+  if (reopened.applied > 0 && transaction_growth_fits(cells(root),
+          cells({.items = reopened.items}), kJointRepresentationConstraintLimits.maximum_growth_cells)) {
+    auto source = initial;
+    source.artifact.items = std::move(reopened.items);
+    for (const auto& report : reopened.optimizations)
+      source.artifact.optimizations.push_back({report.name, report.detail});
+    if (refresh_constraint_targets(source)) sources.push_back(std::move(source));
+  }
+  for (const auto& source : sources)
+    for (const auto& candidate : order_reduction_translation_roots(source, configured, control))
+      for (const auto& pending : passes::prepare_deferred_selector_data_literal_layouts(
+               candidate.artifact.items, control, 4)) {
+        PreparedJointProofInput proof_input(pending.items, candidate.artifact.preloads, control);
+        for (const bool projected : {false, true}) {
+          auto closed = close_representation_constraints(candidate, context, control,
+              true, projected, &pending, proof_input, true);
+          if (!closed || cells(*closed) >= cells(root)) continue;
+          const auto flow = build_post_layout_control_flow(closed->items, control);
+          if (!flow.proved || !literal_family_owns_charges(pending, closed->items) ||
+              !passes::prove_deferred_selector_data_literal_layout(pending, closed->items, flow))
+            continue;
+          if (std::any_of(result.begin(), result.end(), [&](const auto& old) {
+                return same_layout_search_artifact(old.node, *closed);
+              })) continue;
+          closed->optimizations.push_back({"order-reduction-selector-layout",
+              "Atomically translated a proved private order-only reduction, reopened "
+              "certified sharing when necessary, and closed data/selector placement. "
+              "Preserved the independently completed ordinary optimizer root; "
+              "no intermediate seed replays the whole finalization portfolio."});
+          result.push_back({std::move(*closed), "order-reduction-selector-layout", true});
+        }
+      }
   std::stable_sort(result.begin(), result.end(), [](const auto& a, const auto& b) {
     return cells(a.node) < cells(b.node);
   });

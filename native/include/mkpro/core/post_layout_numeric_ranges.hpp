@@ -27,11 +27,27 @@ struct OrdinaryNumericRange {
 
 std::optional<OrdinaryNumericRange> bound_ordinary_decimal(std::string_view value);
 
+// Outward fixed-point enclosure. This is NOT a lattice or an integrality proof.
+// Every endpoint is measured in millionths; values outside the supported
+// magnitude domain are unknown, never saturated into a smaller interval.
+struct OrdinaryDecimalEnclosure {
+  static constexpr std::int64_t scale = 1000000;
+  std::int64_t lower = 0, upper = 0;
+  bool operator==(const OrdinaryDecimalEnclosure&) const = default;
+};
+
 struct OrdinaryStackValue {
   std::optional<OrdinaryNumericRange> range;
   // A numeric-value certificate on normal completion, not canonical BCD
   // memory, a magnitude bound, or permission to change a selector word.
   bool ordinary = false;
+  std::optional<OrdinaryDecimalEnclosure> enclosure = std::nullopt;
+};
+
+struct PostLayoutMemorySelectorFact {
+  std::optional<OrdinaryNumericRange> range;
+  bool integer_selector_word = false;
+  bool normalized_or_payload = false;
 };
 
 struct PostLayoutNumericRangeProof {
@@ -56,6 +72,9 @@ struct PostLayoutNumericRangeProof {
   std::set<std::size_t> nonnegative_words_before_state;
   // Opt-in complete stack queries; IDs belong to this exact input graph.
   std::map<std::size_t, std::array<OrdinaryStackValue, 4>> stack_before_state;
+  // Opt-in full-stack queries also retain the selector MEMORY class at
+  // indirect memory operations. Numeric endpoints alone cannot create it.
+  std::map<std::size_t, PostLayoutMemorySelectorFact> memory_selector_before_state;
   std::size_t work = 0;
   bool exhausted = false;
 };
@@ -65,6 +84,10 @@ enum class NumericRangeInputPolicy {
   // Preserve predecessor registers, never input X or setup-state assumptions.
   // Requires exact typed input/resume edges including their return contexts.
   ValidatedRegisterTransport,
+  // Explicit caller contract, not inference from packed state or entered().
+  // Only fresh X at a validated typed input boundary is an ordinary decimal.
+  // Its magnitude/sign/integrality remain unknown; BCD words are excluded.
+  ValidatedOrdinaryDecimalInput,
 };
 
 // Demand-driven fixed point on the authoritative return-context graph, without
@@ -110,6 +133,17 @@ PostLayoutNumericRangeProof prove_post_layout_stack_numeric_values(
     const std::vector<PreloadReport>* preloads = nullptr,
     std::size_t maximum_work = 100000,
     NumericRangeInputPolicy input_policy = NumericRangeInputPolicy::Forget);
+
+// Resource-bounded full-stack proof. The finite resource and its original
+// state map are certified independently; product-state IDs never escape.
+PostLayoutNumericRangeProof prove_post_layout_bounded_stack_numeric_values(
+    const std::vector<MachineItem>& items,
+    const AuthoritativePostLayoutControlFlow& flow,
+    const std::vector<bool>& automatic_entry_lift,
+    const std::vector<std::size_t>& requested_items,
+    const std::vector<PreloadReport>& preloads,
+    std::size_t maximum_work = 2000000,
+    NumericRangeInputPolicy input_policy = NumericRangeInputPolicy::ValidatedRegisterTransport);
 
 std::optional<OrdinaryNumericRange> bound_ordinary_unary(
     int opcode, const OrdinaryNumericRange& input);

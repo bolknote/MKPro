@@ -36,6 +36,7 @@ add_library(mkpro_core STATIC
   src/core/multirole_word_synthesis.cpp
   src/core/passes/idempotent_entry_prologue.cpp
   src/core/post_layout_numeric_ranges.cpp
+  src/core/order_reduction_translation.cpp
   src/core/post_layout_packed_sign.cpp
   src/core/raw_bcd_word.cpp
   src/core/joint_representation_search.cpp
@@ -1026,3 +1027,28 @@ target_link_libraries(mkpro_finite_carrier_recovery_tests PRIVATE mkpro_debug)
 mkpro_configure_target(mkpro_finite_carrier_recovery_tests)
 add_test(NAME mkpro.finite_carrier_recovery_compiler_and_rom
   COMMAND mkpro_finite_carrier_recovery_tests)
+
+add_executable(mkpro_order_reduction_translation_tests tests/order_reduction_translation_test.cpp)
+target_link_libraries(mkpro_order_reduction_translation_tests PRIVATE mkpro_debug)
+target_compile_definitions(mkpro_order_reduction_translation_tests PRIVATE
+  MKPRO_ORDER_REDUCTION_SOURCE_ROOT="${CMAKE_CURRENT_SOURCE_DIR}/..")
+mkpro_configure_target(mkpro_order_reduction_translation_tests)
+add_test(NAME mkpro.order_reduction_translation_compiler_and_rom
+  COMMAND mkpro_order_reduction_translation_tests)
+
+# The numeric proof API contains fixed-width integers only. A test-local
+# implementation overrides that object from the static archive, exercising
+# the very same contracts with the portable 128-bit arithmetic implementation.
+add_executable(mkpro_order_reduction_translation_fallback_tests
+  tests/order_reduction_translation_test.cpp src/core/post_layout_numeric_ranges.cpp)
+target_compile_definitions(mkpro_order_reduction_translation_fallback_tests PRIVATE
+  MKPRO_FORCE_INT128_FALLBACK=1
+  MKPRO_ORDER_REDUCTION_SOURCE_ROOT="${CMAKE_CURRENT_SOURCE_DIR}/..")
+target_link_libraries(mkpro_order_reduction_translation_fallback_tests PRIVATE mkpro_debug)
+mkpro_configure_target(mkpro_order_reduction_translation_fallback_tests)
+add_test(NAME mkpro.order_reduction_translation_portable_compiler_and_rom
+  COMMAND mkpro_order_reduction_translation_fallback_tests)
+add_test(NAME mkpro.order_reduction_translation_pending_decimal_size
+  COMMAND mkpro_order_reduction_translation_tests --pending-decimal-baseline)
+set_tests_properties(mkpro.order_reduction_translation_pending_decimal_size
+  PROPERTIES LABELS "compiler;examples;slow" TIMEOUT 0)
