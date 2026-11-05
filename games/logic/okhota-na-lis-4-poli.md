@@ -1,19 +1,26 @@
-# Fox Hunt 4 (For Poli)
+# Охота на лис-4 — для Поли
 
-- Author: Sergey Hramov
-- Source: four-field Poli variant by Сергей Храмов.
-- Program: [okhota-na-lis-4-poli.txt](okhota-na-lis-4-poli.txt)
+- Автор: Сергей Храмов
+- Источник: [публикация и листинг](https://davaite-poigraem.1c-umi.ru/filemanager/download/346/)
+- Программа: [okhota-na-lis-4-poli.txt](okhota-na-lis-4-poli.txt)
+- Модель: МК-61 / МК-52
 
-## Description
+## Подготовка
 
-A simplified child-friendly variant of `Fox Hunt 4`. The source marks steps `66` to `71` as `КНОП`, so captured foxes continue to be detected by the direction finder.
+```text
+49 хП7 0.1234
+```
 
-It keeps the `Fox Hunt 4` pseudo-random placement with collision checking, so all fox coordinates remain distinct.
+## Игра
 
-## Setup
+Подготовка и управление такие же, как в [«Охоте на лис-4»](okhota-na-lis-4-hramov.md).
+Переключатель — `Р`; запуск — `В/О С/П`. Координаты вводятся дробью `А,Б`, затем `С/П`.
+Пойманные лисы **продолжают учитываться пеленгатором**, поэтому легче сопоставлять подсказки.
+Отмечайте пойманные клетки на бумаге: повторное указание уже пойманной лисы также уменьшает счётчик.
+Сигнал поимки — `0,11111111`, окончание — `ЕГГОГ`; число попыток находится в R5.
 
-Set the `Р-Г` switch to `Р`. Store `49` in `R7`, enter any fractional random seed, then press `В/О`, `С/П`.
+## Происхождение
 
-## Import Note
-
-The `.pmk` save stores the seven-command page for addresses `07` to `13` at the end. The listing here follows the order printed in the source PDF.
+Это авторский файл «для Поли» из того же архива. Шесть команд пометки пойманной лисы
+по адресам **66–71** заменены автором на `КНОП`.
+Вариант прямо описан в PDF как упрощение для детей. Правки каталога не добавлялись.

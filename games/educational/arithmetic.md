@@ -1,14 +1,37 @@
-# Arithmetic
+# Арифметика
 
-- Author: illi4
-- Source: [Habr article](https://habr.com/ru/articles/125484/)
-- Program: [arithmetic.txt](arithmetic.txt)
+- Автор: Сергей Храмов
+- Источник: [публикация и листинг](https://davaite-poigraem.1c-umi.ru/filemanager/download/341/)
+- Дополнительный источник: [архивная публикация](https://habr.com/ru/articles/125484/)
+- Программа: [arithmetic.txt](arithmetic.txt)
+- Модель: МК-61 / МК-52
 
-## Description
+## Подготовка
 
-A compact arithmetic exercise program for the calculator line from the MK61 notebook collection.
-The listing is optimized for step-by-step numeric work in the "R" mode of the calculator. It is suitable for quick practice and short math routines.
+```text
+0.1234 хП7 9 F1/x хП9 43 хПa 95 хПe 86 хП8 100 хПd
+```
 
-## Note
+## Настройка
 
-This source snapshot is a clean listing extracted from the archived `.pmk` package; only the English reconstruction is stored here.
+Переключатель — `Р`. В блоке подготовки выбрано сложение чисел до 100.
+В R8 можно записать `86` для сложения, `88` для вычитания, `90` для умножения
+или `92` для деления. RД задаёт максимальное целое число, R7 — дробное зерно генератора.
+Остальные значения — необходимые константы и адреса.
+
+## Игра
+
+Нажмите `В/О С/П`. На экране первое число, через `↔` — второе.
+Введите ответ и нажмите `С/П`. При вычитании вычитайте второе из первого;
+при делении вводите целую часть частного без остатка.
+
+`0,55555555` означает верный ответ, `0,11111111` — ошибку.
+После ошибки через `↔` можно прочитать верный ответ. Нажмите `С/П` для следующего примера.
+После десяти примеров появится `ЕГГОГ`; ещё одно `С/П` выводит отметку от 1 до 5.
+Новая партия с теми же настройками — `В/О С/П`.
+
+## Восстановление
+
+Листинг из 105 команд сверен с авторской таблицей редакции 2016 года.
+Исправлены десятичная запись кодов и порядок семикомандных блоков старого импорта.
+Автор программы — Храмов; illi4 был автором статьи, в которой распространялась копия архива.

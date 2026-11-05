@@ -1,17 +1,42 @@
-# Landing on the Moon 2
+# Посадка на Луну-2
 
-- Author: unknown
-- Source: "Посадка на Луну", program 2.
-- Program: [posadka-na-lunu-2.txt](posadka-na-lunu-2.txt)
+- Автор: И. Д. Данилов, Г. В. Славин; редакция Сергея Храмова
+- Источник: [публикация и листинг](https://davaite-poigraem.1c-umi.ru/filemanager/download/349/)
+- Программа: [posadka-na-lunu-2.txt](posadka-na-lunu-2.txt)
+- Модель: МК-61 / МК-52
 
-## Description
+## Подготовка
 
-A second lunar landing variant from the same archive. The source PDF marks it as an MK-52 series program.
+```text
+В/О
+```
 
-This version adds oxygen tracking and configurable starting parameters. The default constants are oxygen `25`, height `1000`, fuel `500`, landing speed `150`, and lunar gravity `1.62`.
+## Полёт
 
-The game displays altitude and landing speed during descent. You can inspect remaining fuel in `Rc` and oxygen in `R0`; hard landings consume oxygen according to the damage report.
+Нажмите `С/П`, затем ещё раз `С/П`: появится высота 1000 м.
+Через `↔` можно прочитать скорость снижения, в RС — топливо.
+Начальные скорость и топливо равны 150 м/с и 500 единицам.
+Введите расход топлива и нажмите `С/П`; появится новая высота.
+Управляйте торможением, стараясь прийти к поверхности с минимальной скоростью.
 
-## Import Note
+После касания выводится оценка `1,1111111` … `9,1111111`:
+от идеальной посадки до взрыва. Оценка учитывает модуль скорости и величину ухода
+под поверхность за последний шаг; в этой версии она ограничена девятью.
+Программа не останавливает партию при исчерпании топлива:
+корабль продолжает падение. Для новой попытки нажмите `В/О С/П`.
 
-The `.pmk` save stores one seven-command page out of display order. The listing here follows the order printed in the source PDF.
+
+## Кислород и повреждения
+
+В начале есть 25 единиц кислорода в R0; каждый ход расходует одну.
+Отрицательная тяга ускоряет снижение и тоже тратит топливо.
+Если модуль расхода больше запаса, ход считается нулевой тягой.
+`ЕГГОГ` при отрицательном R0 означает гибель от нехватки кислорода.
+
+При оценках 5, 6, 7, 8 дополнительно вычтите вручную 1, 2, 4, 8 единиц кислорода.
+Для возвращения к станции нужно сохранить хотя бы две единицы кислорода;
+для самостоятельного обратного старта — хотя бы 75 единиц топлива.
+PDF помечен «МК-52», но все 86 команд также работают на МК-61.
+
+После первого `0` можно задать собственные параметры: RА — высоту, RВ — скорость,
+RС — топливо, R0 — кислород, RД — ускорение свободного падения. Затем нажмите `С/П`.

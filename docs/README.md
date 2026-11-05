@@ -65,6 +65,7 @@ Hardware internals and chip-level detail live separately in
 | [29-brp4-games-import.md](./29-brp4-games-import.md) | BRP-4 game imports, duplicate comparison, ROM provenance and verified source quirks (Russian) |
 | [31-nzdr-source-audit.md](./31-nzdr-source-audit.md) | New and previously used PMK books and magazine archives in the nzdr.ru collection (Russian) |
 | [32-nzdr-games-audit.md](./32-nzdr-games-audit.md) | New game candidates, known variants, solvers and magazine errata in the downloaded nzdr.ru sources (Russian) |
+| [33-web-game-sources-audit.md](./33-web-game-sources-audit.md) | New website sources, original game imports, repaired listings, deduplication and model compatibility (Russian) |
 
 ## Primary Sources
 

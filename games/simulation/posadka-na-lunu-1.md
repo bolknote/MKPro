@@ -1,17 +1,34 @@
-# Landing on the Moon 1
+# Посадка на Луну-1
 
-- Author: unknown
-- Source: "Посадка на Луну", program 1.
-- Program: [posadka-na-lunu-1.txt](posadka-na-lunu-1.txt)
+- Автор: И. Д. Данилов, Г. В. Славин; публикация Сергея Храмова
+- Источник: [публикация и листинг](https://davaite-poigraem.1c-umi.ru/filemanager/download/349/)
+- Программа: [posadka-na-lunu-1.txt](posadka-na-lunu-1.txt)
+- Модель: МК-61 / МК-52
 
-## Description
+## Подготовка
 
-A lunar landing game recovered from the archive. You command a spacecraft descending toward the Moon from 1000 meters with an initial landing speed of 150 m/s.
+```text
+В/О
+```
 
-Each turn displays altitude, landing speed, and remaining fuel. Enter the fuel flow for braking and press `С/П`; entering more fuel than remains is treated as zero fuel flow.
+## Полёт
 
-Landing quality is reported as `1.1111111` through `9.1111111`: lower values are softer landings, while high values indicate severe damage, crew loss, or complete destruction.
+Нажмите `С/П`, затем ещё раз `С/П`: появится высота 1000 м.
+Через `↔` можно прочитать скорость снижения, в RС — топливо.
+Начальные скорость и топливо равны 150 м/с и 500 единицам.
+Введите расход топлива и нажмите `С/П`; появится новая высота.
+Управляйте торможением, стараясь прийти к поверхности с минимальной скоростью.
 
-## Setup
+После касания выводится оценка от `1,1111111` (идеальная посадка) до `9,1111111` (взрыв).
+В версии 1 оценка может быть **больше 9**: корабль уничтожен.
+В расчёте оценки учитываются модуль скорости и величина ухода под поверхность за последний шаг.
+Программа не останавливает партию при исчерпании топлива:
+корабль продолжает падение. Для новой попытки нажмите `В/О С/П`.
 
-Run `В/О`, `С/П`, then start with `0`. For a new game, return to `В/О`, `С/П`.
+
+## Особенности версии 1
+
+Расход вводится неотрицательным. В каталоге сохранено ускорение **1,62** из авторского `.pmk`:
+команда **16 = 2**. В PDF на этом месте напечатано `9`, то есть ускорение **1,69**.
+Это различие параметра двух авторских файлов, а не изменение модели в каталоге.
+Листинг содержит 70 команд и совместим с МК-61/52.

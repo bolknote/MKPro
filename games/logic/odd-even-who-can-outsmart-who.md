@@ -1,32 +1,32 @@
-# Odd-Even (Who Can Outsmart Who)
+# Кто кого перехитрит — Чёт-нечёт
 
-- Source: Финк Л.М., Папа, мама, я и микрокалькулятор (1988)
-- Program: [odd-even-who-can-outsmart-who.txt](odd-even-who-can-outsmart-who.txt)
+- Автор: Л. М. Финк
+- Источник: Финк Л. М. Папа, мама, я и микрокалькулятор. 1988
+- Программа: [odd-even-who-can-outsmart-who.txt](odd-even-who-can-outsmart-who.txt)
+- Модель: Б3-34 / МК-54; без адаптации несовместима с МК-61/52
 
-## Description
-
-The calculator adapts to your pattern and tries to predict the next bit (0 or 1).
-It stores the last three your choices in `RA`, `RB`, `RC`, estimates which value appears more often
-for the same context, outputs its guess in `R9`, and counts your score in `R8`.
-
-## Setup
-
-After entering the program, initialize and start with:
+## Подготовка
 
 ```text
-(initial) С/П
+В/О
 ```
 
-For each move:
+## Совместимость
 
-- Enter your next bit (`0` or `1`) into `RX` as requested by the text of play.
-- The calculator displays its prediction in the same step.
+Оригинал для **Б3-34/МК-54**. Команда **04 = КП↑ (BE)** обращается через R0 без изменения указателя.
+На МК-61/52 код BE обращается через RE, поэтому оригинал несовместим с этими моделями.
+Для МК-61 используйте [«Чёт-нечёт-3»](chet-nechet-3.md); исходник Финка здесь не адаптирован.
 
-## Game loop
+## Игра
 
-The win/lose accumulator in `R8` is updated after each round:
+В эмуляторе МК-54 нажмите `С/П`: появится счёт `0`.
+Введите `0` или `1`, нажмите `С/П`: появится прогноз ПМК. Ещё одно `С/П` выводит новый счёт.
+Ошибка ПМК прибавляет очко человеку, совпадение отнимает очко.
+Программа учится на последовательностях трёх предыдущих ходов.
+Договоритесь о пределе счёта самостоятельно. Новая партия — `В/О С/П`.
+В этой ранней версии не нажимайте `↔` между прогнозом и следующим `С/П`: в стеке хранится ваш ход.
 
-- wrong guess adds `+1` to your score,
-- correct guess subtracts `1`.
+## Восстановление записи
 
-To run again, continue feeding your new choices into the expected input register and pressing `С/П`.
+В листинге из 54 команд буквенное обозначение `КП↑` заменено его точным кодом `BE`
+с мнемоникой `КхПE`. Изменение позволяет однозначно загрузить исходник, но не меняет его семантику.

@@ -1,24 +1,31 @@
-# Training Flight (Modernized)
+# Учебный полёт — редакция Храмова
 
-- Author: Sergey Hramov
-- Based on: Sergey Chuprin's `Training Flight`
-- Source: modernized listing by Сергей Храмов, based on Сергей Чуприн's "Учебный полёт".
-- Program: [uchebnyy-polyot-modernized.txt](uchebnyy-polyot-modernized.txt)
+- Автор: Сергей Чуприн; редакция Сергея Храмова
+- Источник: [публикация и листинг](https://davaite-poigraem.1c-umi.ru/filemanager/download/355/)
+- Программа: [uchebnyy-polyot-modernized.txt](uchebnyy-polyot-modernized.txt)
+- Модель: МК-61 / МК-52
 
-## Description
+## Подготовка
 
-A modernized real-time version of `Training Flight`. The goal is still to take off, follow the route over and under the terrain markers, approach the landing zone, and land without crashing or overshooting the runway.
+```text
+11 хП0 0 хПb хПc хПd 4000 хПa 2000 хП9 6000 хП8 1500 /-/ хП7 8000 хП6 1500 /-/ хП5 10000 хП4 1800 хП3 13000 хП2 100 хП1 0 хПe
+```
 
-The modernization replaces the original integer-part subroutine with `К[x]`, uses `КЗН` for sign handling, improves speed, and adds a selectable stopwatch or fuel-tracking mode. Step `02` is `+` in the archived `.pmk`; replacing it with `-` selects the fuel variant described by the source PDF.
+## Полёт
 
-## Setup
+Перед запуском установите переключатель в `Г`, затем нажмите `В/О С/П`.
+Самолёт разбегается, набирает высоту и движется по маршруту из блока подготовки.
+На индикаторе последовательно мигают высота, угол траектории в градусах и пройденное расстояние.
 
-Set the `Р-ГРД-Г` switch to `Г`.
+Управление — переключателем: `Р` уменьшает угол на 15° за 500 м, `Г` увеличивает на 15°,
+`ГРД` сохраняет угол. Проходите выше положительных отметок высоты и ниже отрицательных,
+затем сажайте самолёт на аэродроме. Для паузы нажмите `С/П`, для продолжения — ещё раз `С/П`.
+Программу нельзя вести как пошаговый ввод чисел: она работает непрерывно.
 
-Before the first game, store `11` in `R0`; store `0` in `Rb`, `Rc`, and `Rd`; store route constants `4000` in `Ra`, `2000` in `R9`, `6000` in `R8`, `-1500` in `R7`, `8000` in `R6`, `-1500` in `R5`, `10000` in `R4`, `1800` in `R3`, `13000` in `R2`, and `100` in `R1`.
+## Режимы и источник
 
-Use `0` in `Re` for stopwatch mode. For fuel mode, the source suggests fuel values around `30` to `40` in `Re`.
-
-## Import Note
-
-The `.pmk` save stores one seven-command page out of display order. The listing here follows the order printed in the source PDF.
+В исходном `.pmk` команда **02 = +** включает секундомер; RE перед стартом равен нулю.
+PDF также описывает вариант **02 = −** с расходом топлива и начальным RE около 30–40.
+В каталоге сохранён авторский режим секундомера, без создания новой адаптации.
+Все 105 команд проверены по таблице, с учётом этого явно заданного варианта.
+Для новой попытки повторите подготовку и положение `Г`.

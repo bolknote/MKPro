@@ -315,3 +315,23 @@ check bidirectional numeric-word and full-page exchanges, preservation of the
 two extra tetras in numeric mode, and restoration by a second exchange. Page
 selection is supplied by the host; the outer loop is not recovered or tested.
 Details are in [the Ms analysis](../../docs/26-ms-memory-purpose.md).
+
+Original programs from newly checked web sources:
+
+```sh
+node tests/emulator/web-source-games.cjs
+```
+
+Checks 27 source listings and their card keyboard setups, two new games, the
+67-step Eight Queens helper, repaired physical-page imports and four removed
+duplicates. Independent models cover complete Bashe and number-guessing games,
+the island's eight-year budget, board visibility, arithmetic exercises, memory
+answers, landing dynamics, ballistic shots and nonattacking queens. Also covers
+parity interfaces, Kaufsten trade and events, flight controls and pause, the
+MK-54/MK-61 opcode incompatibility and documented original calendar errors.
+The original MK-54 programs are exercised in basic mode; they are not presented
+as MK-61 adaptations. Pass any of `new`, `island`, `parity`, `arithmetic`,
+`memory`, `fox`, `landing`, `tank`, `kaufsten`, `calendar`, `compatibility`,
+`flight`, `queens` to select groups. The full Queens search takes about a minute
+on the development machine. No downloads are needed; provenance and limitations
+are recorded in the [website audit](../../docs/33-web-game-sources-audit.md).

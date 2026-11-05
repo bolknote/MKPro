@@ -1,19 +1,33 @@
-# Fox Hunt 3 (Hramov)
+# Охота на лис-3
 
-- Author: Sergey Hramov
-- Source: variant by Сергей Храмов.
-- Program: [okhota-na-lis-3-hramov.txt](okhota-na-lis-3-hramov.txt)
+- Автор: Сергей Храмов
+- Источник: [публикация и листинг](https://davaite-poigraem.1c-umi.ru/filemanager/download/346/)
+- Программа: [okhota-na-lis-3-hramov.txt](okhota-na-lis-3-hramov.txt)
+- Модель: МК-61 / МК-52
 
-## Description
+## Подготовка
 
-An MK-52/MK-61 improvement over the `Fox Hunt 2` listing. It keeps the 10 by 10 field and eight foxes, but uses a recurrence with `p = 101` and `q = 74` so foxes do not share a cell. A fox at `0,0` can also be detected and captured.
+```text
+101 хПe 0.1234
+```
 
-Captured foxes are removed from later direction-finder counts, which makes the puzzle harder.
+## Игра
 
-## Setup
+Переключатель — `Р`. Нажмите `В/О С/П`: появится `0`.
+Введите клетку дробью `А,Б`, обе цифры от 0 до 9, затем `С/П`.
+Пеленгатор считает непойманных лис по горизонтали, вертикали и диагоналям.
 
-Set the `Р-Г` switch to `Р`. Store `101` in `Re`, enter any fractional random seed, then press `В/О`, `С/П`. Enter moves as fractional coordinates `A,B`, where both coordinates are from `0` to `9`.
+`0,11111111` — попадание. Через `↔` или `Пх2` можно узнать число оставшихся лис.
+После поимки всех восьми лис выводится `ЕГГОГ`; R5 содержит число попыток.
+R3 — последний ход, R4 — последний ответ пеленгатора.
+Для новой партии повторите подготовку и запуск.
 
-## Import Note
 
-The `.pmk` save stores the seven-command page for addresses `07` to `13` at the end. The listing here follows the order printed in the source PDF.
+Вариант 3 размещает лис с помощью рекуррентного генератора по модулю 101.
+Сохраняйте в RE константу 101, а зерно вводите в X перед стартом.
+
+
+## Сверка
+
+Команды совпадают с печатной таблицей автора. Пойманные лисы перестают пеленговаться.
+Вариант «для Поли» опубликован отдельно и сохраняет их в ответах пеленгатора.

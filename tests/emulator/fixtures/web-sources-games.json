@@ -1,0 +1,616 @@
+{
+  "audit_date": "2026-11-05",
+  "entries": [
+    {
+      "stem": "educational/arithmetic",
+      "hex": "0D45460100400442AE6D12011034B258086361115C2763614314416361A84461635064117A646950D6514805691250D55D062754650E66101301001202115C66015002115C72025003115C78035002115C8404500550105211521252133452670C091D1A0712354752",
+      "sha256": "ad2fd4d0da992e0f85268597bacb2c76c8512f4c3a535e0f5661d29ac60352fc",
+      "source_url": "https://davaite-poigraem.1c-umi.ru/filemanager/download/341/",
+      "archive_sha256": "54cf5ac6f89a91cd973533c8db4dc8558cc0189e370699e21c2dee9c42cd2ac3",
+      "pdf": "Арифметика.pdf",
+      "pages": [
+        1
+      ],
+      "printed_hex": "0D45460100400442AE6D12011034B258086361115C2763614314416361A84461635064117A646950D6514805691250D55D062754650E66101301001202115C66015002115C72025003115C78035002115C8404500550105211521252133452670C091D1A0712354752",
+      "patches": [],
+      "model": "MK-61",
+      "title": "Арифметика",
+      "author": "Сергей Храмов",
+      "angle": "rad",
+      "kind": "trainer",
+      "tags": "",
+      "collection": "chramov",
+      "series": "",
+      "length": 105
+    },
+    {
+      "stem": "strategy/tank-battle",
+      "hex": "526D12406B504A03001159726A02121C6E2212681360031513011022134A6B1159620004115C626A20505A486605125053A167126C14115C5901054C51656A66505B720266125027D453A16C126B1411344B59900205115CA1030323505896276B65105181690E3B49",
+      "sha256": "d073b01444936265a9a39e23f79f91ebb0b4f16e280cabc398d3120502b572d2",
+      "source_url": "https://davaite-poigraem.1c-umi.ru/filemanager/download/342/",
+      "archive_sha256": "40e5dd75e2aa3fa2945359f019cf24767bdaf5d480a4819d52444f0c61229b36",
+      "pdf": "Бой с танком.pdf",
+      "pages": [
+        1
+      ],
+      "printed_hex": "526D12406B504A03001159726A02121C6E2212681360031513011022134A6B1159620004115C626A20505A486605125053A167126C14115C5901054C51656A66505B720266125027D453A16C126B1411344B59900205115CA1030323505896276B65105181690E3B49",
+      "patches": [],
+      "model": "MK-61",
+      "title": "Бой с танком",
+      "author": "Сергей Храмов",
+      "angle": "deg",
+      "kind": "game",
+      "tags": "military",
+      "collection": "chramov",
+      "series": "tank-battle",
+      "length": 105
+    },
+    {
+      "stem": "logic/kaufsten-heavy",
+      "hex": "52504561125C0903130BAD664068651048504301121445100BAD213B0317119C14CB2050683B02120111671209129E6810313448041740673B041711CA66500217601040D43B1267123440671411476411216562136711051334210F6710473B09120E631269103449",
+      "sha256": "09ce678e8bcdc7e33404dc00639c99a0d04094f96ff413bcd67a2b78b81d516e",
+      "source_url": "https://davaite-poigraem.1c-umi.ru/filemanager/download/343/",
+      "archive_sha256": "b9509d98f41d5df49e3687da08b18ba41f12c218d88a0b648b7284c92e667485",
+      "pdf": "Кауфстен.pdf",
+      "pages": [
+        1
+      ],
+      "printed_hex": "52504561125C0903130BAD664068651048504301121445100BAD213B0317119C14CB2050683B02120111671209129E6810313448041740673B041711CA66500217601040D43B1267123440671411476411216562136711051334210F6710473B09120E631269103449",
+      "patches": [],
+      "model": "MK-61",
+      "title": "Кауфстен — тяжёлый",
+      "author": "Сергей Храмов",
+      "angle": "rad",
+      "kind": "game",
+      "tags": "economy;management;variant",
+      "collection": "chramov",
+      "series": "kaufsten",
+      "length": 105
+    },
+    {
+      "stem": "strategy/tankovaya-bataliya-realnyy-boy",
+      "hex": "520149505309024950D625314C144A5780D957800111B9630E3B6D12436A02121C6E2212601363031513011022134A6B1159570569131159636A09235051806A20506903104ADA01115E79690C0650BA690610496C22D9570014115C97D9214C0DB96B6C11344B216B",
+      "sha256": "3abd2e9843381c4ac5893f6cdb1bedc156d0378bcb4b7c012f7a3f83d725c972",
+      "source_url": "https://davaite-poigraem.1c-umi.ru/filemanager/download/344/",
+      "archive_sha256": "0dfc2d2edc42131ce0c42929c47a782f0690f815d1b486b4a52349daa4237f78",
+      "pdf": "Танковая баталия.pdf",
+      "pages": [
+        1
+      ],
+      "printed_hex": "520149505309024950D625314C144A5780D957800111B9630E3B6D12436A02121C6E2212601363031513011022134A6B1159570569131159636A09235051806A20506903104ADA01115E79690C0650BA690610496C22D9570014115C97D9214C0DB96B6C11344B216B",
+      "patches": [],
+      "model": "MK-61",
+      "title": "Танковая баталия — реальный бой",
+      "author": "Сергей Храмов",
+      "angle": "deg",
+      "kind": "game",
+      "tags": "military;two-player;variant",
+      "collection": "chramov",
+      "series": "tank-battle",
+      "length": 105
+    },
+    {
+      "stem": "logic/odd-even-1",
+      "hex": "0103400DBE5D04406A6B0212106C0412104DDD592401512500496B4C6A4B68031512504A574201115E666A69506A691122021201116810486A02120111DD10BD5108680111485130",
+      "sha256": "3ed43bbc289bb6e3887235151487565a0b86eeba310802d951b7f1ad8dbd2172",
+      "source_url": "https://davaite-poigraem.1c-umi.ru/filemanager/download/345/",
+      "archive_sha256": "17fd9bd874844af175408b1d081d9eed001abc4b841bc848dbf09f9da8fcd1ce",
+      "pdf": "Чет-нечет-1.pdf",
+      "pages": [
+        1
+      ],
+      "printed_hex": "0103400DBE5D04406A6B0212106C0412104DDD592401512500496B4C6A4B68031512504A574201115E666A69506A691122021201116810486A02120111DD10BD5108680111485130",
+      "patches": [],
+      "model": "MK-54",
+      "title": "Чёт-нечёт-1",
+      "author": "Сергей Храмов; по программе Л. М. Финка",
+      "angle": "rad",
+      "kind": "game",
+      "tags": "",
+      "collection": "chramov",
+      "series": "odd-even",
+      "length": 72
+    },
+    {
+      "stem": "logic/odd-even-2",
+      "hex": "684967481063471062431061421060411006134D66650212110315125040D6645E75610212621002126310021267107A01117A02117B02117B01117A03117B01117A02117A02117B01117BD46C0C091D1A4C6D11CB605E005193605700D50D445100",
+      "sha256": "2a4971cf3522367e11116b68d8276a12340d08e48bd73c68762d5a6ce6304f0b",
+      "source_url": "https://davaite-poigraem.1c-umi.ru/filemanager/download/345/",
+      "archive_sha256": "17fd9bd874844af175408b1d081d9eed001abc4b841bc848dbf09f9da8fcd1ce",
+      "pdf": "Чет-нечет-2.pdf",
+      "pages": [
+        1
+      ],
+      "printed_hex": "684967481063471062431061421060411006134D66650212110315125040D6645E75610212621002126310021267107A01117A02117B02117B01117A03117B01117A02117A02117B01117BD46C0C091D1A4C6D11CB605E005193605700D50D445100",
+      "patches": [],
+      "model": "MK-61",
+      "title": "Чёт-нечёт-2",
+      "author": "И. Д. Данилов, Г. В. Славин; редакция Сергея Храмова",
+      "angle": "rad",
+      "kind": "game",
+      "tags": "",
+      "collection": "chramov",
+      "series": "odd-even",
+      "length": 98
+    },
+    {
+      "stem": "logic/chet-nechet-3",
+      "hex": "526A6B0212106C0412104DDD5E22539202231034514632490F021334573569011051455392041201113269103132496B4C6A4B68031512504A5769011157696801114851516A69506A691122021201116810486A02120111DD10BD526E0C091D1A070712354E0E5454",
+      "sha256": "8f415db7bc0db1ef33e48a5f27dc6105a40661a3db1e1840db5cf17bfa476fc7",
+      "source_url": "https://davaite-poigraem.1c-umi.ru/filemanager/download/345/",
+      "archive_sha256": "17fd9bd874844af175408b1d081d9eed001abc4b841bc848dbf09f9da8fcd1ce",
+      "pdf": "Чет-нечет-3.pdf",
+      "pages": [
+        1
+      ],
+      "printed_hex": "526A6B0212106C0412104DDD5E22539202231034514632490F021334573569011051455392041201113269103132496B4C6A4B68031512504A5769011157696801114851516A69506A691122021201116810486A02120111DD10BD526E0C091D1A070712354E0E5454",
+      "patches": [],
+      "model": "MK-61",
+      "title": "Чёт-нечёт-3",
+      "author": "Сергей Храмов",
+      "angle": "rad",
+      "kind": "game",
+      "tags": "",
+      "collection": "chramov",
+      "series": "odd-even",
+      "length": 105
+    },
+    {
+      "stem": "logic/okhota-na-lis-1-danilov-slavin",
+      "hex": "4D05400100475371BE53716713DE10BE5D060D5067134C4ADA146A114B0D4605406CDE115E42092351190F48D81468116B11671257656A68115765132201115E66D65D336651196D01011220104DDD146D114D091201104CDC6C52",
+      "sha256": "316532c076972b0bfb3c09952f0eadef9e6499a7e64690daa9bc24ee7af5aed1",
+      "source_url": "https://davaite-poigraem.1c-umi.ru/filemanager/download/346/",
+      "archive_sha256": "99e55e67329c63096cf4b9e1b357d126395b639d1214072fb682b9c3a648429d",
+      "pdf": "Охота на лис-1.pdf",
+      "pages": [
+        1
+      ],
+      "printed_hex": "4D05400100475371BE53716713DE10BE5D060D5067134C4ADA146A114B0D4605406CDE115E42092351190F48D81468116B11671257656A68115765132201115E66D65D336651196D01011220104DDD146D114D091201104CDC6C52",
+      "patches": [],
+      "model": "MK-54",
+      "title": "Охота на лис-1",
+      "author": "И. Д. Данилов, Г. В. Славин; публикация Сергея Храмова",
+      "angle": "rad",
+      "kind": "game",
+      "tags": "",
+      "collection": "chramov",
+      "series": "fox-hunt",
+      "length": 91
+    },
+    {
+      "stem": "logic/okhota-na-lis-lordbss",
+      "hex": "0E0808000008080E030301050238350E0C054201044008416E0101122010354E0215123401001322B05B240D4550430D44D5010440084163D0579421115E736001104014B0D26251450F3463341157931057930E0C010F133101115E94D45B55645145",
+      "sha256": "21f2864c3a8bc639d49defb2acb8c71e0076cb50e67ea7454032f630c8219ecb",
+      "source_url": "https://davaite-poigraem.1c-umi.ru/filemanager/download/346/",
+      "archive_sha256": "99e55e67329c63096cf4b9e1b357d126395b639d1214072fb682b9c3a648429d",
+      "pdf": "Охота на лис-2.pdf",
+      "pages": [
+        1
+      ],
+      "printed_hex": "0E0808000008080E030301050238350E0C054201044008416E0101122010354E0215123401001322B05B240D4550430D44D5010440084163D0579421115E736001104014B0D26251450F3463341157931057930E0C010F133101115E94D45B55645145",
+      "patches": [],
+      "model": "MK-61",
+      "title": "Охота на лис-2",
+      "author": "Юрий Иванов, Павел Иртюга",
+      "angle": "rad",
+      "kind": "game",
+      "tags": "classic",
+      "collection": "lordbss",
+      "series": "fox-hunt",
+      "length": 99
+    },
+    {
+      "stem": "logic/okhota-na-lis-3-hramov",
+      "hex": "0E0C091D1A070712350215123443010440084142630704126E13346E1263070412141143011101001322B05B200D4550430D44D5010440084163D059A021115E79600110400BB058742762092351470F3463341157991057990E0C010F133101115EA0D45B57645147",
+      "sha256": "b4634409d5bd0801fd15d75ac92f588e471adfde310235c0e3f2a8a43c39aa5c",
+      "source_url": "https://davaite-poigraem.1c-umi.ru/filemanager/download/346/",
+      "archive_sha256": "99e55e67329c63096cf4b9e1b357d126395b639d1214072fb682b9c3a648429d",
+      "pdf": "Охота на лис-3.pdf",
+      "pages": [
+        1
+      ],
+      "printed_hex": "0E0C091D1A070712350215123443010440084142630704126E13346E1263070412141143011101001322B05B200D4550430D44D5010440084163D059A021115E79600110400BB058742762092351470F3463341157991057990E0C010F133101115EA0D45B57645147",
+      "patches": [],
+      "model": "MK-61",
+      "title": "Охота на лис-3",
+      "author": "Сергей Храмов",
+      "angle": "rad",
+      "kind": "game",
+      "tags": "",
+      "collection": "chramov",
+      "series": "fox-hunt",
+      "length": 105
+    },
+    {
+      "stem": "logic/okhota-na-lis-4-hramov",
+      "hex": "450842410746650C091D1A071235450215123401001322B65B060746074363416644D4D6140FD40F1157015B375A300D4550430D44D50746084163D659A021115E79660111460BB6587527620923870F3463341157991057990E0C010F133101115EA0D45B586487",
+      "sha256": "1bbffec1e1e606688099b58545621076bca205c172ae51208ee068c6848772cd",
+      "source_url": "https://davaite-poigraem.1c-umi.ru/filemanager/download/346/",
+      "archive_sha256": "99e55e67329c63096cf4b9e1b357d126395b639d1214072fb682b9c3a648429d",
+      "pdf": "Охота на лис-4.pdf",
+      "pages": [
+        1
+      ],
+      "printed_hex": "450842410746650C091D1A071235450215123401001322B65B060746074363416644D4D6140FD40F1157015B375A300D4550430D44D50746084163D659A021115E79660111460BB6587527620923870F3463341157991057990E0C010F133101115EA0D45B586487",
+      "patches": [],
+      "model": "MK-61",
+      "title": "Охота на лис-4",
+      "author": "Сергей Храмов",
+      "angle": "rad",
+      "kind": "game",
+      "tags": "",
+      "collection": "chramov",
+      "series": "fox-hunt",
+      "length": 104
+    },
+    {
+      "stem": "utilities/vechnyy-kalendar",
+      "hex": "5313614214505313616211145040254414431403115C2801051044D0D4646A1247606B1248D7D867686310106C1141071348D8616807121152",
+      "sha256": "e57b7b439043dcb47e382ca87eb3317c4754f81e0c2b771f2d342492fd426945",
+      "source_url": "https://davaite-poigraem.1c-umi.ru/filemanager/download/348/",
+      "archive_sha256": "4f8f50ec940203fe9068827ad35523a55b9a5967a732e69261d0b5c753c5dd47",
+      "pdf": "Вечный календарь.pdf",
+      "pages": [
+        1
+      ],
+      "printed_hex": "5313614214505313616211145040254414431403115C2801051044D0D4646A1247606B1248D7D867686310106C1141071348D8616807121152",
+      "patches": [],
+      "model": "MK-61",
+      "title": "Вечный календарь",
+      "author": "И. Д. Данилов, Г. В. Славин; публикация Сергея Храмова",
+      "angle": "rad",
+      "kind": "utility",
+      "tags": "",
+      "collection": "chramov",
+      "series": "",
+      "length": 57
+    },
+    {
+      "stem": "simulation/posadka-na-lunu-1",
+      "hex": "0D440C034A4802134C0105004B010A0602490D506B6A5040D4146C14115C360D406C51374C681302106014136914116B104B6A14114A5C200B6B22211001104DDD6D09231050",
+      "sha256": "1a326142946f5ab130269be2eea084cf4391f99be94c2516f69c002c03c60a9c",
+      "source_url": "https://davaite-poigraem.1c-umi.ru/filemanager/download/349/",
+      "archive_sha256": "fc04ed7dfb61b21ded83397eb06728c6b79c78c3c00e4d98288288c77311c269",
+      "pdf": "Посадка на Луну-1.pdf",
+      "pages": [
+        1
+      ],
+      "printed_hex": "0D440C034A4802134C0105004B010A0609490D506B6A5040D4146C14115C360D406C51374C681302106014136914116B104B6A14114A5C200B6B22211001104DDD6D09231050",
+      "patches": [
+        {
+          "address": 16,
+          "printed": 9,
+          "delivered": 2,
+          "reason": "author .pmk g=1.62; PDF g=1.69"
+        }
+      ],
+      "model": "MK-61",
+      "title": "Посадка на Луну-1",
+      "author": "И. Д. Данилов, Г. В. Славин; публикация Сергея Храмова",
+      "angle": "rad",
+      "kind": "game",
+      "tags": "space",
+      "collection": "chramov",
+      "series": "lunar-landing",
+      "length": 70
+    },
+    {
+      "stem": "simulation/posadka-na-lunu-2",
+      "hex": "020540010000004A0500004C0105004B010A06024D0D506B6A5043D0605C322763316C14115C440D436C51454C03151302106314136D14116B104B6A14114A5C230B6B31100110344901001159800949606909231050",
+      "sha256": "74daba525c0d6f37287dbadb9d587cd994cbdf6b2a7dea1bda418b77d72539ab",
+      "source_url": "https://davaite-poigraem.1c-umi.ru/filemanager/download/349/",
+      "archive_sha256": "fc04ed7dfb61b21ded83397eb06728c6b79c78c3c00e4d98288288c77311c269",
+      "pdf": "Посадка на Луну-2.pdf",
+      "pages": [
+        1
+      ],
+      "printed_hex": "020540010000004A0500004C0105004B010A06024D0D506B6A5043D0605C322763316C14115C440D436C51454C03151302106314136D14116B104B6A14114A5C230B6B31100110344901001159800949606909231050",
+      "patches": [],
+      "model": "MK-61",
+      "title": "Посадка на Луну-2",
+      "author": "И. Д. Данилов, Г. В. Славин; редакция Сергея Храмова",
+      "angle": "rad",
+      "kind": "game",
+      "tags": "space",
+      "collection": "chramov",
+      "series": "lunar-landing",
+      "length": 86
+    },
+    {
+      "stem": "simulation/uchebnyy-polyot-modernized",
+      "hex": "6E01104E236B6B0105106B0F114B05071309001D572559292525254B14141C0F1D050000140F126C10344C25126D10344D599053966B53966C53966057866CD0115C72600110408AD00E326D1211598127600111EA406DCA6B506057880323500E0E0E0E0E0E0E0E52",
+      "sha256": "bfc80f1a4e7f86b83e17f9863cc914d0f71c0cad5f00a68e54cc4cd484bd66bd",
+      "source_url": "https://davaite-poigraem.1c-umi.ru/filemanager/download/355/",
+      "archive_sha256": "088f8100060cb1942149d43cddeee98f3b8e1e80077e650f17130758e97e44f3",
+      "pdf": "Учебный полет.pdf",
+      "pages": [
+        1
+      ],
+      "printed_hex": "6E010B4E236B6B0105106B0F114B05071309001D572559292525254B14141C0F1D050000140F126C10344C25126D10344D599053966B53966C53966057866CD0115C72600110408AD00E326D1211598127600111EA406DCA6B506057880323500E0E0E0E0E0E0E0E52",
+      "patches": [
+        {
+          "address": 2,
+          "printed": 11,
+          "delivered": 16,
+          "reason": "author .pmk stopwatch mode; PDF +/- offers both"
+        }
+      ],
+      "model": "MK-61",
+      "title": "Учебный полёт — редакция Храмова",
+      "author": "Сергей Чуприн; редакция Сергея Храмова",
+      "angle": "deg",
+      "kind": "game",
+      "tags": "aviation;modernized;space",
+      "collection": "chramov",
+      "series": "lunar-landing",
+      "length": 105
+    },
+    {
+      "stem": "logic/byki-i-korovy",
+      "hex": "4D0D4609236D122010010C0712484904405371BE5D1765500E0C04104C490D45D604405371DE115E42D55D350465115E58000A09092366125080656A12456C49ABABABAB685114696A1349D914691147520440537167DE115E95D501BE51975D8552",
+      "sha256": "3b1cb217ff995cd66ec1800f8e2ac70ef3b95db7b1c63fae8252d7c58cd033f6",
+      "source_url": "https://davaite-poigraem.1c-umi.ru/filemanager/download/356/",
+      "archive_sha256": "1a7ada89789a79661957bfdb23e56e80ec7a5acee5d51699208e99b8fc6bd6d1",
+      "pdf": "Быки и коровы-2.pdf",
+      "pages": [
+        1
+      ],
+      "printed_hex": "4D0D4609236D122010010C0712484904405371BE5D1765500E0C04104C490D45D604405371DE115E42D55D350465115E58000A09092366125080656A12456C49ABABABAB685114696A1349D914691147520440537167DE115E95D501BE51975D8552",
+      "patches": [],
+      "model": "MK-54",
+      "title": "Быки и коровы-2 — редакция Храмова",
+      "author": "редакция Сергея Храмова; «Наука и жизнь», 1989, №12",
+      "angle": "rad",
+      "kind": "game",
+      "tags": "",
+      "collection": "chramov",
+      "series": "bulls-and-cows",
+      "length": 98
+    },
+    {
+      "stem": "educational/memory-training",
+      "hex": "4D0D4546010047484909134C034006446D0C091D1A0712354DD4120110604E14BE5D16D1D2D302006566101157A46550610E0E0E0E0E6C6C620E0E0E0E0E6C6C630E0E0E0E0E6C50631131146211311014611131105790D65138D56D031207104ADA010012BA511227",
+      "sha256": "eeb509dd956917f194a9da205d57b5a625f3fe8a7a1eb6aa8b5e04cf5aa279bf",
+      "source_url": "https://davaite-poigraem.1c-umi.ru/filemanager/download/358/",
+      "archive_sha256": "6e63466cf255e2eb140ee7b3a95272b466475316ccf5afffc432aaf298eb7c2a",
+      "pdf": "Тренировка памяти.pdf",
+      "pages": [
+        1
+      ],
+      "printed_hex": "4D0D4546010047484909134C034006446D0C091D1A0712354DD4120110604E14BE5D16D1D2D302006566101157A46550610E0E0E0E0E6C6C620E0E0E0E0E6C6C630E0E0E0E0E6C50631131146211311014611131105790D65138D56D031207104ADA010012BA511227",
+      "patches": [],
+      "model": "MK-61",
+      "title": "Тренировка памяти",
+      "author": "Сергей Храмов; по книге «Микрокалькуляторы в играх и задачах»",
+      "angle": "rad",
+      "kind": "trainer",
+      "tags": "",
+      "collection": "chramov",
+      "series": "memory-training",
+      "length": 105
+    },
+    {
+      "stem": "educational/trenirovka-pamyati",
+      "hex": "4D0D454601474849034006446D0C091D1A070712354DD4151234604E14BE5D1202006566101157A46550610E0E0E0E0E0E6C620E0E0E0E0E0E6C630E0E0E0E0E0E6C50631131146211311014611131105785D65132D56D031207104ADA0713345EA2DA0110BA510827",
+      "sha256": "beebba8d2d77babaf8f22cade9b723b6d3987438416f91296f4e00147c7ab928",
+      "source_url": "https://davaite-poigraem.1c-umi.ru/filemanager/download/360/",
+      "archive_sha256": "fcd335a77694c64d78de73066eb6246d4a7d79a2de26a864205df1d6b373e9f8",
+      "pdf": "Тренировка памяти-1м.pdf",
+      "pages": [
+        1
+      ],
+      "printed_hex": "4D0D454601474849034006446D0C091D1A070712354DD4151234604E14BE5D1202006566101157A46550610E0E0E0E0E0E6C620E0E0E0E0E0E6C630E0E0E0E0E0E6C50631131146211311014611131105785D65132D56D031207104ADA0713345EA2DA0110BA510827",
+      "patches": [],
+      "model": "MK-61",
+      "title": "Тренировка памяти-1М",
+      "author": "Сергей Храмов; по книге «Микрокалькуляторы в играх и задачах»",
+      "angle": "rad",
+      "kind": "trainer",
+      "tags": "",
+      "collection": "chramov",
+      "series": "memory-training",
+      "length": 105
+    },
+    {
+      "stem": "strategy/tankovaya-bataliya-matematicheskiy-boy",
+      "hex": "520149505309024950D625314C145774D957740111B91402121C6E2212601363031513011022134A6B115951000569131159576A09235051746A20506903104ADA01115E73690C0650BA690610496C22D9579814115C91D9214C0DB96B6C11344B21630E3B6D12436B",
+      "sha256": "474da77fe648dfbdb03b01c7bdb8f87b6029fdfa36a43caa539e4c9174c18122",
+      "source_url": "https://davaite-poigraem.1c-umi.ru/filemanager/download/344/",
+      "archive_sha256": "0dfc2d2edc42131ce0c42929c47a782f0690f815d1b486b4a52349daa4237f78",
+      "pdf": "Танковая баталия.pdf",
+      "pages": [
+        1
+      ],
+      "printed_hex": "520149505309024950D625314C145774D957740111B91402121C6E2212601363031513011022134A6B115951000569131159576A09235051746A20506903104ADA01115E73690C0650BA690610496C22D9579814115C91D9214C0DB96B6C11344B21630E3B6D12436B",
+      "patches": [],
+      "model": "MK-61",
+      "title": "Танковая баталия — математический бой",
+      "author": "Сергей Храмов",
+      "angle": "deg",
+      "kind": "game",
+      "tags": "military;two-player;variant",
+      "collection": "chramov",
+      "series": "tank-battle",
+      "length": 105
+    },
+    {
+      "stem": "logic/kaufsten-light",
+      "hex": "52504561125C0902130BAD664068651048504301121445100BAD213B0317119C14CB2050683B02120111671209129E6810313448031740673B041711CA66500217601040D43B1267123440671411470911216562136711041334210F6710473B09120E631269103449",
+      "sha256": "2d873334a6b6a7079c814638ae7fa33f808d84d8a7cdfcad379ab04c6378158e",
+      "source_url": "https://davaite-poigraem.1c-umi.ru/filemanager/download/343/",
+      "archive_sha256": "b9509d98f41d5df49e3687da08b18ba41f12c218d88a0b648b7284c92e667485",
+      "pdf": "Кауфстен.pdf",
+      "model": "MK-61",
+      "pages": [
+        1,
+        6
+      ],
+      "variant": "author light .pmk",
+      "parameter_changes": [
+        [
+          7,
+          2
+        ],
+        [
+          52,
+          3
+        ],
+        [
+          79,
+          9
+        ],
+        [
+          87,
+          4
+        ]
+      ],
+      "title": "Кауфстен — лёгкий",
+      "author": "Сергей Храмов",
+      "angle": "rad",
+      "kind": "game",
+      "tags": "economy;management;variant",
+      "collection": "chramov",
+      "series": "kaufsten",
+      "length": 105
+    },
+    {
+      "stem": "logic/okhota-na-lis-3-poli",
+      "hex": "0E0C091D1A070712350215123443010440084142630704126E13346E1263070412141143011101001322B05B200D4550430D44D5010440084163D059A021115E7954545454545458742762092351470F3463341157991057990E0C010F133101115EA0D45B57645147",
+      "sha256": "3f1abd5ba6b95feffe6b1dcd58fea7ab92bccac72b2587e84c8cde18828ab542",
+      "source_url": "https://davaite-poigraem.1c-umi.ru/filemanager/download/346/",
+      "archive_sha256": "99e55e67329c63096cf4b9e1b357d126395b639d1214072fb682b9c3a648429d",
+      "pdf": "Охота на лис-3.pdf",
+      "pages": [
+        1
+      ],
+      "model": "MK-61",
+      "variant": "author Poli .pmk and PDF six-NOP option",
+      "title": "Охота на лис-3 — для Поли",
+      "author": "Сергей Храмов",
+      "angle": "rad",
+      "kind": "game",
+      "tags": "variant",
+      "collection": "chramov",
+      "series": "fox-hunt",
+      "length": 105
+    },
+    {
+      "stem": "logic/okhota-na-lis-4-poli",
+      "hex": "450842410746650C091D1A071235450215123401001322B65B060746074363416644D4D6140FD40F1157015B375A300D4550430D44D50746084163D659A021115E79545454545454587527620923870F3463341157991057990E0C010F133101115EA0D45B586487",
+      "sha256": "a333e74c43ef62a9ac5ab62a8dcc13c8b041babcd921fdfbc3a9db8ee14ae875",
+      "source_url": "https://davaite-poigraem.1c-umi.ru/filemanager/download/346/",
+      "archive_sha256": "99e55e67329c63096cf4b9e1b357d126395b639d1214072fb682b9c3a648429d",
+      "pdf": "Охота на лис-4.pdf",
+      "pages": [
+        1
+      ],
+      "model": "MK-61",
+      "variant": "author Poli .pmk and PDF six-NOP option",
+      "title": "Охота на лис-4 — для Поли",
+      "author": "Сергей Храмов",
+      "angle": "rad",
+      "kind": "game",
+      "tags": "variant",
+      "collection": "chramov",
+      "series": "fox-hunt",
+      "length": 104
+    },
+    {
+      "stem": "logic/ugaday-chislo-woodstock",
+      "hex": "3B02151234400D500E601132505108",
+      "sha256": "110b7e58644ee65ba63be2c67e386626dd7a4b03cca2ed05710e546a42075457",
+      "source_url": "https://www.silicium.org/index.php/telechargements/4-la-gazette-des-pocketicaires?download=26:la-gazette-des-pocketicaires-n-2",
+      "archive_sha256": "c3f9bcc21b6e51d5346655cd527fa2a63c0124e6b30b43a650c8fd0e8e790a87",
+      "pdf": "GazettePocketicairesNo2.pdf",
+      "pages": [
+        11,
+        12
+      ],
+      "model": "MK-61",
+      "new_entry": true,
+      "title": "Угадай число — Woodstock",
+      "author": "Woodstock (Vassilia Vassiliovitch Woodstockski)",
+      "angle": "rad",
+      "kind": "game",
+      "tags": "classic;magazine;original;variant;vs-calculator",
+      "collection": "gazette-pocketicaires-2",
+      "series": "ugaday-chislo",
+      "length": 15
+    },
+    {
+      "stem": "logic/igra-bashe-eboshe",
+      "hex": "090E01110E01104050410E01115941610E04115C41613461115E416061115941573651070100000050010E00135000000000",
+      "sha256": "f3c792bca41de8a4deafccae4e8f1932ceac1e3cef3185dea59d8d2a13075b6a",
+      "source_url": "https://github.com/sergiuchuckmisha/mk61-eBoshe/blob/fbe2130115dd8755285b8fd15a2e032769cef3a1/src/eBoshe.mk61",
+      "source_sha256": "d1de1d921beef8648832bbc0ede1d356194490585f707c490b54685b9d6e5887",
+      "original_hex": "090E01110E01104050410E01115938610E04115C38610E01100E6014115C0557380100000050010E00135000000000000000",
+      "model": "MK-61",
+      "new_entry": true,
+      "repair": "reject noninteger moves and overdraw; unchanged nine-stone two-human rules",
+      "title": "Игра Баше — eBoshe",
+      "author": "Vanya, Slava, Vladimir, Gleb, Misha",
+      "angle": "rad",
+      "kind": "game",
+      "tags": "classic;two-player;variant",
+      "collection": "eboshe",
+      "series": "bashe",
+      "length": 50
+    },
+    {
+      "stem": "simulation/ostrov-kolkhoz",
+      "hex": "0E6A104A256912601050110F6C1334412550476D121150441150110F6D136A1159350D0B4A2550110F011018AE03041067121065AE641260115C611014256010616E1210405C736350616C115C8066506A6B115987685058902762508B6A6B131152",
+      "sha256": "61828444ca43fceb3fbfd4e3eaeb816dac399cbad45ceb87825be959f2622537",
+      "source_url": "https://github.com/sergev/mk-61/blob/296d766ea0861d19f7b85b624b38757307c17288/programs/%D0%BE%D1%81%D1%82%D1%80%D0%BE%D0%B2.pmk",
+      "model": "MK-61",
+      "new_entry": false,
+      "title": "Остров (Колхоз)",
+      "author": "Владимир Алексеев",
+      "angle": "rad",
+      "kind": "game",
+      "tags": "economy;management",
+      "collection": "tekhnika-molodezhi",
+      "series": "",
+      "length": 98
+    },
+    {
+      "stem": "logic/vosem-ferzey-tarasov",
+      "hex": "0D4B09400DB0605E044C6C01104C08BC6B01104B6C4D6D0111575659564DDCDD115742316C6D11115E22004BDC0111BC5E226C01114C51446B01115E166C08115E1050",
+      "sha256": "e2a830ddeb5d34b0e40d0004fcc5ae1b3e6814f563253c1c6a8f252f2eba6540",
+      "source_url": "https://github.com/sergev/mk-61/blob/296d766ea0861d19f7b85b624b38757307c17288/programs/queens.pmk",
+      "model": "MK-61",
+      "new_entry": true,
+      "title": "Восемь ферзей — поиск решения Тарасова",
+      "author": "Сергей Тарасов",
+      "angle": "rad",
+      "kind": "utility",
+      "tags": "classic;original",
+      "collection": "sergev",
+      "series": "eight-queens",
+      "length": 67
+    },
+    {
+      "stem": "logic/odd-even-who-can-outsmart-who",
+      "hex": "0103400DBE5D04406A6B0212106C0412104DDD592401512500496B4C6A4B68504A69501122021201116810486A02120111DD10BD5108",
+      "sha256": "31c8bf6b327451a0da82d35694f22331ab6b41172fd4f0080a3ddba4587a7d77",
+      "source_url": "Финк Л. М. Папа, мама, я и микрокалькулятор. 1988",
+      "model": "MK-54",
+      "repair": "write the existing printed КП↑ byte as КхПE; explicitly MK-54 only",
+      "title": "Кто кого перехитрит — Чёт-нечёт",
+      "author": "Л. М. Финк",
+      "angle": "rad",
+      "kind": "game",
+      "tags": "book;classic",
+      "collection": "fink-1988",
+      "series": "odd-even",
+      "length": 54
+    }
+  ],
+  "deduplicated": {
+    "logic/bulls-and-cows-2": "logic/byki-i-korovy",
+    "educational/memory-training-1m": "educational/trenirovka-pamyati",
+    "strategy/tank-battle-math-variant": "strategy/tankovaya-bataliya-matematicheskiy-boy",
+    "strategy/tank-battle-realistic-variant": "strategy/tankovaya-bataliya-realnyy-boy"
+  },
+  "new_game_count": 2,
+  "new_helper_count": 1
+}

@@ -5,4 +5,4 @@
 - Program: [byki-i-korovy-geocities.txt](byki-i-korovy-geocities.txt)
 - Listing restored from the archived `bc.jpg` image with macOS Vision OCR and manual byte-code check.
 
-MK-61/MK-52 helper program for the Bulls and Cows variant described on the GeoCities Mastermind page. This byte-code listing is distinct from [byki-i-korovy.txt](byki-i-korovy.txt) and [bulls-and-cows-2.txt](bulls-and-cows-2.txt).
+MK-61/MK-52 helper program for the Bulls and Cows variant described on the GeoCities Mastermind page. This byte-code listing is distinct from [byki-i-korovy.txt](byki-i-korovy.txt).

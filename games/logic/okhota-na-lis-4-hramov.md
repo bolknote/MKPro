@@ -1,19 +1,33 @@
-# Fox Hunt 4 (Hramov)
+# Охота на лис-4
 
-- Author: Sergey Hramov
-- Source: four-field variant by Сергей Храмов.
-- Program: [okhota-na-lis-4-hramov.txt](okhota-na-lis-4-hramov.txt)
+- Автор: Сергей Храмов
+- Источник: [публикация и листинг](https://davaite-poigraem.1c-umi.ru/filemanager/download/346/)
+- Программа: [okhota-na-lis-4-hramov.txt](okhota-na-lis-4-hramov.txt)
+- Модель: МК-61 / МК-52
 
-## Description
+## Подготовка
 
-The fourth Hramov `Fox Hunt` variant. It keeps the 10 by 10, eight-fox game shape, but replaces the clustered recurrence placement from `Fox Hunt 3` with pseudo-random placement plus collision checking so all fox coordinates are distinct.
+```text
+49 хП7 0.1234
+```
 
-Captured foxes are removed from later direction-finder counts. The source also adds a score interpretation based on the number of attempts after all foxes are found.
+## Игра
 
-## Setup
+Переключатель — `Р`. Нажмите `В/О С/П`: появится `0`.
+Введите клетку дробью `А,Б`, обе цифры от 0 до 9, затем `С/П`.
+Пеленгатор считает непойманных лис по горизонтали, вертикали и диагоналям.
 
-Set the `Р-Г` switch to `Р`. Store `49` in `R7`, enter any fractional random seed, then press `В/О`, `С/П`. Enter moves as fractional coordinates `A,B`, where both coordinates are from `0` to `9`.
+`0,11111111` — попадание. Через `↔` или `Пх2` можно узнать число оставшихся лис.
+После поимки всех восьми лис выводится `ЕГГОГ`; R5 содержит число попыток.
+R3 — последний ход, R4 — последний ответ пеленгатора.
+Для новой партии повторите подготовку и запуск.
 
-## Import Note
 
-The `.pmk` save stores the seven-command page for addresses `07` to `13` at the end. The listing here follows the order printed in the source PDF.
+Вариант 4 проверяет совпадения координат при размещении: все восемь клеток различны.
+R7 = 49 — необходимый адрес перехода, его нельзя заменять случайным зерном.
+
+
+## Сверка
+
+Команды совпадают с печатной таблицей автора. Пойманные лисы перестают пеленговаться.
+Вариант «для Поли» опубликован отдельно и сохраняет их в ответах пеленгатора.

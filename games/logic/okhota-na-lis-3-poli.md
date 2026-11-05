@@ -1,19 +1,26 @@
-# Fox Hunt 3 (For Poli)
+# Охота на лис-3 — для Поли
 
-- Author: Sergey Hramov
-- Source: Poli variant by Сергей Храмов.
-- Program: [okhota-na-lis-3-poli.txt](okhota-na-lis-3-poli.txt)
+- Автор: Сергей Храмов
+- Источник: [публикация и листинг](https://davaite-poigraem.1c-umi.ru/filemanager/download/346/)
+- Программа: [okhota-na-lis-3-poli.txt](okhota-na-lis-3-poli.txt)
+- Модель: МК-61 / МК-52
 
-## Description
+## Подготовка
 
-A simplified child-friendly variant of `Fox Hunt 3`. The source marks steps `65` to `70` as `КНОП`, so captured foxes continue to be detected by the direction finder.
+```text
+101 хПe 0.1234
+```
 
-The rest of the game follows the Hramov `Fox Hunt 3` rules: 10 by 10 field, eight foxes, unique fox cells, and fractional coordinates from `0` to `9`.
+## Игра
 
-## Setup
+Подготовка и управление такие же, как в [«Охоте на лис-3»](okhota-na-lis-3-hramov.md).
+Переключатель — `Р`; запуск — `В/О С/П`. Координаты вводятся дробью `А,Б`, затем `С/П`.
+Пойманные лисы **продолжают учитываться пеленгатором**, поэтому легче сопоставлять подсказки.
+Отмечайте пойманные клетки на бумаге: повторное указание уже пойманной лисы также уменьшает счётчик.
+Сигнал поимки — `0,11111111`, окончание — `ЕГГОГ`; число попыток находится в R5.
 
-Set the `Р-Г` switch to `Р`. Store `101` in `Re`, enter any fractional random seed, then press `В/О`, `С/П`.
+## Происхождение
 
-## Import Note
-
-The `.pmk` save stores the seven-command page for addresses `07` to `13` at the end. The listing here follows the order printed in the source PDF.
+Это авторский файл «для Поли» из того же архива. Шесть команд пометки пойманной лисы
+по адресам **65–70** заменены автором на `КНОП`.
+Вариант прямо описан в PDF как упрощение для детей. Правки каталога не добавлялись.

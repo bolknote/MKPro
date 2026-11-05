@@ -1,25 +1,30 @@
-# Perpetual Calendar
+# Вечный календарь
 
-- Authors: I. D. Danilov and G. V. Slavin
-- Source: originally published in `Five Evenings with a Microcalculator`
-- Program: [vechnyy-kalendar.txt](vechnyy-kalendar.txt)
+- Автор: И. Д. Данилов, Г. В. Славин; публикация Сергея Храмова
+- Источник: [публикация и листинг](https://davaite-poigraem.1c-umi.ru/filemanager/download/348/)
+- Программа: [vechnyy-kalendar.txt](vechnyy-kalendar.txt)
+- Модель: МК-61 / МК-52
 
-## Description
+## Подготовка
 
-Computes the Gregorian weekday code for a date and the number of days between two dates.
+```text
+30.5 хПa 365.25 хПb 694066 хПc
+```
 
-Enter the starting date as `day`, `В↑`, `month`, `В↑`, `year`, then `В/О`, `С/П`. The calculator displays the weekday code. Enter the ending date in the same stack format and press `С/П`; the calculator displays the ending weekday code. Press `↔` to inspect the number of days between the dates.
+## Расчёт
 
-Weekday codes are `0` for Sunday, `1` for Monday, `2` for Tuesday, `3` for Wednesday, `4` for Thursday, `5` for Friday, and `6` for Saturday.
+**В историческом алгоритме есть ошибки календарного расчёта.** Например, для 1 января 2000 года
+он выдаёт `5` (пятница) вместо `6` (суббота), а для 5 ноября 2026 года — `3` вместо `4`.
+Ниже сохранено управление исходника; его результаты не следует считать верным григорианским календарём.
 
-## Setup
+Введите `день В↑ месяц В↑ год В/О С/П`. Результат — день недели первой даты:
+`0` — воскресенье, `1` — понедельник, …, `6` — суббота.
+Введите вторую дату как `день В↑ месяц В↑ год С/П`.
+ПМК покажет её день недели; через `↔` доступен интервал между датами.
+Для новой пары снова вводите первую дату и нажимайте `В/О С/П`.
 
-Before use, store constants:
+## Сверка
 
-- `30.5` in `Ra`
-- `365.25` in `Rb`
-- `694066` in `Rc`
-
-## Import Note
-
-The `.pmk` save stores one seven-command page out of display order and keeps saved-memory tail data after the program. The listing here follows the order printed in the source PDF and uses the first 57 program commands.
+57 команд совпали с печатной таблицей. Хвост сохранённого `.pmk` относится к состоянию памяти,
+а не к программе, и в листинг не включён. Источник автора — «Пять вечеров с микрокалькулятором».
+В рамках сверки сохранён исходный вычислительный алгоритм, без новой реализации календаря.

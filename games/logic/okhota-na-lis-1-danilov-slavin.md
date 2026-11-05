@@ -1,15 +1,35 @@
-# Fox Hunt 1 (Danilov-Slavin)
+# Охота на лис-1
 
-- Authors: I. D. Danilov and G. V. Slavin
-- Source: MK-61 adaptation by Сергей Храмов, based on I. D. Danilov and G. V. Slavin's "Fox Hunt".
-- Program: [okhota-na-lis-1-danilov-slavin.txt](okhota-na-lis-1-danilov-slavin.txt)
+- Автор: И. Д. Данилов, Г. В. Славин; публикация Сергея Храмова
+- Источник: [публикация и листинг](https://davaite-poigraem.1c-umi.ru/filemanager/download/346/)
+- Программа: [okhota-na-lis-1-danilov-slavin.txt](okhota-na-lis-1-danilov-slavin.txt)
+- Модель: Б3-34 / МК-54; без адаптации несовместима с МК-61/52
 
-## Description
+## Подготовка
 
-The early B3-34/MK-54 version of `Fox Hunt` from `Five Evenings with a Microcalculator`.
+```text
+0.1234
+```
 
-The game uses a 9 by 9 field with five hidden foxes. Multiple foxes may appear in one cell, and captured foxes continue to be detected by the direction finder.
+## Совместимость
 
-## Setup
+Исходник для **Б3-34/МК-54**: используются недокументированные команды `КП↑` и `КИП↑`.
+Их коды `BE/DE` на МК-61/52 обращаются через RE и имеют другую семантику.
+В эмуляторе выберите МК-54. Для МК-61 есть [вариант 2](okhota-na-lis-lordbss.md),
+[вариант 3](okhota-na-lis-3-hramov.md) и [вариант 4](okhota-na-lis-4-hramov.md).
 
-Enter any fractional random seed, for example `0.1234`, then press `В/О`, `С/П`. Enter a cell as a two-digit number `AB`, where both coordinates are from `1` to `9`, and press `С/П`.
+## Игра
+
+Нажмите `В/О С/П`. На поле 9×9 спрятаны пять лис.
+Введите клетку двузначным целым числом `АБ`, где обе координаты от 1 до 9, и нажмите `С/П`.
+Обычный ответ — число лис на одной горизонтали, вертикали или диагонали с выбранной клеткой.
+Попадание обозначается `0,11111111`; затем сразу вводите следующую клетку.
+Несколько лис могут оказаться в одной клетке: её потребуется указать несколько раз.
+После пяти поимок партия окончена. RС, умноженный на 10, позволяет вспомнить последний ход;
+это не счётчик попыток.
+
+## Сверка
+
+Все 91 команда совпали с авторской таблицей из архива.
+Прежнее описание ошибочно называло этот листинг адаптацией для МК-61.
+Программа восстановлена как оригинал Б3-34; команды под новую модель не заменялись.
