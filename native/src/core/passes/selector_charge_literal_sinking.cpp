@@ -850,4 +850,147 @@ SelectorChargeLiteralLayoutResult optimize_post_layout_selector_charge_literal_s
   };
 }
 
+
+bool prove_selector_zero_flow_sunk_literal_entry(
+    const std::vector<MachineItem>& items,
+    const AuthoritativePostLayoutControlFlow& flow,
+    std::size_t store, std::size_t branch, bool require_final_binding) {
+  if (!flow.proved || store >= items.size() || branch >= items.size() ||
+      items[store].kind != MachineItemKind::Op || items[store].opcode < 0x47 ||
+      items[store].opcode > 0x4e || items[branch].kind != MachineItemKind::Op ||
+      items[branch].opcode < 0x70 || items[branch].opcode > 0x73 ||
+      items[branch].raw || items[branch].manual_interaction ||
+      items[branch].procedure_boundary || items[store].raw || items[store].manual_interaction ||
+      flow.execution_states.size() != flow.execution_edges.size()) return false;
+  const auto target = flow.indirect_flow_targets.find(branch);
+  if (target == flow.indirect_flow_targets.end() || target->second.size() != 1U ||
+      target->second.front().item_index != store ||
+      (require_final_binding && target->second.front().address != 99)) return false;
+  // A normalized subtraction owns the sign/zero word fact. A typed zero or
+  // an arbitrary recall is not a canonical positive zero certificate.
+  enum class Fact { Unknown, Normalized, Zero };
+  std::vector<std::optional<Fact>> values(flow.execution_states.size());
+  std::vector<std::size_t> pending;
+  const auto merge = [&](std::size_t at, Fact value) {
+    if (at >= values.size()) return;
+    if (values[at]) {
+      if (*values[at] == value) return;
+      value = *values[at] == Fact::Unknown || value == Fact::Unknown
+          ? Fact::Unknown : Fact::Normalized;
+      if (*values[at] == value) return;
+    }
+    values[at] = value; pending.push_back(at);
+  };
+  const auto entries = resolve_post_layout_external_entry_contexts(flow);
+  if (!entries) return false;
+  for (std::size_t s = 0; s < values.size(); ++s)
+    if (s == 0U || entries->external[s]) merge(s, Fact::Unknown);
+  std::vector<std::vector<std::size_t>> predecessors(values.size());
+  for (std::size_t s = 0; s < values.size(); ++s)
+    for (const auto& edge : flow.execution_edges[s]) {
+      if (edge.target_state >= values.size()) return false;
+      predecessors[edge.target_state].push_back(s);
+    }
+  std::size_t work = 0;
+  while (!pending.empty()) {
+    if (++work > 100000U) return false;
+    const auto s = pending.back(); pending.pop_back();
+    const auto& state = flow.execution_states[s];
+    if (state.item_index >= items.size()) return false;
+    const auto& op = items[state.item_index]; const int code = op.opcode;
+    Fact out = *values[s];
+    if (op.kind != MachineItemKind::Op || op.raw || op.manual_interaction ||
+        op.procedure_boundary || state.operand_item_index) out = Fact::Unknown;
+    else if (code == 0x11) out = Fact::Normalized;
+    else if (!((code >= 0x40 && code <= 0x4e) || code == 0x51 || code == 0x52 ||
+        code == 0x53 || code == 0x54 || code == 0x57 || code == 0x5e ||
+        (code >= 0x70 && code <= 0x73))) out = Fact::Unknown;
+    for (const auto& edge : flow.execution_edges[s]) {
+      Fact value = out;
+      if (out != Fact::Unknown &&
+          ((code == 0x57 && edge.kind == PostLayoutExecutionEdgeKind::DirectTarget) ||
+           (code == 0x5e && edge.kind == PostLayoutExecutionEdgeKind::Fallthrough) ||
+           (code >= 0x70 && code <= 0x73 && edge.kind == PostLayoutExecutionEdgeKind::IndirectTarget)))
+        value = Fact::Zero;
+      merge(edge.target_state, value);
+    }
+  }
+  bool reached = false;
+  for (std::size_t s = 0; s < values.size(); ++s) {
+    if (flow.execution_states[s].item_index != branch) continue;
+    if (!values[s] || *values[s] == Fact::Unknown || entries->external[s] ||
+        flow.execution_states[s].operand_item_index) return false;
+    if (predecessors[s].empty()) return false;
+    for (const auto before : predecessors[s]) {
+      const auto& prior_state = flow.execution_states[before];
+      const auto& prior = items[prior_state.item_index];
+      if (prior.kind != MachineItemKind::Op || prior.opcode != 0x40 + (items[branch].opcode & 15) ||
+          prior.raw || prior.manual_interaction || prior_state.operand_item_index ||
+          prior_state.return_stack != flow.execution_states[s].return_stack ||
+          prior_state.formal_return_stack != flow.execution_states[s].formal_return_stack ||
+          flow.execution_edges[before].size() != 1U ||
+          flow.execution_edges[before].front().kind != PostLayoutExecutionEdgeKind::Fallthrough) return false;
+    }
+    for (const auto& edge : flow.execution_edges[s])
+      if (edge.kind == PostLayoutExecutionEdgeKind::IndirectTarget) {
+        if (flow.execution_states[edge.target_state].item_index != store) return false;
+        reached = true;
+      }
+  }
+  if (!reached) return false;
+  std::size_t body = store + 1U;
+  while (body < items.size() && items[body].kind == MachineItemKind::Label) ++body;
+  const bool coalesced = std::find(items[store].roles.begin(), items[store].roles.end(),
+      "selector-sunk-literal-coalesced") != items[store].roles.end();
+  if (!coalesced) {
+    const auto literal = role_suffix(items[store], "selector-sunk-literal-value:");
+    if (!literal) return false;
+    for (char digit : *literal) {
+      if (body >= items.size() || items[body].kind != MachineItemKind::Op ||
+          items[body].opcode != digit - '0') return false;
+      do { ++body; } while (body < items.size() && items[body].kind == MachineItemKind::Label);
+    }
+  }
+  int entry_address = 0;
+  for (std::size_t i = 0; i < body; ++i) if (items[i].kind != MachineItemKind::Label) ++entry_address;
+  if (body >= items.size() || items[body].opcode < 0x60 || items[body].opcode > 0x6e)
+    return false;
+  return entry_converges(items, flow, entry_address,
+      items[store].opcode & 15, 0, false, store);
+}
+
+bool prove_selector_zero_flow_null_callback_entry(
+    const std::vector<MachineItem>& items,
+    const AuthoritativePostLayoutControlFlow& flow,
+    std::size_t store, std::size_t branch) {
+  if (!prove_selector_zero_flow_sunk_literal_entry(items, flow, store, branch, true))
+    return false;
+  const auto first = std::find_if(items.begin(), items.end(), [](const auto& item) {
+    return item.kind != MachineItemKind::Label;
+  });
+  if (first == items.end() || first->kind != MachineItemKind::Op ||
+      first->opcode != 0x52 || first->raw || first->manual_interaction)
+    return false;
+  const auto null_item = static_cast<std::size_t>(first - items.begin());
+  const int selector = items[store].opcode & 15;
+  bool reached = false;
+  for (const auto& [source, targets] : flow.indirect_flow_targets) {
+    if (source >= items.size())
+      return false;
+    const auto& call = items[source];
+    const int family = call.opcode & 0xf0;
+    if ((call.opcode & 15) != selector || (family != 0x80 && family != 0xa0))
+      continue;
+    for (const auto& target : targets) {
+      if (target.address != 0)
+        continue;
+      if (target.item_index != null_item || call.raw || call.manual_interaction ||
+          call.indirect_flow_formal_targets)
+        return false;
+      reached = true;
+    }
+  }
+  return reached;
+}
+
 } // namespace mkpro::core::passes

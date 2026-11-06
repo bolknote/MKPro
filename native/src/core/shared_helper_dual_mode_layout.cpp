@@ -1,3 +1,4 @@
+#include "mkpro/core/layout_search_artifact.hpp"
 #include "mkpro/core/shared_helper_dual_mode_layout.hpp"
 #include "mkpro/core/post_layout_indirect_flow.hpp"
 
@@ -1921,6 +1922,14 @@ SharedHelperDualModeLayoutResult finalize_shared_helper_dual_mode_layout(
     } else if (encoded_target == requirement.new_target) {
       continue;
     }
+    // Low selectors have runtime mutation, not an immutable preload to retune.
+    // Retain one only when the caller's original encoded destination is
+    // already the final destination. Moving it is still forbidden.
+    if (reg < 7) {
+      if (encoded_target != requirement.new_target)
+        return reject("mutable selector target cannot be rebound");
+      continue;
+    }
     const auto preload = preload_for_register(result.preloads, reg);
     if (!preload)
       return reject("moving indirect target has neither a preload nor a runtime binder");
@@ -2053,6 +2062,165 @@ SharedHelperDualModeLayoutResult finalize_shared_helper_dual_mode_layout(
                 " cells after selector, stack/X2, and return-stack proofs.",
   });
   return result;
+}
+
+std::optional<std::string> shared_helper_dual_mode_closure_rejection_reason(
+    const std::vector<MachineItem>& items, AddressSpaceModel model) {
+  std::set<std::string> markers;
+  for (const auto& item : items) for (const auto& role : item.roles)
+    if (role.starts_with("shared-helper-dual-mode-"))
+      for (const std::string suffix : {":shared-join", ":shared-store", ":shared-trailing-store"})
+        if (role.ends_with(suffix)) markers.insert(role.substr(0, role.size() - suffix.size()));
+  if (markers.empty()) return std::nullopt;
+  struct Cached {
+    std::vector<MachineItem> items;
+    AddressSpaceModel model;
+    std::optional<std::string> reason;
+  };
+  static thread_local std::vector<Cached> cache;
+  for (const auto& entry : cache)
+    if (entry.model == model && same_layout_search_items(entry.items, items)) return entry.reason;
+  const auto check = [&]() -> std::optional<std::string> {
+    const auto reject = [](const char* message) -> std::optional<std::string> {
+      return std::string("shared-helper continuation is not closed: ") + message;
+    };
+    if (markers.size() != 1U) return reject("ambiguous merged family");
+    const auto normalized = normalize_natural_target_overflow_formals(items, model);
+    if (!normalized || has_executable_address_words(*normalized))
+      return reject("the exact byte-image contract needs a separate closure proof");
+    const auto& code = *normalized;
+    PostLayoutControlFlowOptions control;
+    control.address_space_model = model; control.empty_return_target = 1;
+    const auto flow = build_post_layout_control_flow(code, control);
+    if (!flow.proved || flow.execution_edges.size() != flow.execution_states.size())
+      return reject("missing authoritative execution graph");
+    const auto index = index_artifact(code);
+    const auto& marker = *markers.begin();
+    const auto root = unique_role_item(code, marker + ":helper-root");
+    const auto join = unique_role_item(code, marker + ":shared-join");
+    const auto store = unique_role_item(code, marker + ":shared-store");
+    const auto trailing = unique_role_item(code, marker + ":shared-trailing-store");
+    const auto ret = unique_role_item(code, marker + ":helper-return");
+    const auto divergent = unique_role_item(code, marker + ":divergent-call");
+    const auto ordinary0 = unique_role_item(code, marker + ":ordinary-0:call");
+    const auto ordinary1 = unique_role_item(code, marker + ":ordinary-1:call");
+    if (!root || !join || !store || !ret || !divergent || !ordinary0 || !ordinary1 ||
+        *ordinary0 == *ordinary1 || *ordinary0 == *divergent || *ordinary1 == *divergent)
+      return reject("missing or ambiguous call/body identities");
+    std::vector<std::size_t> tail{*join, *store};
+    if (trailing) tail.push_back(*trailing);
+    if (index.addresses[*join] != kOfficialTailStart || *root >= *join ||
+        index.addresses[*ret] != kOfficialTailStart + static_cast<int>(tail.size()) ||
+        !index.cells.contains(0) || !is_return_opcode(code[index.cells.at(0)].opcode) ||
+        code[*ret].kind != MachineItemKind::Op || !is_return_opcode(code[*ret].opcode))
+      return reject("lost the physical side-space discontinuity");
+    for (std::size_t n = 0; n < tail.size(); ++n)
+      if (code[tail[n]].kind != MachineItemKind::Op ||
+          index.addresses[tail[n]] != kOfficialTailStart + static_cast<int>(n) ||
+          (n != 0 && !is_direct_store_opcode(code[tail[n]].opcode)))
+        return reject("shared tail bytes are not contiguous");
+    const int operation = code[*join].opcode;
+    if (operation != 0x10 && operation != 0x12 && operation != 0x36 &&
+        operation != 0x37 && operation != 0x38 && operation != 0x39)
+      return reject("unproved continuation operation");
+    for (std::size_t i = *root; i < *join; ++i)
+      if (code[i].kind != MachineItemKind::Label &&
+          (code[i].kind != MachineItemKind::Op || !is_straight_body_opcode(code[i].opcode)))
+        return reject("side body is not the closed straight-line route");
+    if (code[*divergent].kind != MachineItemKind::Op || code[*divergent].opcode != 0x53)
+      return reject("divergent mode lost its direct call");
+    const auto operand = next_cell_item(code, *divergent);
+    if (!operand || code[*operand].kind != MachineItemKind::Address || !code[*operand].formal_opcode)
+      return reject("divergent mode lost its exact formal counter");
+    const auto side = formal_address_info(*code[*operand].formal_opcode, model);
+    if (!is_side_alias(side) || side.actual != index.addresses[*root])
+      return reject("divergent counter does not name the shared body");
+    const auto continuation = next_cell_item(code, *operand);
+    if (!continuation) return reject("divergent call has no continuation");
+    std::map<int, bool> callers{{index.addresses[*continuation], true}};
+    SharedHelperContinuationOptions routes;
+    routes.address_space_model = model;
+    routes.proved_indirect_flow_targets = proved_target_addresses(flow);
+    routes.allow_entry_prologues = true; routes.exact_control = &flow;
+    const auto target_address = [&](const MachineItem& value) -> std::optional<int> {
+      if (const auto* number = std::get_if<int>(&value.target)) return *number;
+      const auto* name = std::get_if<std::string>(&value.target);
+      if (!name || !index.label_addresses.contains(*name)) return std::nullopt;
+      return index.label_addresses.at(*name);
+    };
+    for (const auto call : {*ordinary0, *ordinary1}) {
+      std::size_t last = call;
+      std::vector<int> entries;
+      if (code[call].kind != MachineItemKind::Op) return reject("ordinary call is not executable");
+      if (code[call].opcode == 0x53) {
+        const auto address = next_cell_item(code, call);
+        if (!address || code[*address].kind != MachineItemKind::Address) return reject("ordinary call lost its operand");
+        if (code[*address].formal_opcode &&
+            formal_address_info(*code[*address].formal_opcode, model).kind != FormalAddressKind::Official)
+          return reject("ordinary mode acquired an opaque counter");
+        const auto destination = target_address(code[*address]);
+        if (!destination) return reject("ordinary entry has no command identity");
+        entries.push_back(*destination); last = *address;
+      } else if (is_indirect_call_opcode(code[call].opcode)) {
+        const auto found = flow.indirect_flow_targets.find(call);
+        if (found == flow.indirect_flow_targets.end()) return reject("ordinary indirect call has no targets");
+        for (const auto& destination : found->second) entries.push_back(destination.address);
+      } else return reject("ordinary mode changed its call protocol");
+      const auto next = next_cell_item(code, last);
+      if (!next || !callers.emplace(index.addresses[*next], false).second)
+        return reject("call continuations are ambiguous");
+      if (entries.empty()) return reject("ordinary mode has no entry");
+      for (const auto entry : entries)
+        if (!shared_helper_entry_reaches_body(code, entry, index.addresses[*root], routes))
+          return reject("ordinary prologue no longer reaches the shared body");
+    }
+    for (const auto& state : flow.execution_states) if (state.item_index == *root) {
+      if (state.return_stack.empty() || !callers.contains(state.return_stack.back()))
+        return reject("shared body acquired an independent caller");
+      const bool opaque = state.formal_opcode &&
+          formal_address_info(*state.formal_opcode, model).kind != FormalAddressKind::Official;
+      if (opaque != callers.at(state.return_stack.back()))
+        return reject("ordinary and divergent entry modes were conflated");
+    }
+    for (const auto& entry : flow.external_entries)
+      if (index.addresses[entry.entry.item_index] >= kOfficialTailStart &&
+          index.addresses[entry.entry.item_index] <= index.addresses[*ret])
+        return reject("shared tail acquired an external entry");
+    for (std::size_t s = 0; s < flow.execution_states.size(); ++s) {
+      const auto& call = flow.execution_states[s];
+      if (call.item_index != *divergent) continue;
+      const auto& entry_edges = flow.execution_edges[s];
+      if (entry_edges.size() != 1U) return reject("divergent entry is ambiguous");
+      std::size_t current = entry_edges.front().target_state;
+      bool returned = false;
+      for (int step = 0; step <= kOfficialTailStart + 1; ++step) {
+        const auto& state = flow.execution_states[current];
+        if (state.return_stack.size() != call.return_stack.size() + 1U ||
+            state.return_stack.back() != index.addresses[*continuation])
+          return reject("divergent mode changed its saved return frame");
+        const auto& edges = flow.execution_edges[current];
+        if (state.address == 0) {
+          if (edges.size() != 1U || edges.front().kind != PostLayoutExecutionEdgeKind::Return)
+            return reject("side-space wrap does not return");
+          const auto& after = flow.execution_states[edges.front().target_state];
+          if (after.item_index != *continuation || after.return_stack != call.return_stack ||
+              after.formal_return_stack != call.formal_return_stack)
+            return reject("side-space return no longer matches its caller");
+          returned = true; break;
+        }
+        if (state.address < index.addresses[*root] || state.address >= kOfficialTailStart ||
+            edges.size() != 1U || edges.front().kind != PostLayoutExecutionEdgeKind::Fallthrough)
+          return reject("divergent mode executes the shared ordinary tail");
+        current = edges.front().target_state;
+      }
+      if (!returned) return reject("divergent mode does not close its return");
+    }
+    return std::nullopt;
+  };
+  auto reason = check();
+  if (cache.size() >= 16U) cache.erase(cache.begin());
+  cache.push_back({items, model, reason});
+  return reason;
 }
 
 } // namespace mkpro::core

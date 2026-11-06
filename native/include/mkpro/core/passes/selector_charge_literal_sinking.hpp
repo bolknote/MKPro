@@ -22,6 +22,22 @@ bool prove_selector_charge_sunk_literal_entry(
     const AuthoritativePostLayoutControlFlow& flow,
     std::size_t store, std::size_t charge_start, int leaf);
 
+// Semantic non-digit entry: a normalized zero equality edge through a just
+// stored low selector. Re-prove the canonical source word, matched entry and
+// all displaced stack/X1/X2 effects. Final binding additionally requires 99.
+bool prove_selector_zero_flow_sunk_literal_entry(
+    const std::vector<MachineItem>& items,
+    const AuthoritativePostLayoutControlFlow& flow,
+    std::size_t store, std::size_t branch, bool require_final_binding);
+
+// Final nullable-callback entry: additionally require the real plain return
+// at physical 00 and a canonical stable-selector callback to that command.
+// No report, descriptive annotation or guessed zero value is a certificate.
+bool prove_selector_zero_flow_null_callback_entry(
+    const std::vector<MachineItem>& items,
+    const AuthoritativePostLayoutControlFlow& flow,
+    std::size_t store, std::size_t branch);
+
 struct SelectorChargeLiteralLayoutResult {
   std::vector<MachineItem> items;
   std::vector<PreloadReport> preloads;

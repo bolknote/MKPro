@@ -5,6 +5,8 @@
 #include "mkpro/core/stable_register_value_flow.hpp"
 #include "mkpro/core/passes/liveness_analysis.hpp"
 #include "mkpro/core/post_layout_numeric_ranges.hpp"
+#include "mkpro/core/post_layout_packed_sign.hpp"
+#include "mkpro/core/formal_address.hpp"
 #include "mkpro/core/detail/exact_value_terms.hpp"
 #include "mkpro/core/indirect_addressing.hpp"
 #include <array>
@@ -1524,6 +1526,473 @@ std::vector<ContextualCopyTransportCandidate> contextual_redundant_literal_store
         "Original data and selector equations remain mandatory for final placement."});
     result.push_back(std::move(candidate));
     if (result.size() >= limits.maximum_candidates) break;
+  }
+  return result;
+}
+
+
+
+std::vector<ContextualCopyTransportCandidate> contextual_memory_backed_entry_candidates(
+    const std::vector<IrOp>& ops,const PassContext& context,const ContextualCopyTransportOptions& limits){
+  std::vector<ContextualCopyTransportCandidate> result;
+  if(!limits.runtime_preloads||!limits.control||!limits.encoded_target_origins||!limits.maximum_candidates)return result;
+  Model m(ops,context,limits);if(!m.valid)return result;
+  const auto lift=analyze_post_layout_automatic_entry_lift_with_indirect_store_facts(m.items,m.flow,limits.maximum_work);
+  if(!lift)return result;
+  for(Id root=1;root+3U<ops.size();++root){
+    // The leading recall keeps its command identity and all provenance. Its
+    // annotations are not a reason to reject an independent argument store;
+    // only actual observations/opaque execution prevent moving across it.
+    const bool unchanged_recall=ops[root].kind==IrKind::Recall &&
+        ops[root].opcode>=0x60 && ops[root].opcode<=0x6e &&
+        ops[root].register_name==std::string(1,"0123456789abcde"[ops[root].opcode&15]) &&
+        !ops[root].meta.raw && !ops[root].meta.manual_interaction &&
+        !ops[root].meta.logical_register_analysis && !ops[root].procedure_boundary;
+    if(!unchanged_recall||ops[root+1U].kind!=IrKind::Plain||
+        ops[root+1U].opcode!=0x14||ops[root+1U].meta.raw||ops[root+1U].meta.manual_interaction||
+        ops[root+1U].meta.logical_register_analysis||ops[root+1U].procedure_boundary||
+        !ops[root+1U].meta.semantic_call_origins.empty()||!direct(ops[root+2U])||
+        ops[root+2U].kind!=IrKind::Store||ops[root].register_name==ops[root+2U].register_name)continue;
+    const auto reg=ops[root+2U].register_name;
+    Id labels=root;while(labels>0&&ops[labels-1U].kind==IrKind::Label)--labels;
+    if(labels==root||labels==0)continue;
+    std::set<Id> callers,erased_recalls,bypassed_stores;
+    std::vector<Id> called,fallthrough;
+    bool valid=true,reached=false;
+    for(Id s=0;s<m.instruction.size()&&valid;++s){
+      const auto i=m.instruction[s];if(i<root||i>root+2U)continue;
+      if(m.entries.external[s]||m.predecessors[s].empty()){valid=false;break;}
+      if(m.flow.execution_states[s].formal_opcode &&
+          formal_address_info(*m.flow.execution_states[s].formal_opcode,m.control.address_space_model).kind!=FormalAddressKind::Official){valid=false;break;}
+      if(i!=root){for(const auto p:m.predecessors[s])if(m.instruction[p]+1U!=i)valid=false;continue;}
+      reached=true;bool called_entry=false,physical_entry=false;
+      for(const auto p:m.predecessors[s]){
+        const auto at=m.instruction[p];const auto& caller=ops[at];
+        const bool call=caller.kind==IrKind::Call && std::any_of(m.flow.execution_edges[p].begin(),m.flow.execution_edges[p].end(),
+            [&](const auto& edge){return edge.target_state==s&&edge.kind==PostLayoutExecutionEdgeKind::DirectTarget;});
+        if(call){
+          if(at==0||!direct(ops[at-1U])||ops[at-1U].kind!=IrKind::Recall||ops[at-1U].register_name!=reg||
+              caller.meta.raw||caller.meta.manual_interaction||caller.target_meta.formal_opcode||m.predecessors[p].empty()){valid=false;break;}
+          for(const auto q:m.predecessors[p])if(m.instruction[q]!=at-1U||m.entries.external[q]||m.flow.execution_successors[q]!=std::vector<Id>{p})valid=false;
+          callers.insert(at);erased_recalls.insert(at-1U);called_entry=true;
+        }else{
+          physical_entry=true;
+          for(const auto& edge:m.flow.execution_edges[p])if(edge.target_state==s){
+            if(edge.kind==PostLayoutExecutionEdgeKind::Fallthrough){
+              if(at+1U!=labels)valid=false;
+            }else if(edge.kind==PostLayoutExecutionEdgeKind::Return){
+              const auto& before=m.flow.execution_states[p];
+              if(before.return_stack.empty()||before.return_stack.back()!=m.flow.execution_states[s].address||
+                  (ops[labels-1U].kind!=IrKind::Call&&ops[labels-1U].kind!=IrKind::IndirectCall))valid=false;
+              if(!before.formal_return_stack.empty()&&before.formal_return_stack.back()&&
+                  formal_address_info(*before.formal_return_stack.back(),m.control.address_space_model).kind!=FormalAddressKind::Official)valid=false;
+            }else valid=false;
+          }
+        }
+      }
+      if(called_entry&&physical_entry){valid=false;break;}
+      auto tail=s;Id definition=s;
+      for(Id n=0;n<3U;++n){if(n==2U)definition=tail;if(m.flow.execution_successors[tail].size()!=1U){valid=false;break;}tail=m.flow.execution_successors[tail].front();}
+      if(valid){if(m.instruction[tail]!=root+3U)valid=false;else{
+        (called_entry?called:fallthrough).push_back(tail);if(called_entry)bypassed_stores.insert(definition);
+      }}
+    }
+    if(!valid||!reached||callers.empty()||fallthrough.empty())continue;
+    // No computed/indirect entry may silently inherit the memory ABI. Every
+    // bypassed caller explicitly supplied the same canonical memory word.
+    for(const auto& [source,targets]:m.original.indirect_flow_targets){(void)source;
+      for(const auto& target:targets)if(target.item_index==m.item[root])valid=false;}
+    if(!valid)continue;
+    std::vector<Id> queries;for(const auto call:callers){queries.push_back(m.item[call-1U]);queries.push_back(m.item[call]);}
+    const auto facts=prove_post_layout_numeric_ranges(m.items,m.flow,*lift,queries,limits.runtime_preloads,
+        limits.maximum_work,context.options.ordinary_decimal_keyboard_input?NumericRangeInputPolicy::ValidatedOrdinaryDecimalInput:NumericRangeInputPolicy::ValidatedRegisterTransport);
+    if(facts.exhausted)continue;
+    bool all_canonical=true;
+    for(Id s=0;s<m.instruction.size();++s)if(erased_recalls.contains(m.instruction[s])){
+      if(!facts.canonical_memory_load_states.contains(s))all_canonical=false;
+      if(m.flow.execution_states[s].formal_opcode &&
+          formal_address_info(*m.flow.execution_states[s].formal_opcode,m.control.address_space_model).kind!=FormalAddressKind::Official)valid=false;
+    }
+    if(!valid)continue;
+
+    if(!all_canonical){
+      // The source store normalizes a recalled one-digit counter. Its raw
+      // memory may instead be the denormalized FL write-back. Keep that
+      // distinction: permit only recall/positive-FL observations of this
+      // definition epoch, never arbitrary selector or physical-word reads.
+      const int argument=register_index(reg);
+      std::map<Id,std::vector<int>> memory_queries;
+      for(const auto recall:erased_recalls)memory_queries[m.item[recall]]={argument};
+      std::set<Id> visited;std::vector<Id> pending=called;
+      while(!pending.empty()&&valid){
+        if(visited.size()>=limits.maximum_work){valid=false;break;}
+        const auto s=pending.back();pending.pop_back();if(!visited.insert(s).second)continue;
+        const auto i=m.instruction[s];const auto& op=ops[i];
+        if(op.kind==IrKind::Store && op.register_name==reg && !bypassed_stores.contains(s))continue;
+        if(op.meta.raw || (op.kind==IrKind::Stop &&
+            std::find(op.meta.roles.begin(),op.meta.roles.end(),kTypedDisplayObservationRole)==op.meta.roles.end())){valid=false;break;}
+        const int family=op.opcode&0xf0;
+        if((family>=0x70&&family<=0xe0)&&(op.opcode&15)==argument){valid=false;break;}
+        if(op.kind==IrKind::IndirectStore||op.kind==IrKind::IndirectRecall){
+          const auto aliases=m.flow.indirect_memory_targets.find(m.item[i]);
+          if(aliases==m.flow.indirect_memory_targets.end() ||
+              std::find(aliases->second.begin(),aliases->second.end(),argument)!=aliases->second.end()){valid=false;break;}
+        }
+        constexpr std::array<int,4> loops{0x5d,0x5b,0x58,0x5a};
+        const bool counter=argument<4 && op.kind==IrKind::Loop &&
+            op.opcode==loops[static_cast<Id>(argument)] && op.counter=="L"+reg;
+        if(counter)memory_queries[m.item[i]]={argument};
+        else if(op.kind!=IrKind::Recall && (m.effects[i].uses.contains(reg)||m.effects[i].uses_all_registers) &&
+            op.kind!=IrKind::IndirectStore && op.kind!=IrKind::IndirectRecall){valid=false;break;}
+        pending.insert(pending.end(),m.flow.execution_successors[s].begin(),m.flow.execution_successors[s].end());
+      }
+      if(!valid)continue;
+      const auto memory=prove_post_layout_register_numeric_values(m.items,m.flow,*lift,memory_queries,
+          limits.runtime_preloads,limits.maximum_work,
+          context.options.ordinary_decimal_keyboard_input?NumericRangeInputPolicy::ValidatedOrdinaryDecimalInput:NumericRangeInputPolicy::ValidatedRegisterTransport);
+      if(memory.exhausted)continue;
+      for(Id s=0;s<m.instruction.size();++s){
+        if(!memory_queries.contains(m.item[m.instruction[s]]))continue;
+        // A loop query is required only in the changed definition epoch.
+        if(!erased_recalls.contains(m.instruction[s]) && !visited.contains(s))continue;
+        const auto state=memory.values.find(s);
+        if(state==memory.values.end()||!state->second.contains(argument)){valid=false;break;}
+        const auto& value=state->second.at(argument);
+        if(!value.ordinary||!value.range||!value.range->integral||value.range->lower<1||value.range->upper>9){valid=false;break;}
+      }
+      if(!valid)continue;
+    }
+    auto proof_items=m.items;
+    proof_items[m.item[root+1U]].raw=true;proof_items[m.item[root+2U]].raw=true;
+    for(const auto recall:erased_recalls)proof_items[m.item[recall]].raw=true;
+    const PostLayoutStackEntryProofOptions proof_options{.refine_runtime_selectors=false,.numeric_entry_closed=true,
+        .transport_closed_entry_through_control=true,.use_indirect_store_entry_facts=true};
+    if(!prove_post_layout_stack_state_equality(proof_items,m.flow,called,
+        {{true,true,true,true},false,true},proof_options)||
+        !prove_post_layout_stack_state_equality(proof_items,m.flow,fallthrough,
+        {{true,true,false,false},false,true},proof_options))continue;
+    ContextualCopyTransportCandidate candidate;auto& out=candidate.transformation;
+    for(Id i=0;i<ops.size();++i){
+      if(i==labels)out.ops.push_back(ops[root+2U]);
+      if(i==root+2U||erased_recalls.contains(i))continue;
+      if(i==root+1U){auto recall=make_recall(reg);recall.meta.source_line=ops[i].meta.source_line;out.ops.push_back(std::move(recall));}
+      else out.ops.push_back(ops[i]);
+    }
+    out.applied=1;out.optimizations.push_back({"contextual-memory-backed-helper-entry",
+        "Replaced caller-recall/shared-swap-store argument materialization with a memory-backed helper entry. Bypassing callers prove either canonical-word equality or a closed ordinary positive-integral recall/FL epoch relation up to a retained overwrite, without canonicalizing the actual counter word. Physical fallthrough and ordinary saved-return entries retain the moved store. Proved all changed deeper-stack and X2 values unobserved, excluded indirect/external and unproved word observations, and barred changed instructions from circular convergence. Final ABI geometry and formal frames remain independent placement obligations."});
+    result.push_back(std::move(candidate));if(result.size()>=limits.maximum_candidates)return result;
+  }
+  return result;
+}
+
+namespace {
+struct LazySignPlan {
+  Id projection=0, store=0; int reg=-1;
+  std::set<Id> calls, reads;
+};
+std::optional<LazySignPlan> lazy_sign_plan(const Model& m, Id projection,
+    const ContextualCopyTransportOptions& limits) {
+  const auto& op=m.ops[projection];
+  if(op.kind!=IrKind::Plain || op.opcode!=0x32 || op.meta.raw || op.meta.manual_interaction ||
+      projection+1U>=m.ops.size() || !direct(m.ops[projection+1U]) ||
+      m.ops[projection+1U].kind!=IrKind::Store) return std::nullopt;
+  const Id store=projection+1U; const int reg=register_index(m.ops[store].register_name);
+  const auto lift=analyze_post_layout_automatic_entry_lift_with_indirect_store_facts(m.items,m.flow,limits.maximum_work);
+  if(!lift)return std::nullopt;
+  std::vector<Id> states;
+  for(Id s=0;s<m.instruction.size();++s)if(m.instruction[s]==projection)states.push_back(s);
+  const auto signs=prove_post_layout_packed_sign_inputs(m.items,m.flow,*lift,states,
+      limits.runtime_preloads,limits.maximum_work);
+  if(states.empty()||signs.exhausted)return std::nullopt;
+  LazySignPlan plan{projection,store,reg,{},{}};
+  std::vector<Id> raw_after,normalized_after;
+  std::set<Id> producer_states;
+  for(const auto s:states){
+    if(m.entries.external[s] || m.predecessors[s].size()!=1U ||
+        m.flow.execution_successors[s].size()!=1U)return std::nullopt;
+    const auto next=m.flow.execution_successors[s].front();
+    if(m.instruction[next]!=store || m.predecessors[next]!=std::vector<Id>{s})return std::nullopt;
+    producer_states.insert(next);
+    const auto previous=m.predecessors[s].front();
+    const auto& caller=m.ops[m.instruction[previous]];
+    const bool direct_call=caller.kind==IrKind::Call &&
+        std::any_of(m.flow.execution_edges[previous].begin(),m.flow.execution_edges[previous].end(),
+            [&](const auto& e){return e.target_state==s && e.kind==PostLayoutExecutionEdgeKind::DirectTarget;});
+    auto& roots=direct_call?normalized_after:raw_after;
+    if(direct_call){
+      if(caller.meta.raw||caller.meta.manual_interaction||caller.target_meta.formal_opcode)return std::nullopt;
+      plan.calls.insert(m.instruction[previous]);
+    }else if(!signs.signs.contains(s)||signs.signs.at(s)!=1)return std::nullopt;
+    roots.insert(roots.end(),m.flow.execution_successors[next].begin(),m.flow.execution_successors[next].end());
+  }
+  if(raw_after.empty()||plan.calls.empty())return std::nullopt;
+  // Source-unit reaching definitions, on matched return contexts. Bottom is
+  // not a proved unit. Entry and every unrelated definition are non-unit.
+  std::vector<std::optional<bool>> unit(m.instruction.size());std::vector<Id> work;
+  const auto merge=[&](Id s,bool value){if(unit[s]){value=value&&*unit[s];if(value==*unit[s])return;}unit[s]=value;work.push_back(s);};
+  for(Id s=0;s<unit.size();++s)if(m.entries.external[s]||m.entries.main[s])merge(s,false);
+  Id spent=signs.work;
+  while(!work.empty()){
+    if(++spent>=limits.maximum_work)return std::nullopt;
+    const auto s=work.back();work.pop_back();const auto i=m.instruction[s];const auto& effect=m.effects[i];
+    bool value=*unit[s];
+    if(i==store)value=true;
+    else if(effect.must_defs.contains(m.ops[store].register_name)||effect.may_defs.contains(m.ops[store].register_name))value=false;
+    if(effect.may_define_any_register){
+      const auto aliases=m.flow.indirect_memory_targets.find(m.item[i]);
+      if(m.ops[i].kind!=IrKind::IndirectStore || aliases==m.flow.indirect_memory_targets.end() ||
+          std::find(aliases->second.begin(),aliases->second.end(),reg)!=aliases->second.end())value=false;
+    }
+    for(const auto next:m.flow.execution_successors[s])merge(next,value);
+  }
+  std::set<Id> visited;work=raw_after;
+  while(!work.empty()){
+    if(++spent>=limits.maximum_work)return std::nullopt;
+    const auto s=work.back();work.pop_back();if(!visited.insert(s).second)continue;
+    const auto i=m.instruction[s];const auto& here=m.ops[i];
+    if(here.meta.raw || (here.kind==IrKind::Stop &&
+        std::find(here.meta.roles.begin(),here.meta.roles.end(),kTypedDisplayObservationRole)==here.meta.roles.end()))return std::nullopt;
+    if(here.kind==IrKind::Store && here.register_name==m.ops[store].register_name)continue;
+    const int family=here.opcode&0xf0;
+    if((family>=0x70&&family<=0xe0)&&(here.opcode&15)==reg)return std::nullopt;
+    if(here.kind==IrKind::IndirectStore||here.kind==IrKind::IndirectRecall){
+      const auto aliases=m.flow.indirect_memory_targets.find(m.item[i]);
+      if(aliases==m.flow.indirect_memory_targets.end() ||
+          std::find(aliases->second.begin(),aliases->second.end(),reg)!=aliases->second.end())return std::nullopt;
+    }
+    if(here.kind==IrKind::Recall && here.register_name==m.ops[store].register_name){
+      if(!unit[s].value_or(false))return std::nullopt;plan.reads.insert(i);
+    }else if(m.effects[i].uses_all_registers || m.effects[i].uses.contains(m.ops[store].register_name)){
+      if(here.kind!=IrKind::IndirectStore && here.kind!=IrKind::IndirectRecall)return std::nullopt;
+    }
+    work.insert(work.end(),m.flow.execution_successors[s].begin(),m.flow.execution_successors[s].end());
+  }
+  if(plan.reads.empty() || static_cast<int>(plan.calls.size()+plan.reads.size())-1>limits.maximum_growth_cells)return std::nullopt;
+  auto proof_items=m.items;proof_items[m.item[projection]].raw=true;
+  const PostLayoutStackEntryProofOptions proof_options{.refine_runtime_selectors=false,
+      .numeric_entry_closed=true,.transport_closed_entry_through_control=true,.use_indirect_store_entry_facts=true};
+  // A decoded recall returns the same canonical unit. Its extra physical
+  // last-X effect is checked independently below; it is not an equality axiom.
+  if(!prove_post_layout_stack_state_equality(proof_items,m.flow,raw_after,
+      {{false,true,true,true},false,false},proof_options) ||
+      !prove_post_layout_stack_state_equality(proof_items,m.flow,normalized_after,
+      {{true,true,true,true},false,true},proof_options))return std::nullopt;
+  for(const auto read:plan.reads){
+    std::vector<Id> continuations;
+    for(Id s=0;s<m.instruction.size();++s)if(m.instruction[s]==read){
+      if(!unit[s].value_or(false))return std::nullopt;
+      continuations.insert(continuations.end(),m.flow.execution_successors[s].begin(),m.flow.execution_successors[s].end());
+    }
+    if(continuations.empty()||!prove_post_layout_stack_state_equality(proof_items,m.flow,continuations,
+        {{true,true,true,true},true,false},proof_options))return std::nullopt;
+  }
+  return plan;
+}
+
+bool zero_return_entry(const Model& m,Id ret) {
+  bool reached=false;
+  for(Id s=0;s<m.instruction.size();++s)if(m.instruction[s]==ret){
+    if(m.entries.external[s]||m.predecessors[s].empty())return false;
+    for(const auto p:m.predecessors[s]){
+      const auto& branch=m.ops[m.instruction[p]];const int reg=branch.opcode&15;
+      if(branch.kind!=IrKind::IndirectCondJump||branch.opcode<0x70||branch.opcode>0x73||
+          branch.meta.raw||branch.meta.manual_interaction||m.predecessors[p].empty())return false;
+      for(const auto q:m.predecessors[p]){
+        if(m.ops[m.instruction[q]].kind!=IrKind::Store||m.ops[m.instruction[q]].opcode!=0x40+reg||m.predecessors[q].empty())return false;
+        for(const auto r:m.predecessors[q])if(m.ops[m.instruction[r]].kind!=IrKind::Plain||
+            m.ops[m.instruction[r]].opcode!=0x11||m.ops[m.instruction[r]].meta.raw)return false;
+      }
+      bool edge=false;for(const auto& e:m.flow.execution_edges[p])if(e.target_state==s){
+        if(e.kind!=PostLayoutExecutionEdgeKind::IndirectTarget)return false;edge=true;
+      }
+      if(!edge)return false;
+    }
+    reached=true;
+  }
+  return reached;
+}
+
+struct NullableBodyProof {bool proved=false;std::set<int> reads;Id work=0;};
+NullableBodyProof total_nullable_body(const Model& m,Id start,int selector,
+    std::array<OrdinaryStackValue,4> values,const std::map<int,OrdinaryStackValue>& registers,
+    Id base_depth,const ContextualCopyTransportOptions& limits){
+  NullableBodyProof result;std::map<std::string,Id> labels;
+  for(Id i=0;i<m.ops.size();++i)if(m.ops[i].kind==IrKind::Label){Id next=i+1U;while(next<m.ops.size()&&m.ops[next].kind==IrKind::Label)++next;labels.emplace(m.ops[i].name,next);}
+  const auto target=[&](const IrTarget& destination)->std::optional<Id>{const auto* name=std::get_if<std::string>(&destination);return name&&labels.contains(*name)?std::optional<Id>{labels.at(*name)}:std::nullopt;};
+  const auto next=[&](Id i){do{++i;}while(i<m.ops.size()&&m.ops[i].kind==IrKind::Label);return i;};
+  const auto push=[&](OrdinaryStackValue value){for(Id i=3;i>0;--i)values[i]=values[i-1U];values[0]=std::move(value);};
+  const auto drop=[&](OrdinaryStackValue value){values[0]=std::move(value);values[1]=values[2];values[2]=values[3];};
+  std::vector<Id> returns;std::set<std::pair<Id,std::vector<Id>>> visited;
+  std::string null_word="0";bool fresh=true;Id pc=start;values[0]={OrdinaryNumericRange{0,0,true},true};
+  while(pc<m.ops.size()){
+    if(++result.work>=limits.maximum_work || !visited.emplace(pc,returns).second)return result;
+    const auto& op=m.ops[pc];const int code=op.opcode;
+    if(op.meta.raw||op.meta.manual_interaction||op.procedure_boundary)return result;
+    if(op.kind==IrKind::Store){if(pc!=start||code!=0x40+selector)return result;fresh=true;pc=next(pc);continue;}
+    if(op.kind==IrKind::Recall){
+      const int reg=register_index(op.register_name);if(reg==selector)return result;
+      result.reads.insert(reg);const auto value=registers.find(reg);if(value==registers.end())return result;
+      push(value->second);fresh=true;pc=next(pc);continue;
+    }
+    if(op.kind==IrKind::Call||op.kind==IrKind::Jump||op.kind==IrKind::IndirectCall||op.kind==IrKind::IndirectJump){
+      const bool call=op.kind==IrKind::Call||op.kind==IrKind::IndirectCall;
+      if(op.kind==IrKind::IndirectCall||op.kind==IrKind::IndirectJump){
+        const int reg=code&15;if(reg<7||reg>=15)return result;
+        if(reg==selector){
+          const auto decoded=evaluate_indirect_address(op.register_name,null_word,IndirectOperationKind::Flow,m.control.address_space_model);
+          if(!decoded||decoded->actual_flow_target!=std::optional<int>{0}||!decoded->result_value)return result;
+          null_word=*decoded->result_value;
+          if(call){if(base_depth+returns.size()+1U>static_cast<Id>(m.control.maximum_return_depth))return result;fresh=true;pc=next(pc);continue;}
+          if(returns.empty()){result.proved=true;return result;}
+          pc=returns.back();returns.pop_back();fresh=true;continue;
+        }
+        const PreloadReport* owner=nullptr;
+        for(const auto& word:*limits.runtime_preloads)if(word.register_name==op.register_name){if(owner)return result;owner=&word;}
+        if(!owner||owner->setup_expression||owner->setup_expression_text||owner->setup_target_name)return result;
+        const auto decoded=evaluate_indirect_address(op.register_name,owner->value,IndirectOperationKind::Flow,m.control.address_space_model);
+        if(!decoded||!decoded->actual_flow_target||!indirect_writeback_preserves_literal_word(*decoded,owner->value))return result;
+        for(Id i=0;i<m.ops.size();++i){const auto& eff=m.effects[i];
+          if(eff.must_defs.contains(op.register_name)||eff.may_defs.contains(op.register_name)){
+            const auto kind=m.ops[i].kind;
+            if((kind!=IrKind::IndirectCall&&kind!=IrKind::IndirectJump&&kind!=IrKind::IndirectCondJump&&kind!=IrKind::IndirectRecall&&kind!=IrKind::IndirectStore)||(m.ops[i].opcode&15)!=reg)return result;
+          }
+          if(eff.may_define_any_register){const auto aliases=m.flow.indirect_memory_targets.find(m.item[i]);
+            if(m.ops[i].kind!=IrKind::IndirectStore||aliases==m.flow.indirect_memory_targets.end()||std::find(aliases->second.begin(),aliases->second.end(),reg)!=aliases->second.end())return result;}
+        }
+        if(!op.meta.indirect_flow_targets||op.meta.indirect_flow_targets->size()!=1U)return result;
+        const auto dest=target(op.meta.indirect_flow_targets->front());if(!dest)return result;
+        const auto* label=std::get_if<std::string>(&op.meta.indirect_flow_targets->front());
+        if(!label||!limits.encoded_target_origins||!limits.encoded_target_origins->contains(*label)||limits.encoded_target_origins->at(*label)!=*decoded->actual_flow_target)return result;
+        if(call){if(base_depth+returns.size()+1U>static_cast<Id>(m.control.maximum_return_depth))return result;returns.push_back(next(pc));}
+        pc=*dest;fresh=true;continue;
+      }
+      const auto dest=target(op.target);if(!dest)return result;
+      if(call){if(base_depth+returns.size()+1U>static_cast<Id>(m.control.maximum_return_depth))return result;returns.push_back(next(pc));}
+      pc=*dest;fresh=true;continue;
+    }
+    if(op.kind==IrKind::Return){if(returns.empty()){result.proved=true;return result;}pc=returns.back();returns.pop_back();fresh=true;continue;}
+    if(op.kind!=IrKind::Plain)return result;
+    if(code>=0&&code<=9){
+      if(!fresh)return result;std::string spelling;bool point=false;Id end=pc;
+      while(end<m.ops.size()&&m.ops[end].kind==IrKind::Plain){const int digit=m.ops[end].opcode;
+        if(digit>=0&&digit<=9)spelling.push_back(static_cast<char>('0'+digit));
+        else if(digit==0x0a&&!point){point=true;spelling.push_back('.');}else break;
+        end=next(end);
+      }
+      const auto range=bound_ordinary_decimal(spelling);if(!range)return result;push({*range,true});fresh=false;pc=end;continue;
+    }
+    if(code==0x14)std::swap(values[0],values[1]);
+    else if(code==0x25){const auto x=values[0];values[0]=values[1];values[1]=values[2];values[2]=values[3];values[3]=x;}
+    else if(code==0x0e)push(values[0]);
+    else if(code==0x0d)values[0]={OrdinaryNumericRange{0,0,true},true};
+    else if(code==0x0b){if(!values[0].ordinary)return result;if(values[0].range){const auto r=*values[0].range;values[0].range=OrdinaryNumericRange{-r.upper,-r.lower,r.integral};}}
+    else if(code>=0x10&&code<=0x13){
+      const auto x=values[0],y=values[1];if(!x.ordinary||!y.ordinary)return result;
+      std::optional<OrdinaryNumericRange> range;if(x.range&&y.range)range=bound_ordinary_binary(code,*y.range,*x.range);
+      bool total=range.has_value();if((code==0x10||code==0x11)&&x.range)total=true;
+      if(code==0x13&&x.range&&(x.range->lower>=1||x.range->upper<=-1))total=true;
+      if(!total)return result;drop({range,true});
+    }else{
+      const auto x=values[0];if(!x.ordinary)return result;std::optional<OrdinaryNumericRange> range;
+      if(x.range)range=bound_ordinary_unary(code,*x.range);if(code==0x35&&!range)range=OrdinaryNumericRange{-1,1,false};
+      bool total=code==0x31||code==0x32||code==0x34||code==0x35;
+      if(code==0x15)total=x.range&&x.range->lower>=-99&&x.range->upper<=7&&range.has_value();
+      if(code==0x22)total=range.has_value();if(!total)return result;values[0]={range,true};
+    }
+    fresh=selector_charge_entry_closer_opcode(code);pc=next(pc);
+  }
+  return result;
+}
+} // namespace
+
+std::vector<ContextualCopyTransportCandidate> contextual_nullable_callback_projection_candidates(
+    const std::vector<IrOp>& ops,const PassContext& context,const ContextualCopyTransportOptions& limits){
+  std::vector<ContextualCopyTransportCandidate> result;
+  if(!limits.runtime_preloads||!limits.control||!limits.encoded_target_origins||!limits.maximum_candidates)return result;
+  const bool zero_edge=std::any_of(ops.begin(),ops.end(),[](const auto& op) {
+    return op.kind==IrKind::IndirectCondJump && op.opcode>=0x70 && op.opcode<=0x73;
+  });
+  const bool callback=std::any_of(ops.begin(),ops.end(),[](const auto& op) {
+    return op.kind==IrKind::Store && op.opcode>=0x47 && op.opcode<=0x4e &&
+        std::any_of(op.meta.roles.begin(),op.meta.roles.end(),[](const auto& role) {
+          return role.starts_with("selector-sunk-literal-id:");
+        });
+  });
+  if(!zero_edge || !callback) return result;
+  Model m(ops,context,limits);if(!m.valid)return result;
+  std::vector<std::optional<LazySignPlan>> signs;
+  for(Id i=0;i<ops.size();++i)if(ops[i].opcode==0x32)if(auto plan=lazy_sign_plan(m,i,limits)){
+    signs.push_back(std::move(*plan));if(signs.size()>=2U)break;
+  }
+  // Null completion has its own complete totality/death/control proof. Do
+  // not require an unrelated lazy sign rewrite just to admit that proof.
+  // Historical projection alternatives keep their original order and budget.
+  signs.push_back(std::nullopt);
+  Id null_return=ops.size();int pc=0;for(Id i=0;i<ops.size();++i){
+    if(pc==0 && ops[i].kind==IrKind::Return && ops[i].opcode==0x52)null_return=i;
+    pc+=cells_per_op(ops[i]);
+  }
+  if(null_return==ops.size())return result;
+  const auto lift=analyze_post_layout_automatic_entry_lift_with_indirect_store_facts(m.items,m.flow,limits.maximum_work);if(!lift)return result;
+  std::vector<Id> sources;std::map<Id,std::vector<int>> query;
+  for(Id i=0;i<ops.size();++i)if(i!=null_return&&ops[i].kind==IrKind::Return&&ops[i].opcode==0x52&&zero_return_entry(m,i)){
+    sources.push_back(i);query[m.item[i]]={0,1,2,3,4,5,6,7,8,9,10,11,12,13,14};
+  }
+  if(sources.empty())return result;
+  const auto policy=context.options.ordinary_decimal_keyboard_input?NumericRangeInputPolicy::ValidatedOrdinaryDecimalInput:NumericRangeInputPolicy::ValidatedRegisterTransport;
+  const auto registers=prove_post_layout_register_numeric_values(m.items,m.flow,*lift,query,limits.runtime_preloads,limits.maximum_work,policy);
+  std::vector<Id> source_items;for(const auto source:sources)source_items.push_back(m.item[source]);
+  const auto stacks=prove_post_layout_stack_numeric_values(m.items,m.flow,*lift,source_items,limits.runtime_preloads,limits.maximum_work,policy);
+  if(registers.exhausted||stacks.exhausted)return result;
+  std::set<std::string> names;for(const auto& op:ops)if(op.kind==IrKind::Label)names.insert(op.name);
+  std::string null_label="__nullable_callback_plain_return";while(names.contains(null_label))null_label+='_';
+  const auto unary=[](){IrOp op;op.kind=IrKind::Plain;op.opcode=0x32;op.meta.mnemonic=opcode_by_code(0x32).name;return op;};
+  for(const auto source:sources)for(Id store=0;store<ops.size();++store){
+    if(ops[store].kind!=IrKind::Store||ops[store].opcode<0x47||ops[store].opcode>0x4e||
+        !std::any_of(ops[store].meta.roles.begin(),ops[store].meta.roles.end(),[](const auto& role){return role.starts_with("selector-sunk-literal-id:");}) || ops[store].meta.raw)continue;
+    const int selector=ops[store].opcode&15;const auto selector_name=ops[store].register_name;
+    LivenessOptions life;life.discover_toggle_projection_signs=true;
+    for(const auto& word:*limits.runtime_preloads)if(!word.setup_expression&&!word.setup_expression_text&&!word.setup_target_name)
+      life.equal_entry_value_classes.emplace(word.register_name,"literal:"+word.value);
+    const GuardedOldWordQuery death{source,selector_name};const auto dead=analyze_dead_old_words(ops,m.flow,{death},life,limits.maximum_work);
+    if(dead.exhausted||!dead.dead_words.contains(death))continue;
+    std::vector<Id> after;std::set<int> body_reads;bool total=true,reached=false;
+    for(Id s=0;s<m.instruction.size();++s)if(m.instruction[s]==source){
+      if(!registers.values.contains(s)||!stacks.stack_before_state.contains(s)){total=false;break;}
+      auto proof=total_nullable_body(m,store,selector,stacks.stack_before_state.at(s),registers.values.at(s),
+          m.flow.execution_states[s].return_stack.size(),limits);
+      if(!proof.proved){total=false;break;}body_reads.insert(proof.reads.begin(),proof.reads.end());
+      after.insert(after.end(),m.flow.execution_successors[s].begin(),m.flow.execution_successors[s].end());reached=true;
+    }
+    if(!reached||!total||after.empty()||!prove_post_layout_stack_state_equality(m.items,m.flow,after,
+        {{false,false,false,false},false,false},{.refine_runtime_selectors=false,.numeric_entry_closed=true,
+         .transport_closed_entry_through_control=true,.use_indirect_store_entry_facts=true}))continue;
+    Id first_label=source;while(first_label>0&&ops[first_label-1U].kind==IrKind::Label)--first_label;
+    if(first_label==source)continue;
+    for(const auto& sign:signs){
+      if(sign && (sign->reg==selector||body_reads.contains(sign->reg)))continue;
+      ContextualCopyTransportCandidate candidate;auto& out=candidate.transformation;
+      for(Id i=0;i<ops.size();++i){
+        if(i==source||(sign && i==sign->projection)||(i>=first_label&&i<source))continue;
+        if(i==null_return){IrOp label;label.kind=IrKind::Label;label.name=null_label;out.ops.push_back(std::move(label));}
+        if(i==store)for(Id j=first_label;j<source;++j)out.ops.push_back(ops[j]);
+        if(sign && sign->calls.contains(i))out.ops.push_back(unary());
+        auto op=ops[i];
+        if((op.kind==IrKind::IndirectCall||op.kind==IrKind::IndirectJump)&&
+            (op.opcode&15)==selector&&op.meta.indirect_flow_targets)
+          op.meta.indirect_flow_targets->push_back(null_label);
+        out.ops.push_back(std::move(op));if(sign && sign->reads.contains(i))out.ops.push_back(unary());
+      }
+      candidate.target_origins.emplace(null_label,0);
+      out.applied=1;
+      out.optimizations.push_back({sign ? "contextual-nullable-callback-projection-composition" :
+          "contextual-nullable-readonly-return-completion",
+          std::string(sign ? "Composed lazy unit projection with a " : "Independently proved a ") +
+          "zero-selector readonly return completion. Proved every extra decoder/hoisted-call X1/X2 effect, "
+          "canonical-zero entry, exact readonly arithmetic totality, balanced bounded calls and private-selector death. "
+          "Address/data equations, the actual null return at 00 and every noncanonical helper frame remain mandatory final-layout obligations."});
+      result.push_back(std::move(candidate));if(result.size()>=limits.maximum_candidates)return result;
+    }
   }
   return result;
 }

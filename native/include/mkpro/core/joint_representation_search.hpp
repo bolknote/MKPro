@@ -22,6 +22,13 @@ std::vector<ProvedSearchTransition<LayoutSearchArtifact>>
 zero_underflow_conditional_return_layout_transactions(
     const LayoutSearchArtifact& artifact, const CompileOptions& options);
 
+// Complete-root composition of argument ABI, lazy projection, null callback
+// completion and selector/literal placement. Only smaller closed artifacts
+// escape; the compiler still materializes and statically validates each one.
+std::vector<ProvedSearchTransition<LayoutSearchArtifact>>
+nullable_callback_projection_layout_transactions(
+    const LayoutSearchArtifact& artifact, const CompileOptions& options);
+
 // Preserve an already proved checkpoint across memory-model search roots only
 // when opcode effects, selectors and exact execution/return contexts agree.
 // This is not a relocation or permission to reinterpret short-side aliases.

@@ -2,6 +2,7 @@
 #include "mkpro/core/passes/selector_charge_literal_sinking.hpp"
 #include "mkpro/core/emit/machine_emitter.hpp"
 #include "mkpro/core/joint_representation_search.hpp"
+#include "mkpro/core/shared_helper_dual_mode_layout.hpp"
 #include "mkpro/core/late_bound_decimal_selector.hpp"
 #include "mkpro/core/natural_target_component_layout.hpp"
 #include "mkpro/emulator/mk61.hpp"
@@ -153,6 +154,18 @@ void deferred_joint_contracts() {
                 core::passes::prove_deferred_selector_data_literal_layout(
                     pending.front(), final.items, flow),
             "final geometry, hardware return and every literal entry must be proved");
+    require(!core::shared_helper_dual_mode_closure_rejection_reason(final.items),
+            "published shared tail retains both exact hardware entry modes");
+    auto canonical_entry = final.items;
+    std::size_t lost_counters = 0;
+    for (auto& item : canonical_entry) if (item.kind == MachineItemKind::Address &&
+        item.formal_opcode && formal_address_info(*item.formal_opcode).kind != FormalAddressKind::Official) {
+      item.formal_opcode.reset(); ++lost_counters;
+    }
+    require(lost_counters != 0 && core::shared_helper_dual_mode_closure_rejection_reason(canonical_entry).has_value(),
+            "a stale shared-tail marker cannot authorize an ordinary divergent call");
+    require(!core::shared_helper_dual_mode_closure_rejection_reason(final.items),
+            "a rejected sibling does not poison the exact completed-artifact cache");
     for (const std::string seed : {"0", "-7", "3.25"}) {
       const std::vector<PreloadReport> input{{.register_name = "0", .value = seed}};
       require(run(original, seed, input, true) == run(final.items, seed, input, true),

@@ -61,6 +61,17 @@ struct PostLayoutExecutionState {
   bool operator==(const PostLayoutExecutionState&) const = default;
 };
 
+// A present counter is not necessarily a dark/side-space execution. Ordinary
+// physical states carry their canonical encoded counter too. Only aliases
+// have a noncanonical successor geometry that requires a fixed footprint.
+// A null counter denotes the separate unplaced logical space, never an alias.
+inline bool has_noncanonical_post_layout_counter(
+    const PostLayoutExecutionState& state, AddressSpaceModel model) {
+  if (!state.formal_opcode) return false;
+  return state.address < 0 || state.address >= official_program_step_limit(model) ||
+      *state.formal_opcode != official_address_to_opcode(state.address, model);
+}
+
 enum class PostLayoutExecutionEdgeKind {
   Fallthrough,
   DirectTarget,
@@ -188,6 +199,11 @@ struct PostLayoutExecutionRelocationOptions {
   // Indirect conditions, FL counters, raw/manual commands and arbitrary
   // opcode replacements are not authorized by this certificate.
   std::vector<std::size_t> inverted_direct_conditional_items;
+  // Complementary R7..Re indirect conditions exchange their labelled edges.
+  // Both outcomes preserve stack/X1/X2; canonical counters and complete return
+  // transport are rechecked here. The caller separately proves the delivered
+  // selector word immutable, its data projection and final target rebinding.
+  std::vector<std::size_t> inverted_indirect_conditional_items;
   // A hardware continuation may bypass an existing unconditional jump.
   // Admit only a single-target BP with no external/manual observation; calls,
   // returns, conditions and state-changing instructions are never transparent.

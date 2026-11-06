@@ -91,7 +91,7 @@ inline std::optional<std::map<int, const PreloadReport*>> joint_preload_index(
 
 inline bool joint_literal_word(const PreloadReport& word) {
   return !word.counts_against_program && !word.setup_target_name &&
-      !word.setup_expression && !word.setup_expression_text && !word.setup_source_line;
+      !word.setup_expression && !word.setup_expression_text;
 }
 
 // A representation proof can change the literal word after family allocation.

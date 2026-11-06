@@ -782,7 +782,9 @@ static PostLayoutNumericRangeProof prove_numeric_ranges_on_graph(
     const GuardedRecallRanges* guarded = nullptr,
     std::set<std::size_t>* recalled_states = nullptr, bool complete_stack = false,
     const std::map<std::size_t, int>* imported_signs = nullptr,
-    bool precise_memory_values = false) {
+    bool precise_memory_values = false,
+    const std::map<std::size_t, std::vector<int>>* register_queries = nullptr,
+    std::map<std::size_t, std::map<int, OrdinaryStackValue>>* register_results = nullptr) {
   PostLayoutNumericRangeProof result;
   const auto count = flow.execution_states.size();
   if (!flow.proved || automatic_entry_lift.size() != count ||
@@ -1435,6 +1437,8 @@ static PostLayoutNumericRangeProof prove_numeric_ranges_on_graph(
     if (const auto found = contexts.find(item); found != contexts.end())
       for (const auto state : found->second) {
         for (int slot = 0; slot < (complete_stack ? 4 : 1); ++slot) (void)before(state, slot);
+        if (register_queries) if (const auto query = register_queries->find(item); query != register_queries->end())
+          for (int reg : query->second) (void)before(state, 4 + reg);
         const int code = items[item].opcode, family = code & 0xf0, reg = code & 15;
         if (complete_stack && precise_memory_values && (family == 0xb0 || family == 0xd0) && reg < 15)
           (void)before(state, 4 + reg);
@@ -1562,6 +1566,11 @@ static PostLayoutNumericRangeProof prove_numeric_ranges_on_graph(
     if (found == contexts.end())
       continue;
     for (const auto state : found->second) {
+      if (register_queries && register_results) if (const auto query = register_queries->find(item); query != register_queries->end())
+        for (int reg : query->second) {
+          const auto& value = cache.at(Key{state, 4 + reg});
+          (*register_results)[state][reg] = {value.range, value.grounded && value.ordinary_value, value.enclosure};
+        }
       if (complete_stack) {
         const int code = items[item].opcode, family = code & 0xf0, reg = code & 15;
         if (precise_memory_values && (family == 0xb0 || family == 0xd0) && reg < 15) {
@@ -1780,6 +1789,28 @@ PostLayoutNumericRangeProof prove_post_layout_bounded_stack_numeric_values(
   }
   for (const auto& [state, slots] : result.stack_before_state)
     if (slots[0].range) result.x_before_state.emplace(state, *slots[0].range);
+  return result;
+}
+
+
+PostLayoutRegisterNumericProof prove_post_layout_register_numeric_values(
+    const std::vector<MachineItem>& items, const AuthoritativePostLayoutControlFlow& flow,
+    const std::vector<bool>& lift, const std::map<std::size_t,std::vector<int>>& queries,
+    const std::vector<PreloadReport>* preloads, std::size_t maximum_work,
+    NumericRangeInputPolicy policy) {
+  PostLayoutRegisterNumericProof result;
+  if (queries.empty()) return result;
+  std::vector<std::size_t> items_requested;
+  for (const auto& [item, regs] : queries) {
+    if (item >= items.size() || regs.empty()) return result;
+    for (int reg : regs) if (reg < 0 || reg >= 15) return result;
+    items_requested.push_back(item);
+  }
+  const auto proof = prove_numeric_ranges_on_graph(items, flow, lift, items_requested,
+      preloads, maximum_work, policy, nullptr, nullptr, nullptr, nullptr, false,
+      nullptr, true, &queries, &result.values);
+  result.work = proof.work; result.exhausted = proof.exhausted;
+  if (result.exhausted) result.values.clear();
   return result;
 }
 

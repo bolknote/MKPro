@@ -115,7 +115,10 @@ void for_each_deferred_register_web_recoloring(const std::vector<IrOp>& ops, con
     const std::map<std::string, int>& encoded_origins,
     const RegisterWebRecoloringConsumer& consume,
     const std::vector<PreloadReport>* runtime_preloads = nullptr,
-    bool allow_equal_preload_homes = false);
+    bool allow_equal_preload_homes = false,
+    // Equal-width, complete-artifact mode only. Retain pending selector
+    // equations and exact direct formal frames until final layout closure.
+    bool preserve_direct_formal_contexts = false);
 IrPass register_web_copy_coalesce_pass();
 IrPass register_coalesce_pass();
 

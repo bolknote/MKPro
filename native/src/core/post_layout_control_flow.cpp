@@ -2132,6 +2132,56 @@ PostLayoutExecutionRelocationProof prove_post_layout_execution_relocation(
       return reject("condition inversion exposes hidden X2 on a continuation");
   }
 
+
+  std::set<std::size_t> inverted_indirect_conditions;
+  const auto canonical_entry = [](const PostLayoutExecutionState& state,
+                                  AddressSpaceModel model) {
+    if (!state.formal_opcode) return true;
+    const auto address = formal_address_info(*state.formal_opcode, model);
+    return address.kind == FormalAddressKind::Official && address.actual == state.address;
+  };
+  for (const auto source : options.inverted_indirect_conditional_items) {
+    const auto target = mapped_item(source);
+    if (source >= before.size() || !target ||
+        !inverted_indirect_conditions.insert(source).second ||
+        inverted_direct_conditions.contains(source) || converted_direct_flows.contains(source) ||
+        before[source].kind != MachineItemKind::Op || after[*target].kind != MachineItemKind::Op ||
+        before[source].raw || after[*target].raw ||
+        before[source].manual_interaction || after[*target].manual_interaction)
+      return reject("invalid indirect-condition inversion");
+    const int old_code = before[source].opcode, new_code = after[*target].opcode;
+    const int reg = old_code & 15, family = old_code & 0xf0;
+    const int inverse = family == 0x70 ? 0xe0 : family == 0xe0 ? 0x70 :
+                        family == 0x90 ? 0xc0 : family == 0xc0 ? 0x90 : -1;
+    if (reg < 7 || reg > 14 || inverse < 0 || new_code != inverse + reg)
+      return reject("indirect inversion requires a complementary nonmutating R7..Re condition");
+    // The edge exchange changes which entry carries a counter. It is valid
+    // only for canonical entries, never by reinterpreting a short/dark path.
+    for (const auto* control : {&before_control, &after_control}) {
+      bool reached = false;
+      const auto item = control == &before_control ? source : *target;
+      for (std::size_t s = 0; s < control->execution_states.size(); ++s) {
+        const auto& state = control->execution_states[s];
+        if (state.item_index != item) continue;
+        reached = true;
+        if (!canonical_entry(state, control->address_space_model))
+          return reject("indirect inversion cannot exchange a formal fetch window");
+        bool fallthrough = false, branch = false;
+        for (const auto& edge : control->execution_edges[s]) {
+          if (edge.target_state >= control->execution_states.size() ||
+              !canonical_entry(control->execution_states[edge.target_state], control->address_space_model))
+            return reject("indirect inversion cannot canonicalize a side entry");
+          if (edge.kind == PostLayoutExecutionEdgeKind::Fallthrough) fallthrough = true;
+          else if (edge.kind == PostLayoutExecutionEdgeKind::IndirectTarget) branch = true;
+          else return reject("indirect inversion has an unsupported edge");
+        }
+        if (!fallthrough || !branch || control->execution_edges[s].size() != 2U)
+          return reject("indirect inversion requires two exact singleton alternatives");
+      }
+      if (!reached) return reject("indirect inversion has no rooted execution context");
+    }
+  }
+
   using EdgeKey = std::tuple<PostLayoutExecutionEdgeKind, std::size_t, std::vector<int>>;
   using EdgeGroups = std::map<EdgeKey, std::vector<PostLayoutExecutionEdge>>;
   const auto edge_groups = [&](const AuthoritativePostLayoutControlFlow& control,
@@ -2202,6 +2252,11 @@ PostLayoutExecutionRelocationProof prove_post_layout_execution_relocation(
           kind = PostLayoutExecutionEdgeKind::DirectTarget;
         else
           return std::nullopt;
+      }
+      if (remap && inverted_indirect_conditions.contains(control.execution_states.at(state_index).item_index)) {
+        if (kind == PostLayoutExecutionEdgeKind::IndirectTarget) kind = PostLayoutExecutionEdgeKind::Fallthrough;
+        else if (kind == PostLayoutExecutionEdgeKind::Fallthrough) kind = PostLayoutExecutionEdgeKind::IndirectTarget;
+        else return std::nullopt;
       }
       if (remap && converted_direct_flows.contains(
                        control.execution_states.at(state_index).item_index) &&
@@ -2324,7 +2379,7 @@ PostLayoutExecutionRelocationProof prove_post_layout_execution_relocation(
     const auto& new_item = after.at(new_state.item_index);
     const bool converted_direct = converted_direct_flows.contains(old_state.item_index);
     if (old_item.kind != MachineItemKind::Op || new_item.kind != MachineItemKind::Op ||
-        (!converted_direct && !retargeted_reads.contains(old_state.item_index) && !inverted_direct_conditions.contains(old_state.item_index) &&
+        (!converted_direct && !retargeted_reads.contains(old_state.item_index) && !inverted_direct_conditions.contains(old_state.item_index) && !inverted_indirect_conditions.contains(old_state.item_index) &&
          old_item.opcode != new_item.opcode) ||
         old_item.raw != new_item.raw ||
         old_item.stop_disposition != new_item.stop_disposition ||

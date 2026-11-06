@@ -6278,6 +6278,109 @@ return-context gates may replace the incumbent. JSON/explain records the seed
 change and whether the decimal-input contract was required. There is no source
 name, game, coordinate formula or fixed replacement constant recognizer.
 
+### Deferred indirect conditional arm exchange
+
+A complementary condition through an immutable R7..Re word may exchange its
+fallthrough suffix with a separately closed target component, without adding a
+cell. This is a topology alternative, not a locally profitable optimization.
+It participates in the representation/allocation/layout transaction; unchanged
+candidates and the existing direct-condition search keep their own budgets.
+
+The first family requires a single flow consumer, an exact delivered word,
+unchanged selector write-back and a separately certified movable data projection.
+Raw instructions, mutating low registers, short/dark entry counters, unclosed
+arms, competing consumers and observable exact-word changes reject. A new label
+carries the OLD encoded origin, never its tentative physical position. Final
+layout must rebind it and recheck the complete hardware CFG and entry protocol.
+
+The control certificate checks complementary opcode families, both labelled
+edges, all rooted invocation/return contexts and canonical entry counters. The
+indirect pair preserves stack/X1/X2 on both outcomes; direct F-condition X2
+convergence remains a separate, unchanged requirement. ROM tests exercise both
+signs, zero, fractional and raw BCD words, nested calls, hidden-state observation
+and stale/aliased/observed selector negatives. Neutral alternatives are not
+reported as code-size savings.
+
+
+### Context-qualified lazy projection and nullable callback completion
+
+A shared helper may take an argument from its existing memory home instead of
+materializing it through caller recall, callee swap and store. Fallthrough and
+saved-return entries retain the store; bypassing callers independently prove
+the supplied memory view. This is either exact canonical-word equality or a
+closed ordinary positive-integral recall/FL epoch relation. The latter permits
+the hardware's denormalized counter representation only while all observations
+normalize it or perform a matching FL step, up to a retained overwrite. Raw or
+fractional counters, indirect aliases and physical-word observations reject.
+
+A carrier may remain unprojected only in definition epochs whose observations
+apply the same projection. Source-unit reaching definitions and packed-word sign
+proofs identify eligible sign epochs. Callers with ordinary observations retain
+normalization; eligible recalls decode locally. Independent universal proofs
+cover every changed stack slot, physical last-X and entry shadow. A removed
+projection is a barrier, never a circular convergence witness.
+
+A canonical zero equality edge may enter a bounded readonly callback traversal
+with a private null selector and a plain return at physical 00. Added arithmetic
+is proved total over every original caller domain, calls remain balanced and
+within hardware depth, and the changed private selector is dead before future
+reads. Demanded memory-value queries use the existing numeric fixed point on
+the unchanged CFG; fractions, unknown input and raw words keep their distinct
+contracts. There is no sampling, coordinate restriction or game recognizer.
+
+Both proofs use one original graph and disjoint data effects. Projection, null
+completion, literal coalescing, ABI and placement are priced as one bounded
+transaction. A semantic zero entry requires fresh normalized subtraction, a
+just-stored low selector, the labelled equality edge and a stack continuation
+proof. Publication rechecks address 99, data/address equality, frozen formal
+contexts, actual callback words and return boundaries. Only a genuinely smaller
+fully finalized program can replace the ordinary incumbent.
+
+The explicit ordinary-decimal keyboard contract is part of compile-cache
+identity and must reach completed-root continuation proofs. Refining an
+unrestricted artifact under that requested contract is admissible; reusing a
+contract-dependent artifact for unrestricted input is not. The public contract
+path prices compound ABI/projection/callback/layout edges on the artifact
+produced by its initial transformation, rather than terminating after that
+first locally profitable edge. Regression coverage compiles the unchanged
+4x4 source through the public API and checks both contract cache directions.
+
+Final callee-hole validation re-derives semantic-zero charges from the delivered
+CFG, rather than accepting the layout report. It checks the physical 99 entry,
+the actual plain return at 00 and canonical stable-selector callbacks. Ordinary
+entry aliases keep their historical annotation path; a new zero leaf is added
+only after this fresh proof. Matching text or a conservative target annotation
+alone does not create a new dispatch mode.
+
+Finite-argument promotion may compete jointly with source-level constant
+rematerialization before register coloring. Delivered initializer provenance
+can demand that alternative even after the old initializer became an address.
+The alternative must carry both existing transformation proofs and a freshly
+verified interference graph; retired provenance is not permission to borrow its
+former physical register. The owning ABI of the winning complete artifact is
+preserved in subsequent continuations. Unknown manual input without the
+ordinary-decimal contract does not enter this additional completion lane.
+
+The same zero-underflow rematerialization now accepts the ordinary emitted
+decimal literal as well as an immutable constant recall. A candidate source
+root can omit that literal from its preload pool before coloring, without
+reserving the retired slot. Every literal command needs exclusive same-frame
+entry, the source word needs a normalized-zero certificate, and the fixed
+destination word is ROM-checked. The literal's different stack lift, physical
+last-X and entry shadow require a separate universal continuation proof;
+rewritten commands are barriers, not convergence witnesses. Typed zero guesses,
+interior entries, live hidden state and unclosed formal geometry reject. The
+compiler supplies the unchanged authoritative CFG and exact indirect aliases
+to both forms, rather than guessing that an indexed store cannot touch a pool.
+
+The added source root also retains an independent compact allocation without
+freezing the old instruction classes. Its fresh colors regenerate source
+lowering, including destructive low selectors and their explicit high-register
+alternatives; final instruction-class, alias, loop and initializer checks run
+again on the emitted program. The class-preserving source root is retained,
+and only complete final-cell pricing can select the regenerated alternative.
+
+
 The ordinary-decimal compilation first completes the unrestricted optimizer
 portfolio unchanged. The new contract is applied to that retained winner at
 the complete-artifact boundary: a certified sharing inverse, seed translation,
@@ -6314,3 +6417,76 @@ and scientific spellings are not interchangeable. The certificate does not
 manufacture a canonical memory or integer-selector class. Input-domain options
 participate in candidate/result caches and final-layout fingerprints; the
 explicit contract is also declared in JSON/explain before any reduction wins.
+
+### Formal-safe joint copy transport
+
+For over-budget artifacts with formal call operands, an independent complete
+lane composes contextual copy transport, epoch allocation, finite representation
+and literal pooling. It supplies the existing command-origin and rooted-return
+relocation proof at admission and retains the historical lane unchanged. Neither
+formal addressing nor private terminal registers are inferred from game identity.
+The lane is demand-limited to internal programs or an explicit ordinary-decimal
+keyboard contract. It does not change any stop's observation contract. Real
+transport proposals are required before allocation/layout expansion; an empty
+formal proposal set never replays unrelated return portfolios.
+
+Formal footprints distinguish the encoded counter from its physical projection.
+A canonical `00..A4` counter is ordinary execution, not a side-space alias.
+The independent complete-artifact lane freezes noncanonical contexts while
+retaining every encoded canonical entry as a hard physical-address equation;
+ordinary continuations remain available to joint representation/layout.
+Legacy clients retain their stronger whole-frame freeze and its negative tests.
+The same predicate is used by finite-state encoding and component placement,
+with target-model-specific treatment of A5..B1. Full delivered CFG/return
+relocation remains mandatory; no frozen side trace may change width.
+
+### Closed numeric domains through joint placement
+
+A proved preloaded raw sign orbit may carry an immutable producer-owned numeric
+layout certificate. This is not a source role or an arithmetic-rewrite permit.
+Before admitting opaque bytes, placement freshly checks the complete delivered
+initializer owners, every carrier read/write and indirect alias, all raw
+commands, the normalized-power product inputs, and the exact model/input
+contract. Only the already-certified negation, sign-decoding and right-product
+language is admitted. New raw operations or changed owned words invalidate it.
+Unrelated, separately proved ordinary literal pools may coexist with the orbit.
+The ordinary scalar optimizer still treats these instructions as barriers.
+
+The joint search also retains an independent fair product of hardware cursor
+affinities, self-indexed reload/copy homes and connected later-definition
+epochs. These are requests, not value equalities; the existing complete web,
+alias, input and hardware proofs remain mandatory. Historical requests and
+budgets are unchanged. A separate late encoding lane rechecks finite states
+after allocation, copy cleanup and literal pooling, then closes all selector,
+formal-footprint, CFG and return constraints together. No game identities,
+fixed source formulas or hand-picked codewords are recognized.
+
+### Equal-width allocation before formal layout closure
+
+Complete-artifact joint search may recolor reaching-definition webs while stable
+indirect selector words still name their original command identities. This mode
+is separate from ordinary copy deletion and is opt-in: it requires the runtime
+preload owner, all selector-origin equations, and the authoritative control-flow
+options. Direct formal counters retain their exact PC and return-frame contexts.
+The selected execution graphs before and after recoloring must be identical;
+executed noncanonical opcode/operand bytes may not change. Raw operations and
+incomplete owners remain barriers. No command is removed or moved by allocation.
+The final layout must independently close every selector word and formal entry
+address before the candidate can compete on complete program size.
+
+### Operand identity and preload provenance during joint search
+
+For a non-opaque numeric operand with an explicit formal byte, the hardware
+counter is authoritative. Before introducing a symbolic command label, normalize
+its stale numeric presentation to that byte's physical projection in the owning
+memory model. Keep the byte, including its dark/side entry mode, unchanged.
+An over-window logical target with a discarded ordinary resolver cache remains
+in the separate unplaced address space. Symbolic targets and opaque operands
+retain their existing contracts.
+
+A preload's `setup_source_line` is diagnostic provenance, not a runtime effect.
+It does not make a delivered literal dynamic. Program-time setup, symbolic setup
+targets and actual setup expressions remain barriers. Reclaiming an old physical
+home still requires complete entry liveness, unchanged owner/value provenance,
+and independent stack/X1/X2 nonobservation; a source line alone must neither
+forbid nor authorize that transformation.

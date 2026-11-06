@@ -13,6 +13,7 @@
 #include <optional>
 #include <set>
 #include <string_view>
+#include <tuple>
 
 namespace mkpro::core::passes {
 namespace {
@@ -59,13 +60,14 @@ Index index_of(const std::vector<MachineItem>& items) {
 
 // Ordinary numeric operands become labels before any speculative movement.
 // No formal/side-space operand is reinterpreted as a linear address.
-std::optional<std::vector<MachineItem>> symbolize(const std::vector<MachineItem>& items) {
+std::optional<std::vector<MachineItem>> symbolize(const std::vector<MachineItem>& items, bool preserve_direct_formal = false) {
   std::map<int, std::size_t> commands;
   std::set<std::string> names;
   int address = 0;
   for (std::size_t i = 0; i < items.size(); ++i) {
     const auto& item = items[i];
-    if (item.raw || item.formal_opcode || item.indirect_flow_formal_targets)
+    if (item.raw || item.indirect_flow_formal_targets || (item.formal_opcode &&
+        (!preserve_direct_formal || item.kind != MachineItemKind::Address)))
       return std::nullopt;
     if (item.kind == MachineItemKind::Label) names.insert(item.name);
     else {
@@ -106,6 +108,96 @@ std::optional<std::vector<MachineItem>> symbolize(const std::vector<MachineItem>
     named.push_back(std::move(result[i]));
   }
   return named;
+}
+
+
+bool frozen_formal_execution(const std::vector<MachineItem>& before_items,
+    const std::vector<MachineItem>& after_items,
+    const AuthoritativePostLayoutControlFlow& before,
+    const AuthoritativePostLayoutControlFlow& after,
+    const std::vector<std::optional<std::size_t>>& mapping) {
+  if (!before.proved || !after.proved || mapping.size()!=before_items.size() ||
+      before.address_space_model!=after.address_space_model) return false;
+  const auto opaque=[&](const PostLayoutExecutionState& state){
+    if(!state.formal_opcode)return false;
+    try{return formal_address_info(*state.formal_opcode,before.address_space_model).kind!=FormalAddressKind::Official;}
+    catch(...){return true;}
+  };
+  if(std::none_of(before.execution_states.begin(),before.execution_states.end(),opaque))
+    return std::none_of(after.execution_states.begin(),after.execution_states.end(),opaque);
+  const auto old_index=index_of(before_items), new_index=index_of(after_items);
+  std::map<int,std::size_t> old_cells;
+  std::map<int,int> canonical_codes;
+  for(int code=0;code<=255;++code)try{
+    const auto info=formal_address_info(code,before.address_space_model);
+    if(info.kind==FormalAddressKind::Official)canonical_codes.emplace(info.actual,code);
+  }catch(...){}
+  for(std::size_t i=0;i<before_items.size();++i)
+    if(before_items[i].kind!=MachineItemKind::Label)old_cells.emplace(old_index.addresses[i],i);
+  using Key=std::tuple<std::size_t,int,std::vector<int>,std::optional<int>,
+      std::vector<std::optional<int>>,std::optional<std::size_t>>;
+  const auto key=[](const PostLayoutExecutionState& s){return Key{s.item_index,s.address,
+      s.return_stack,s.formal_opcode,s.formal_return_stack,s.operand_item_index};};
+  std::map<Key,std::size_t> after_states;
+  for(std::size_t i=0;i<after.execution_states.size();++i){
+    const auto [at,inserted]=after_states.emplace(key(after.execution_states[i]),i);
+    if(!inserted)at->second=after.execution_states.size();
+  }
+  const auto mapped_state=[&](PostLayoutExecutionState s)->std::optional<std::size_t>{
+    if(s.item_index>=mapping.size() || !mapping[s.item_index])return std::nullopt;
+    const auto target=*mapping[s.item_index];
+    if(target>=after_items.size())return std::nullopt;
+    const bool side=opaque(s);
+    if(side && (s.address!=new_index.addresses[target] || s.operand_item_index ||
+        before_items[s.item_index].kind!=MachineItemKind::Op ||
+        after_items[target].kind!=MachineItemKind::Op ||
+        before_items[s.item_index].opcode!=after_items[target].opcode))return std::nullopt;
+    s.item_index=target;s.address=new_index.addresses[target];
+    if(s.formal_opcode && !side){
+      if(!canonical_codes.contains(s.address))return std::nullopt;
+      s.formal_opcode=canonical_codes.at(s.address);
+    }
+    if(!s.formal_return_stack.empty() && s.return_stack.size()!=s.formal_return_stack.size())return std::nullopt;
+    for(std::size_t j=0;j<s.return_stack.size();++j){
+      const auto cell=old_cells.find(s.return_stack[j]);
+      if(cell==old_cells.end() || !mapping[cell->second])return std::nullopt;
+      const int address=new_index.addresses[*mapping[cell->second]];
+      if(j<s.formal_return_stack.size() && s.formal_return_stack[j]){
+        try{
+          const auto info=formal_address_info(*s.formal_return_stack[j],before.address_space_model);
+          if(info.kind==FormalAddressKind::Official){
+            if(!canonical_codes.contains(address))return std::nullopt;
+            s.formal_return_stack[j]=canonical_codes.at(address);
+          }else if(address!=s.return_stack[j])return std::nullopt;
+        }catch(...){return std::nullopt;}
+      }
+      s.return_stack[j]=address;
+    }
+    if(s.operand_item_index){
+      if(*s.operand_item_index>=mapping.size() || !mapping[*s.operand_item_index])return std::nullopt;
+      s.operand_item_index=*mapping[*s.operand_item_index];
+    }
+    const auto found=after_states.find(key(s));
+    return found==after_states.end() || found->second>=after.execution_states.size()
+        ?std::nullopt:std::optional<std::size_t>{found->second};
+  };
+  std::set<std::size_t> formal_after;
+  for(std::size_t i=0;i<before.execution_states.size();++i){
+    if(!opaque(before.execution_states[i]))continue;
+    const auto target=mapped_state(before.execution_states[i]);
+    if(!target)return false;
+    formal_after.insert(*target);
+    if(before.execution_edges[i].size()!=after.execution_edges[*target].size())return false;
+    for(const auto& edge:before.execution_edges[i]){
+      const auto endpoint=mapped_state(before.execution_states[edge.target_state]);
+      if(!endpoint || std::none_of(after.execution_edges[*target].begin(),after.execution_edges[*target].end(),
+          [&](const auto& actual){return actual.target_state==*endpoint && actual.kind==edge.kind &&
+              actual.indirect_formal_opcode==edge.indirect_formal_opcode;}))return false;
+    }
+  }
+  for(std::size_t i=0;i<after.execution_states.size();++i)
+    if(opaque(after.execution_states[i]) && !formal_after.contains(i))return false;
+  return true;
 }
 
 struct Family {
@@ -180,6 +272,9 @@ std::optional<Family> family_at(const std::vector<MachineItem>& items,
       if (flow.execution_states[successor].item_index != store) continue;
       auto incoming = flow.execution_states[state].item_index;
       const int transfer = items[incoming].opcode;
+      if (transfer >= 0x70 && transfer <= 0x73 &&
+          prove_selector_zero_flow_sunk_literal_entry(items, flow, store, incoming, coalesced))
+        continue;
       // Natural-target layout can shorten this same proved transfer to an
       // immutable indirect call/jump. Numeric charge provenance follows its
       // authoritative edge, not the original two-cell spelling.
@@ -1113,7 +1208,7 @@ prepare_deferred_selector_data_literal_layouts(
     return result;
   // The owner supplies symbolic command identities and the encoded origins
   // of its preloads. Do not invent new labels or reinterpret formal aliases.
-  const auto named = symbolize(items);
+  const auto named = symbolize(items, true);
   if (!named || named->size() != items.size()) return result;
   const auto bound = rebind_late_bound_decimal_selectors(
       *named, {.minimum_target_address = 0, .maximum_target_address = 99});
@@ -1153,7 +1248,8 @@ prepare_deferred_selector_data_literal_layouts(
     // Only command identities are transported here. The owning transaction
     // must still close every preload, callback and the new literal equation.
     if (!after.proved || !transport_is_exact(
-            before, after, mapping, &bound.items, reg, deferred_companions))
+            before, after, mapping, &bound.items, reg, deferred_companions) ||
+        !frozen_formal_execution(bound.items, candidate.items, before, after, mapping))
       continue;
     result.push_back(std::move(candidate));
     if (result.size() == maximum_candidates) break;

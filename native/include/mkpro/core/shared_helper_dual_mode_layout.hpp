@@ -171,4 +171,10 @@ SharedHelperDualModeLayoutResult finalize_shared_helper_dual_mode_layout(
     // the current provisional positions. Every non-runtime family is required.
     const std::map<std::string, int>* encoded_selector_targets = nullptr);
 
+// Control/layout boundary for an already merged continuation. This rechecks
+// its actual two entry modes; source data/preload proofs remain independent.
+std::optional<std::string> shared_helper_dual_mode_closure_rejection_reason(
+    const std::vector<MachineItem>& items,
+    AddressSpaceModel model = AddressSpaceModel::Standard);
+
 } // namespace mkpro::core

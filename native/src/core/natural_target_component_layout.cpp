@@ -482,6 +482,21 @@ std::optional<OverflowTargetNormalization> normalize_overflow_formals(
     if (!intended_target.has_value())
       continue;
     if (*intended_target <= official_last) {
+      if (std::holds_alternative<int>(item.target) && !item.raw && item.roles.empty()) {
+        // An explicit numeric operand keeps its exact hardware byte. Its
+        // numeric presentation can predate a helper rewrite; do not turn
+        // that obsolete number into a different symbolic command identity.
+        // Over-window logical targets are handled separately below.
+        try {
+          const auto physical = formal_address_info(*item.formal_opcode, model).actual;
+          if (physical != *intended_target) {
+            item.target = physical;
+            normalized.changed = true;
+          }
+        } catch (const std::exception&) {
+          return std::nullopt;
+        }
+      }
       // An ordinary encoded operand is only a cache when its target is a
       // symbolic command identity. A preceding erasure or block move may have
       // changed the label's address. Keeping the old byte would silently turn

@@ -79,6 +79,14 @@ struct PostLayoutNumericRangeProof {
   bool exhausted = false;
 };
 
+struct PostLayoutRegisterNumericProof {
+  // Exact original execution states and stock memory homes. An ordinary-value
+  // fact is not a canonical stored-word, selector or interval certificate.
+  std::map<std::size_t, std::map<int, OrdinaryStackValue>> values;
+  std::size_t work = 0;
+  bool exhausted = false;
+};
+
 enum class NumericRangeInputPolicy {
   Forget,
   // Preserve predecessor registers, never input X or setup-state assumptions.
@@ -149,5 +157,16 @@ std::optional<OrdinaryNumericRange> bound_ordinary_unary(
     int opcode, const OrdinaryNumericRange& input);
 std::optional<OrdinaryNumericRange> bound_ordinary_binary(
     int opcode, const OrdinaryNumericRange& y, const OrdinaryNumericRange& x);
+
+// Demand the existing memory lattice at named items without inserting fake
+// recalls or modifying the CFG. Queries are joined only over actual matched
+// caller contexts. Unknown typed input and exhaustion export no assumptions.
+PostLayoutRegisterNumericProof prove_post_layout_register_numeric_values(
+    const std::vector<MachineItem>& items, const AuthoritativePostLayoutControlFlow& flow,
+    const std::vector<bool>& automatic_entry_lift,
+    const std::map<std::size_t, std::vector<int>>& requested_registers,
+    const std::vector<PreloadReport>* preloads = nullptr,
+    std::size_t maximum_work = 100000,
+    NumericRangeInputPolicy input_policy = NumericRangeInputPolicy::Forget);
 
 } // namespace mkpro::core

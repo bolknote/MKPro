@@ -37,6 +37,17 @@
 #include <utility>
 #include <vector>
 
+namespace mkpro::core::detail {
+struct FiniteNumericLayoutCertificateBuilder {
+  template<class Verifier>
+  static std::shared_ptr<const ClosedNumericLayoutCertificate> issue(
+      AddressSpaceModel model, bool ordinary_decimal_input, Verifier verifier) {
+    return std::shared_ptr<const ClosedNumericLayoutCertificate>(
+        new ClosedNumericLayoutCertificate(model, ordinary_decimal_input, std::move(verifier)));
+  }
+};
+} // namespace mkpro::core::detail
+
 namespace mkpro::core::passes {
 namespace {
 
@@ -3360,6 +3371,94 @@ static bool normalized_power10_product_input(
   return reached;
 }
 
+// Recheck a closed raw numeric orbit after independent, proved edits elsewhere.
+// Every carrier read/write and every raw opcode must still belong to its total
+// Negate/Store, sign-decoder or normalized-power right-product language. Unknown
+// input writes, aliases, new raw commands and changed owned words fail closed.
+static bool closed_raw_numeric_layout_domain(
+    const std::vector<MachineItem>& items, const std::vector<PreloadReport>& delivered,
+    const std::vector<PreloadReport>& original_environment, int carrier,
+    FeatureProfile profile, const PostLayoutControlFlowOptions& options,
+    std::string* failure = nullptr) {
+  const auto reject = [&](std::string reason) {
+    if (failure) *failure=std::move(reason);
+    return false;
+  };
+  std::set<std::string> owners;
+  for (const auto& word : delivered)
+    if (!owners.insert(word.register_name).second) return reject("duplicate preload owner");
+  for (const auto& old : original_environment) {
+    const auto at = std::find_if(delivered.begin(), delivered.end(), [&](const auto& word) {
+      return word.register_name == old.register_name;
+    });
+    if (at == delivered.end() || !same_layout_search_artifact(
+        {.preloads={old}}, {.preloads={*at}})) return reject("changed owned initializer");
+  }
+  for (const auto& word : delivered) {
+    if (std::any_of(original_environment.begin(), original_environment.end(), [&](const auto& old) {
+      return old.register_name == word.register_name;
+    })) continue;
+    if (word.setup_expression || word.setup_target_name || word.setup_expression_text ||
+        word.counts_against_program || !bound_ordinary_decimal(word.value)) return reject("unproved added initializer");
+  }
+  const auto name = register_name_for_index(carrier);
+  const auto initial = std::find_if(delivered.begin(), delivered.end(), [&](const auto& word) {
+    return word.register_name == name;
+  });
+  if (initial == delivered.end() || !evaluate_raw_right_decimal_scale(initial->value))
+    return reject("missing raw right-scale word");
+  const auto flow_owner = shared_post_layout_control_flow(items, options);
+  const auto& flow = *flow_owner;
+  if (!flow.proved || !prove_post_layout_input_boundaries(items, flow).proved)
+    return reject("unproved CFG or input boundary");
+  for (const auto& [site, targets] : flow.indirect_memory_targets) {
+    (void)site;
+    if (std::find(targets.begin(), targets.end(), carrier) != targets.end()) return reject("indirect carrier alias");
+  }
+  const auto code = raise_machine_to_ir(items, profile);
+  std::vector<std::size_t> machine;
+  std::size_t item = 0;
+  for (const auto& op : code) {
+    machine.push_back(item);
+    item += lower_ir_to_machine({op}).size();
+  }
+  std::vector<bool> covered(code.size(), false);
+  const auto plain = [&](std::size_t at, int opcode) {
+    return at < code.size() && code[at].kind == IrKind::Plain && code[at].opcode == opcode &&
+        !code[at].meta.manual_interaction && !code[at].procedure_boundary;
+  };
+  bool used = false;
+  for (std::size_t at = 0; at < code.size(); ++at) {
+    const auto& op = code[at];
+    if (op.kind != IrKind::Recall || op.opcode != 0x60 + carrier || op.register_name != name)
+      continue;
+    if (op.meta.manual_interaction || op.procedure_boundary) return reject("opaque carrier read");
+    used = true; covered[at] = true;
+    if (plain(at+1U,0x0b) && at+2U < code.size() &&
+        code[at+2U].kind == IrKind::Store && code[at+2U].opcode == 0x40 + carrier &&
+        code[at+2U].register_name == name && !code[at+2U].meta.manual_interaction &&
+        !code[at+2U].procedure_boundary) {
+      covered[at+1U] = true; covered[at+2U] = true;
+      if (plain(at+3U,0x32)) covered[at+3U] = true;
+    } else if (plain(at+1U,0x32)) {
+      covered[at+1U] = true;
+    } else if (plain(at+1U,0x12) && normalized_power10_product_input(code,flow,machine,at)) {
+      covered[at+1U] = true;
+    } else return reject("unsupported carrier consumer");
+  }
+  for (std::size_t at = 0; at < code.size(); ++at) {
+    const auto& op = code[at];
+    if (op.meta.raw && !covered[at]) return reject("foreign raw opcode");
+    if (covered[at]) continue;
+    const auto effects = register_effects(op);
+    if (effects.may_define_any_register || effects.must_defs.contains(name) ||
+        effects.may_defs.contains(name) || effects.uses.contains(name) ||
+        (effects.uses_all_registers && op.kind != IrKind::Stop))
+      return reject(failure ? "carrier effect barrier opcode="+std::to_string(op.opcode) : "carrier effect barrier");
+  }
+  return used || reject("no surviving carrier read");
+}
+
 static std::vector<Plan> discover_preloaded_inline_carriers(
     const std::vector<IrOp>& ops, int reg,
     const AuthoritativePostLayoutControlFlow& flow,
@@ -3684,8 +3783,8 @@ static std::vector<DeferredFiniteModeRepresentation> finite_mode_candidates_impl
         std::cerr << "[finite-mode-discovery] CFG: " << reason << '\n';
     return unchanged();
   }
-  // A formal counter is not an ordinary label relocation. Freeze every
-  // instruction it executes, including its physical-00 return. This proof
+  // A noncanonical counter is not an ordinary label relocation. Freeze every
+  // instruction it executes; canonical physical contexts remain movable. This proof
   // uses the complete unpruned graph, never a convenient callback subset.
   std::set<std::size_t> formal_frame_ir;
   std::map<std::size_t, int> formal_frame_addresses;
@@ -3701,7 +3800,9 @@ static std::vector<DeferredFiniteModeRepresentation> finite_mode_candidates_impl
       at += ops[i].kind == IrKind::Label ? 1U : static_cast<std::size_t>(cells_per_op(ops[i]));
       address += cells_per_op(ops[i]);
     }
-    for (const auto& state : flow.execution_states) if (state.formal_opcode) {
+    for (const auto& state : flow.execution_states)
+      if (state.formal_opcode && (!candidate_options.relocate_canonical_formal_frames ||
+          has_noncanonical_post_layout_counter(state, flow.address_space_model))) {
       const auto found = ir_at_item.find(state.item_index);
       if (found == ir_at_item.end()) return unchanged();
       formal_frame_ir.insert(found->second);
@@ -3972,6 +4073,14 @@ static std::vector<DeferredFiniteModeRepresentation> finite_mode_candidates_impl
           const auto [binding, inserted] = required_targets.emplace(label, old->second);
           compatible = compatible && (inserted || binding->second == old->second);
         }
+    if (candidate_options.relocate_canonical_formal_frames)
+      for (const auto& op : ops) if (op.target_meta.formal_opcode) {
+        const auto* label=std::get_if<std::string>(&op.target);
+        if (!label) {compatible=false;break;}
+        const int actual=formal_address_info(*op.target_meta.formal_opcode,flow.address_space_model).actual;
+        const auto [at,inserted]=required_targets.emplace(*label,actual);
+        if (!inserted && at->second!=actual) {compatible=false;break;}
+      }
     if (!compatible)
       continue;
     const auto positions = label_positions(rewritten);
@@ -4092,6 +4201,37 @@ static std::vector<DeferredFiniteModeRepresentation> finite_mode_candidates_impl
           "typed input/resume contexts; preserved visible X/Y, future register reads, "
           "stack/X1/X2 and every original control/return path. The complete artifact must "
           "match the initializer ownership snapshot and discharge all placement bindings."});
+    }
+    if (plan.raw_coefficient && plan.preload_replacement && plan.flow_reads.empty() &&
+        plan.preloads.empty() && candidate_options.runtime_preloads) {
+      auto environment = *candidate_options.runtime_preloads;
+      const auto owner = std::find_if(environment.begin(), environment.end(), [&](const auto& word) {
+        return word.register_name == plan.preload_replacement->before.register_name;
+      });
+      if (owner != environment.end() && same_layout_search_artifact(
+          {.preloads={*owner}}, {.preloads={plan.preload_replacement->before}})) {
+        *owner = plan.preload_replacement->after;
+        const auto profile = effective_optimizer_feature_profile(context.options);
+        const auto verify = [environment, carrier=plan.reg, profile, options](
+            const auto& current, const auto& preloads) {
+          return closed_raw_numeric_layout_domain(current,preloads,environment,carrier,profile,options);
+        };
+        if (verify(lower_ir_to_machine(alternatives.back().transformation.ops), environment)) {
+          alternatives.back().numeric_layout_certificate =
+              ::mkpro::core::detail::FiniteNumericLayoutCertificateBuilder::issue(options.address_space_model,
+                  context.options.ordinary_decimal_keyboard_input, verify);
+          alternatives.back().transformation.optimizations.push_back({"closed-raw-numeric-layout-domain",
+              "Certified a complete preloaded raw sign orbit with total negation, sign decoding and normalized-power right products. "
+              "Placement must freshly recheck all carrier effects, aliases, raw instructions, initializer ownership and the exact input/model contract. "
+              "The certificate permits byte-preserving control relocation only, never arithmetic simplification."});
+        } else if (std::getenv("MKPRO_NATIVE_TRACE_JOINT_COMPOSITION")) {
+          std::string failure;
+          closed_raw_numeric_layout_domain(lower_ir_to_machine(alternatives.back().transformation.ops),
+              environment,environment,plan.reg,profile,options,&failure);
+          std::cerr<<"[joint-composition] numeric-domain R"<<register_name_for_index(plan.reg)
+                   <<" rejected: "<<failure<<'\n';
+        }
+      }
     }
     if (plan.epoch_pruned_edges != 0 || !plan.exit_recoveries.empty())
       alternatives.back().transformation.optimizations.push_back({

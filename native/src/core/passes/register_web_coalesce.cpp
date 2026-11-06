@@ -211,7 +211,8 @@ static PassResult process_register_webs(
     const PostLayoutControlFlowOptions* deferred_control = nullptr,
     const std::map<std::string, int>* encoded_origins = nullptr,
     const std::vector<PreloadReport>* runtime_preloads = nullptr,
-    bool allow_equal_preload_homes = false) {
+    bool allow_equal_preload_homes = false,
+    bool preserve_direct_formal_contexts = false) {
   const bool recolor_only = recoloring_requests != nullptr;
   const bool closed_artifact_precision = runtime_preloads != nullptr;
   const auto movable_roles = [&](const std::vector<CellRole>& roles) {
@@ -239,7 +240,8 @@ static PassResult process_register_webs(
     // Recoloring keeps physical geometry. Copy deletion cannot silently move
     // a fixed formal entry or its side-space discontinuity; those layouts must
     // first be reopened by an independently proved command-identity rewrite.
-    if (!recolor_only || !closed_artifact_precision || !deferred_control || !closed_origins ||
+    if (!recolor_only || !closed_artifact_precision || !deferred_control ||
+        (!closed_origins && !preserve_direct_formal_contexts) || !encoded_origins ||
         op.kind == IrKind::OrphanAddress) return false;
     auto ordinary = op;
     ordinary.target_meta.formal_opcode.reset();
@@ -248,7 +250,8 @@ static PassResult process_register_webs(
   const auto selector_view = [&](const std::vector<MachineItem>& machine,
                                  const AuthoritativePostLayoutControlFlow& flow) {
     return closed_origins ? build_selector_consistent_execution_graph(machine, flow) :
-        build_deferred_selector_consistent_execution_graph(machine, flow, *encoded_origins).execution;
+        build_deferred_selector_consistent_execution_graph(machine, flow, *encoded_origins,
+            20000, preserve_direct_formal_contexts).execution;
   };
   const bool trace = std::getenv("MKPRO_NATIVE_TRACE_REGISTER_WEBS") != nullptr;
   const auto unchanged = [&](const char* reason = "no admissible copy merge") {
@@ -258,6 +261,9 @@ static PassResult process_register_webs(
   };
   if (!context.options.coalesce_copies || ops.empty())
     return unchanged();
+  if (preserve_direct_formal_contexts &&
+      (!recolor_only || !closed_artifact_precision || !deferred_control || !encoded_origins))
+    return unchanged("formal recoloring requires a complete equal-width owner");
   bool has_copy = false;
   for (std::size_t i = 1; i < ops.size(); ++i)
     has_copy = has_copy || (ops[i - 1].kind == IrKind::Recall &&
@@ -976,12 +982,20 @@ static PassResult process_register_webs(
         const auto a = operand_web(left), b = operand_web(right);
         if (!a.has_value() || !b.has_value() ||
             (webs.fixed[*a] && webs.fixed[*b] && webs.colors[*a] != webs.colors[*b])) {
+          if(trace) {
+            std::cerr<<"[register-web-demand] rejected operand equality "<<left<<'~'<<right;
+            if(a && b)std::cerr<<" fixed="<<webs.fixed[*a]<<':'<<webs.colors[*a]
+                              <<','<<webs.fixed[*b]<<':'<<webs.colors[*b];
+            else std::cerr<<" missing operand web";
+            std::cerr<<'\n';
+          }
           valid = false;
           break;
         }
         const int color = webs.fixed[*b] ? webs.colors[*b] : webs.colors[*a];
         const Node joined = webs.join(*a, *b, color);
         if (webs.allowed[joined].empty()) {
+          if(trace)std::cerr<<"[register-web-demand] disjoint domains "<<left<<'~'<<right<<'\n';
           valid = false;
           break;
         }
@@ -1015,18 +1029,44 @@ static PassResult process_register_webs(
       // ops.size() omits no definition from the immutable-pool proof.
       const Node anchor = webs.root(0);
       auto colors = joint_coloring(anchor, anchor, ops.size());
-      if (!colors.has_value())
+      if (!colors.has_value()) {
+        if(trace)std::cerr<<"[register-web-demand] no complete coloring witness\n";
         continue;
+      }
       webs.colors = std::move(*colors);
       int relocated_counters = 0;
       auto candidate = emit_recolored(relocated_counters);
       if (deferred_control) {
         const auto changed_machine = lower_ir_to_machine(candidate);
         const auto changed_flow = build_post_layout_control_flow(changed_machine, *deferred_control);
-        if (!changed_flow.proved ||
-            !prove_post_layout_input_boundaries(changed_machine, changed_flow).proved ||
-            !selector_view(changed_machine, changed_flow).proved)
+        const auto selected = selector_view(changed_machine, changed_flow);
+        if (!changed_flow.proved || !selected.proved ||
+            !prove_post_layout_input_boundaries(changed_machine, changed_flow).proved)
           continue;
+        if (preserve_direct_formal_contexts) {
+          // Equal-width allocation cannot invent a new PC/return frame or
+          // borrow an unproved side-space opcode. Compare the selected exact
+          // graphs, not merely successful independent CFG construction.
+          bool same = selected.original_states.size() == flow.execution_states.size() &&
+              selected.successors == flow.execution_successors &&
+              selected.execution_edges == flow.execution_edges &&
+              changed_machine.size() == machine.size();
+          for (std::size_t state = 0; same && state < selected.original_states.size(); ++state) {
+            const auto& before = flow.execution_states[state];
+            const auto& after = changed_flow.execution_states.at(selected.original_states[state]);
+            same = before == after;
+            if (same && has_noncanonical_post_layout_counter(before, flow.address_space_model)) {
+              same = machine.at(before.item_index).opcode == changed_machine.at(after.item_index).opcode;
+              if (same && before.operand_item_index)
+                same = machine.at(*before.operand_item_index).opcode ==
+                    changed_machine.at(*after.operand_item_index).opcode;
+            }
+          }
+          if (!same) {
+            if (trace) std::cerr << "[register-web-demand] exact formal frames changed\n";
+            continue;
+          }
+        }
       }
       (*consume)(std::move(candidate));
     }
@@ -1152,9 +1192,11 @@ void for_each_deferred_register_web_recoloring(const std::vector<IrOp>& ops, con
     const std::map<std::string, int>& encoded_origins,
     const RegisterWebRecoloringConsumer& consume,
     const std::vector<PreloadReport>* runtime_preloads,
-    bool allow_equal_preload_homes) {
+    bool allow_equal_preload_homes,
+    bool preserve_direct_formal_contexts) {
   if (!requests.empty() && consume)
-    (void)process_register_webs(ops, context, &requests, &consume, &control, &encoded_origins, runtime_preloads, allow_equal_preload_homes);
+    (void)process_register_webs(ops, context, &requests, &consume, &control, &encoded_origins,
+        runtime_preloads, allow_equal_preload_homes, preserve_direct_formal_contexts);
 }
 
 PassResult deferred_register_web_copy_coalesce(

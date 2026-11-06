@@ -1,6 +1,7 @@
 #include "mkpro/core/callee_hole_boundary_normalization.hpp"
 #include "mkpro/core/passes/selector_charge_literal_sinking.hpp"
 #include "mkpro/core/compiler.hpp"
+#include "mkpro/core/finalization_direct_flow.hpp"
 
 #include "mkpro/core/address_formula_solver.hpp"
 #include "mkpro/core/compiler_static_proof_gate.hpp"
@@ -54234,9 +54235,16 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
   // symbolic. The separately finalized incumbent guards against local growth.
   if ((options.zero_underflow_constant_rematerialization ||
        options.zero_underflow_optimizer_root) && !exact_decimal_series) {
+    const auto rematerialization_ir = raise_machine_to_ir(
+        post_layout_items, optimizer_feature_profile_for_options(options));
+    core::PostLayoutControlFlowOptions rematerialization_control;
+    rematerialization_control.address_space_model = address_space_model_for_options(options);
+    rematerialization_control.empty_return_target = 1;
+    const auto rematerialization_flow = core::build_post_layout_control_flow(
+        post_layout_items, rematerialization_control);
     const auto rematerialized = core::passes::rematerialize_zero_underflow_constant(
-        raise_machine_to_ir(post_layout_items, optimizer_feature_profile_for_options(options)),
-        pass_options.preloaded_constant_registers, address_space_model_for_options(options));
+        rematerialization_ir, pass_options.preloaded_constant_registers,
+        address_space_model_for_options(options), &rematerialization_flow);
     if (rematerialized.applied > 0) {
       post_layout_items = lower_ir_to_machine(rematerialized.ops);
       for (const auto& optimization : rematerialized.optimizations)
@@ -57847,6 +57855,9 @@ bool preloaded_indirect_flow_callee_hole_static_gate_accepts(
 
 bool optimizer_static_gate_accepts(const CompileOptions& candidate_options,
                                    const CompileResult& result) {
+  if (core::shared_helper_dual_mode_closure_rejection_reason(
+          result.items, address_space_model_for_options(candidate_options)))
+    return false;
   if (candidate_options.exact_terminal_dead_code_elimination) {
     const bool erased = std::any_of(
         result.optimizations.begin(), result.optimizations.end(),
@@ -57883,6 +57894,9 @@ bool optimizer_static_gate_accepts(const CompileOptions& candidate_options,
 
 std::optional<std::string> optimizer_static_gate_rejection_reason(
     const CompileOptions& candidate_options, const CompileResult& result) {
+  if (const auto reason = core::shared_helper_dual_mode_closure_rejection_reason(
+          result.items, address_space_model_for_options(candidate_options)))
+    return reason;
   if (optimizer_static_gate_accepts(candidate_options, result))
     return std::nullopt;
   if (candidate_options.assume_dead_selector_integer_part) {
@@ -58144,6 +58158,7 @@ std::string compile_once_cache_key(const CompileOptions& options) {
   out << implemented_candidate_key(options) << ";delivery=" << static_cast<int>(options.delivery)
       << ";output=" << static_cast<int>(options.output) << ";analysis=" << options.analysis
       << ";strict=" << options.strict
+      << ";ordinary_decimal_keyboard_input=" << options.ordinary_decimal_keyboard_input
       << ";disable_candidate_search=" << options.disable_candidate_search;
   if (options.budget.has_value())
     out << ";budget=" << *options.budget;
@@ -59995,8 +60010,21 @@ bool callee_hole_indirect_call_targets_proved(const std::vector<OptimizationRepo
       if (std::find(successors.begin(), successors.end(), entry.first) == successors.end())
         continue;
       saw_predecessor = true;
-      if (!proved_charge_entry_transfers.contains(source))
-        return reject("charge-entry store has an unproved predecessor for proof " + proof);
+      if (!proved_charge_entry_transfers.contains(source)) {
+        // A semantic zero entry is not a decimal charge annotation. Rebuild
+        // its normalized-zero, selector-writeback and continuation proof on
+        // the delivered graph, including the mandatory physical 99 binding.
+        const auto* store = items_by_step.at(entry.first);
+        const auto* branch = items_by_step.at(source);
+        if (store == nullptr || branch == nullptr ||
+            !core::passes::prove_selector_zero_flow_null_callback_entry(
+                items, exact_entry_flow(),
+                static_cast<std::size_t>(store - items.data()),
+                static_cast<std::size_t>(branch - items.data())))
+          return reject("charge-entry store has an unproved predecessor for proof " + proof);
+        charged_values[entry.second][0].insert(0);
+        proved_sunk_literal_entries.insert(proof);
+      }
     }
     if (!saw_predecessor)
       return reject("charge-entry store has no proved predecessor for proof " + proof);
@@ -72547,11 +72575,63 @@ bool refresh_callee_hole_late_selector_charge_comments(
   // dispatch. Rebind the delivered multi-target CFG annotation from symbolic
   // labels instead of retaining the pre-relayout numeric addresses.
   constexpr std::string_view kLeafTargetsMarker = "leaf-targets=";
+  std::optional<core::AuthoritativePostLayoutControlFlow> null_entry_flow;
+  std::map<int, bool> proved_null_entries;
+  const auto has_null_entry = [&](int selector) {
+    if (const auto known = proved_null_entries.find(selector); known != proved_null_entries.end())
+      return known->second;
+    if (!null_entry_flow) {
+      core::PostLayoutControlFlowOptions control;
+      control.address_space_model = address_space_model_for_options(options);
+      control.empty_return_target = 1;
+      null_entry_flow = core::build_post_layout_control_flow(items, control);
+    }
+    bool proved = false;
+    if (null_entry_flow->proved)
+      for (const auto& [branch, targets] : null_entry_flow->indirect_flow_targets) {
+        if (items[branch].opcode < 0x70 || items[branch].opcode > 0x73)
+          continue;
+        for (const auto& target : targets)
+          if (items[target.item_index].opcode == 0x40 + selector &&
+              core::passes::prove_selector_zero_flow_null_callback_entry(
+                  items, *null_entry_flow, target.item_index, branch))
+            proved = true;
+      }
+    proved_null_entries.emplace(selector, proved);
+    return proved;
+  };
   for (MachineItem& item : items) {
-    const std::optional<std::map<int, std::string>> leaves =
+    std::optional<std::map<int, std::string>> leaves =
         callee_hole_leaf_targets_from_comment(item.comment, options);
     if (!leaves.has_value())
       continue;
+    // Extend only the freshly proved zero-completion mode. Existing typed
+    // aliases of ordinary leaves retain the historical annotation path;
+    // spelling differences are not evidence of a new dispatch mode.
+    if (item.indirect_flow_targets) {
+      for (const auto& destination : *item.indirect_flow_targets) {
+        const auto* label = std::get_if<std::string>(&destination);
+        if (label == nullptr)
+          continue;
+        if (std::any_of(leaves->begin(), leaves->end(),
+                [&](const auto& leaf) { return leaf.second == *label; }))
+          continue;
+        const auto target = label_addresses.find(*label);
+        if (target == label_addresses.end() || target->second != 0 || leaves->contains(0))
+          continue;
+        auto command = std::find_if(items.begin(), items.end(),
+            [](const auto& candidate) { return candidate.kind != MachineItemKind::Label; });
+        if (command == items.end() || command->kind != MachineItemKind::Op ||
+            command->opcode != 0x52 || command->raw || command->manual_interaction ||
+            !has_null_entry(item.opcode & 15))
+          continue;
+        if (!leaves->emplace(0, *label).second)
+          return false;
+        const std::string marker = "callee-hole leaf entry " + *label;
+        if (!command->comment || command->comment->find(marker) == std::string::npos)
+          command->comment = command->comment.value_or("") + "; " + marker;
+      }
+    }
     const std::size_t marker = item.comment->find(kLeafTargetsMarker);
     const std::size_t values_begin = marker + kLeafTargetsMarker.size();
     const std::size_t suffix = item.comment->find(';', values_begin);
@@ -72629,6 +72709,8 @@ bool refresh_callee_hole_late_selector_charge_comments(
 bool refresh_proved_layout_annotations(CompileResult& result,
                                        const CompileOptions& options) {
   const AddressSpaceModel model = address_space_model_for_options(options);
+  if (core::shared_helper_dual_mode_closure_rejection_reason(result.items, model))
+    return false;
   const auto normalized = core::normalize_natural_target_overflow_formals(result.items, model);
   if (!normalized.has_value())
     return false;
@@ -73313,46 +73395,9 @@ std::optional<std::vector<MachineItem>>
 retarget_numeric_direct_flow_after_finalization_cell_erasure(
     const std::vector<MachineItem>& original,
     const std::vector<MachineItem>& reduced, int erased_address,
-    std::string* failure) {
-  const auto reject = [&](std::string reason)
-      -> std::optional<std::vector<MachineItem>> {
-    if (failure != nullptr)
-      *failure = std::move(reason);
-    return std::nullopt;
-  };
-  if (core::machine_cell_count(original) !=
-      core::machine_cell_count(reduced) + 1) {
-    return reject("physical geometry does not describe one cell deletion");
-  }
-
-  std::vector<MachineItem> retargeted = reduced;
-  for (MachineItem& item : retargeted) {
-    if (item.indirect_flow_targets.has_value()) {
-      for (IrTarget& target : *item.indirect_flow_targets) {
-        int* numeric = std::get_if<int>(&target);
-        if (numeric != nullptr && *numeric > erased_address)
-          --*numeric;
-      }
-    }
-    if (item.kind != MachineItemKind::Address ||
-        !std::holds_alternative<int>(item.target)) {
-      continue;
-    }
-    const int old_target = std::get<int>(item.target);
-    if (old_target < erased_address)
-      continue;
-    if (std::find(item.roles.begin(), item.roles.end(), "exec") !=
-            item.roles.end() ||
-        (item.comment.has_value() &&
-         item.comment->find("address/code overlay for ") !=
-             std::string::npos)) {
-      return reject("shifted direct operand is executable or changed kind");
-    }
-    if (old_target > erased_address)
-      item.target = old_target - 1;
-    item.formal_opcode.reset();
-  }
-  return retargeted;
+    AddressSpaceModel model, std::string* failure) {
+  return core::retarget_direct_flows_after_cell_erasure(
+      original, reduced, erased_address, model, failure);
 }
 
 std::optional<CompileResult>
@@ -73387,7 +73432,7 @@ apply_finalization_cell_erasure_to_selected_result(
   const std::optional<std::vector<MachineItem>> retargeted_finalized =
       retarget_numeric_direct_flow_after_finalization_cell_erasure(
           selected.items, finalized.items, erased_address,
-          &direct_retarget_failure);
+          address_space_model_for_options(options), &direct_retarget_failure);
   if (!retargeted_finalized.has_value()) {
     if (trace_finalization) {
       std::cerr << "[finalization-" << trace_name
@@ -75397,6 +75442,10 @@ apply_contextual_copy_layout_to_selected_result(
       {selected.items, selected.preloads, {}}, options);
   edges.insert(edges.end(), std::make_move_iterator(transported.begin()),
                std::make_move_iterator(transported.end()));
+  auto projected = core::nullable_callback_projection_layout_transactions(
+      {selected.items, selected.preloads, {}}, options);
+  edges.insert(edges.end(), std::make_move_iterator(projected.begin()),
+               std::make_move_iterator(projected.end()));
   std::vector<core::LayoutSearchArtifact> finalized_context_inputs;
   for (const auto& edge : edges) {
     if(std::any_of(finalized_context_inputs.begin(),finalized_context_inputs.end(),
@@ -81805,10 +81854,40 @@ CompileResult close_final_contextual_layout_roots(
     std::vector<OptimizationReport> changed;
     if (discovery) toggle_alternating_literal_call_args(*discovery, changed);
     if (!changed.empty()) {
-      for(const int allocation_mode:{0,1,2,3}) {
-      if (comparison_options.fast_candidate_search && allocation_mode != 1) continue;
+      struct RematerializationRoot { bool enabled; bool inline_literal; };
+      std::vector<RematerializationRoot> rematerialization_roots{
+          {lowering_options.zero_underflow_optimizer_root, false}};
+      // Promoting a finite argument changes persistent register pressure.
+      // An initializer already retired into an address can still identify a
+      // useful source-level rematerialization root. Rebuild that root before
+      // coloring; a post-layout retirement cannot free its old allocation.
+      // The extra product belongs to the ordinary-domain completion lane,
+      // never to the unchanged unrestricted manual-input portfolio.
+      const bool completion_domains = comparison_options.ordinary_decimal_keyboard_input ||
+          std::none_of(original.items.begin(), original.items.end(),
+              [](const auto& item) { return item.manual_interaction.has_value(); });
+      const bool already_inline = lowering_options.zero_underflow_optimizer_root &&
+          lowering_options.suppress_constant_preloads.contains("-99999999") &&
+          !lowering_options.reserve_suppressed_constant_preload_slots.contains("-99999999");
+      if (!already_inline && completion_domains &&
+          std::any_of(original.preloads.begin(), original.preloads.end(), [](const auto& word) {
+            return word.value == "-99999999" ||
+                word.lowered_data_value == std::optional<std::string>{"-99999999"};
+          }))
+        rematerialization_roots.push_back({true, true});
+      for (const auto& rematerialization : rematerialization_roots) {
+      const bool rematerialize = rematerialization.enabled;
+      for(const int allocation_mode:{0,1,2,3,4}) {
+      const bool regenerate_classes = allocation_mode == 4;
+      if (regenerate_classes && !rematerialization.inline_literal) continue;
+      if (comparison_options.fast_candidate_search && allocation_mode != 1 && !regenerate_classes) continue;
       auto replay_options = lowering_options;
       replay_options.alternating_sign_toggle_args = true;
+      replay_options.zero_underflow_optimizer_root = rematerialize;
+      if (rematerialization.inline_literal) {
+        replay_options.suppress_constant_preloads.insert("-99999999");
+        replay_options.reserve_suppressed_constant_preload_slots.erase("-99999999");
+      }
       replay_options.disable_candidate_search = true;
        // Retain the owning model and allocation bank. A source-ABI replay is
        // not a certificate for reinterpreting already emitted program PCs.
@@ -81821,12 +81900,13 @@ CompileResult close_final_contextual_layout_roots(
         replay_options.single_x_expression_helper_entries=false;
         replay_options.stack_argument_helper_entries=true;
       }
-      if(allocation_mode==1 || allocation_mode==3){
+      if(allocation_mode==1 || allocation_mode==3 || regenerate_classes){
         if(allocation_mode==3 && replay_options.forced_logical_register_assignments.empty() && replay_options.forced_register_shares.empty())continue;
         auto probe_options=replay_options;probe_options.collect_logical_register_allocation=true;
         probe_options.repair_logical_register_assignment_preferences=true;
-        probe_options.compact_logical_register_allocation=false;
-        probe_options.preserve_logical_register_instruction_classes=true;
+        probe_options.compact_logical_register_allocation=regenerate_classes;
+        probe_options.preserve_logical_register_instruction_classes=!regenerate_classes;
+        if (regenerate_classes) probe_options.forced_register_shares.clear();
         probe_options.logical_register_dead_store_elimination=true;
         const auto probe=compile_source_once(source,probe_options,lower_ascii(source).find("entered")!=std::string::npos,false,false);
         if(!probe.implemented || probe.logical_register_assignments.empty())continue;
@@ -81849,20 +81929,37 @@ CompileResult close_final_contextual_layout_roots(
       auto replay = compile_source_for_optimizer_profile(source,replay_options,&replay_proof);
       if (std::getenv("MKPRO_NATIVE_TRACE_ABI_REPLAY"))
         std::cerr << "[finite-abi-replay] allocation=" << allocation_mode
+                  << " rematerialize=" << rematerialize
+                  << " inline=" << rematerialization.inline_literal
                   << " implemented=" << replay.implemented
                   << " cells=" << replay.steps.size()
                   << " finite-proof=" << has_optimization_named(replay.optimizations,"alternating-sign-toggle-arg") << '\n';
+      if (std::getenv("MKPRO_NATIVE_TRACE_ABI_REPLAY_ITEMS") && rematerialization.inline_literal) {
+        std::cerr << "[finite-abi-replay-registers] allocation=" << allocation_mode;
+        for (const auto& [name, reg] : replay.registers) std::cerr << ' ' << name << '=' << reg;
+        std::cerr << '\n' << "[finite-abi-replay-items] allocation=" << allocation_mode
+                  << ' ' << machine_items_to_json(replay.items) << '\n';
+      }
       if (replay.implemented && has_optimization_named(replay.optimizations,"alternating-sign-toggle-arg") &&
+          ((!rematerialization.inline_literal && rematerialize == lowering_options.zero_underflow_optimizer_root) ||
+           has_optimization_named(replay.optimizations,"zero-underflow-constant-rematerialization")) &&
           std::none_of(seeds.begin(),seeds.end(),[&](const auto& old){
             return core::same_layout_search_artifact(
                 {old.result.items,old.result.preloads,{}},{replay.items,replay.preloads,{}});
           })) {
-        if(allocation_mode==1 || allocation_mode==3)replay.optimizations.push_back({"abi-logical-allocation-repair",
+        if(allocation_mode==1 || allocation_mode==3 || regenerate_classes)replay.optimizations.push_back({"abi-logical-allocation-repair",
             "Rebuilt the changed ABI logical graph, retained valid old color preferences, repaired conflicts within instruction-class domains, then regenerated and independently re-verified every hard assignment. No previous sharing proof was reused."});
+        if (regenerate_classes)
+          replay.optimizations.push_back({"abi-logical-instruction-class-regeneration",
+              "Retained a separate compact allocation without freezing the old physical instruction classes. Regenerated source lowering from the fresh logical colors, then independently verified the emitted low-selector mutations, indexed accesses, loops, preloads and ABI. The old class-preserving root remains an independent incumbent."});
         if(allocation_mode==3)replay.optimizations.push_back({"joint-memory-backed-helper-abi",
             "Regenerated the memory-backed expression ABI with a fresh logical interference proof; retained its entry-prologue and placement alternative independently of the one-X incumbent until complete final-cell pricing."});
+        if (rematerialization.inline_literal || rematerialize != lowering_options.zero_underflow_optimizer_root)
+          replay.optimizations.push_back({"joint-finite-abi-rematerialization-root",
+              "Composed finite-argument promotion with an independently proved source constant rematerialization before rebuilding the logical interference graph. Retired initializer provenance is demand, not permission to reuse its old physical home; every assignment, callback and final placement is proved again."});
         independent_lifetime_roots.insert(seeds.size());
         seeds.push_back({std::move(replay),std::move(replay_proof)});
+      }
       }
       }
     }
@@ -81893,7 +81990,14 @@ CompileResult close_final_contextual_layout_roots(
          !core::transaction_growth_fits(static_cast<int>(original.steps.size()),
             static_cast<int>(seed.result.steps.size()), 4)))
       continue;
+    // A completed lowering context owns its ABI/model, not the current
+    // caller's runtime contract. An unrestricted artifact may be refined by
+    // an explicitly narrower input contract; the reverse direction is unsafe.
+    if(seed.options.ordinary_decimal_keyboard_input &&
+        !comparison_options.ordinary_decimal_keyboard_input)continue;
     CompileOptions proof_options = seed.options;
+    proof_options.ordinary_decimal_keyboard_input =
+        comparison_options.ordinary_decimal_keyboard_input;
     // These PCs belong to the seed's actual lowering model, not its public
     // target label. Cross-model delivery is a separate proved transaction.
     proof_options.budget = comparison_options.budget;
@@ -82027,16 +82131,29 @@ CompileResult close_final_contextual_layouts_for_testing(
       source, std::move(result), lowering_options, comparison_options);
 }
 
+CompileResult primary_optimizer_root_for_testing(
+    const std::string& source, const CompileOptions& options, CompileOptions* owner) {
+  return compile_source_for_optimizer_profile(source, options, owner);
+}
+
+CompileResult explicit_lowering_root_for_testing(
+    const std::string& source, const CompileOptions& options) {
+  return compile_source_once(source, options,
+      lower_ascii(source).find("entered") != std::string::npos, false, false);
+}
+
 CompileResult compile_source(std::string source, const CompileOptions& requested_options) {
   const CompileOptions options = apply_source_feature_profile_hint(source, requested_options);
   if(auto cached=read_completed_compile_result_cache(source,options))return *cached;
   if (options.ordinary_decimal_keyboard_input) {
-    // A weaker input contract adds legal transformations, not a different
+    // A narrower input domain adds legal transformations, not a different
     // pruning order for the historical optimizer portfolio. First retain its
     // independently completed winner, then price the new atomic late edges.
     auto ordinary_options = options;
     ordinary_options.ordinary_decimal_keyboard_input = false;
     CompileResult result = compile_source(source, ordinary_options);
+    if (std::getenv("MKPRO_NATIVE_TRACE_COPY_TRANSPORT"))
+      std::cerr << "[ordinary-incumbent] unrestricted=" << result.steps.size() << '\n';
     CompileOptions lowering_options = result.layout_search_continuation &&
             result.layout_search_continuation->completed_options
         ? *result.layout_search_continuation->completed_options : ordinary_options;
@@ -82055,12 +82172,23 @@ CompileResult compile_source(std::string source, const CompileOptions& requested
             !optimizer_static_gate_rejection_reason(lowering_options, *candidate))
           result = *candidate;
       }
+    if (std::getenv("MKPRO_NATIVE_TRACE_COPY_TRANSPORT"))
+      std::cerr << "[ordinary-incumbent] reduced=" << result.steps.size() << '\n';
+    // The input-contract edge may expose a different helper ABI and placement.
+    // Price the compound continuation on that completed artifact, rather than
+    // stopping after its independently profitable first transformation.
+    result = close_final_contextual_layout_roots(
+        source, std::move(result), lowering_options, options);
     if (!has_optimization_named(result.optimizations, "ordinary-decimal-keyboard-input-contract"))
       result.optimizations.push_back({"ordinary-decimal-keyboard-input-contract",
           "Explicit runtime input contract: keyboard numbers are ordinary decimal values, "
           "without any bound, sign or integrality assumption. Raw BCD words and "
           "supernumbers are outside this contract; commands and the user interface are unchanged."});
-    remember_completed_optimizer_context(result, lowering_options);
+    auto completed_options = result.layout_search_continuation &&
+            result.layout_search_continuation->completed_options
+        ? *result.layout_search_continuation->completed_options : lowering_options;
+    completed_options.ordinary_decimal_keyboard_input = true;
+    remember_completed_optimizer_context(result, completed_options);
     result.runtime_cost = runtime_cost_for_result(result);
     refresh_rejection_dependent_reports(result, options);
     write_completed_compile_result_cache(source, options, result);

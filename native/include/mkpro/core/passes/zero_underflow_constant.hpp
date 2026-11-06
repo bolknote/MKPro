@@ -36,13 +36,18 @@ inline PassResult rematerialize_zero_underflow_constant(
       contextual_flow->execution_states.size() != contextual_flow->execution_successors.size() ||
       contextual_flow->execution_states.size() != contextual_flow->execution_edges.size()))
     return result;
-  if (ops.size() < 3 || immutable_preloads.empty())
+  if (ops.size() < 3)
     return result;
   for (const auto& op : ops)
     if (op.meta.raw || op.meta.logical_register_analysis)
       return result;
 
-  std::vector<std::size_t> candidates;
+  struct Candidate {
+    std::size_t begin = 0;
+    std::size_t store = 0;
+    bool literal = false;
+  };
+  std::vector<Candidate> candidates;
   for (std::size_t i = 0; i + 1 < ops.size(); ++i) {
     const auto& recall = ops[i];
     const auto& store = ops[i + 1];
@@ -86,7 +91,28 @@ inline PassResult rematerialize_zero_underflow_constant(
       }
     }
     if (immutable)
-      candidates.push_back(i);
+      candidates.push_back({i, i + 1U, false});
+  }
+  // A source root may deliberately leave this constant out of the preload
+  // pool, freeing its home before allocation. Recognize its ordinary emitted
+  // decimal literal, not a raw instruction block or a numerical zero guess.
+  for (std::size_t begin = 0; begin + 9U < ops.size(); ++begin) {
+    bool clean = true;
+    for (std::size_t part = 0; part < 9U; ++part) {
+      const auto& op = ops[begin + part];
+      clean = clean && op.kind == IrKind::Plain &&
+          op.opcode == (part < 8U ? 9 : 0x0b) && !has_rewrite_barrier(op) &&
+          op.meta.roles.empty() && op.meta.semantic_call_origins.empty();
+    }
+    const auto& store = ops[begin + 9U];
+    clean = clean && store.kind == IrKind::Store && store.opcode >= 0x40 &&
+        store.opcode <= 0x4e &&
+        store.register_name == std::string(1, "0123456789abcde"[store.opcode - 0x40]) &&
+        !has_rewrite_barrier(store) && store.meta.roles.empty() &&
+        store.meta.semantic_call_origins.empty() &&
+        (store.register_name == "3" || !immutable_preloads.contains("3"));
+    if (clean)
+      candidates.push_back({begin, begin + 9U, true});
   }
   if (candidates.empty())
     return result;
@@ -235,10 +261,12 @@ inline PassResult rematerialize_zero_underflow_constant(
   });
   std::map<std::size_t, std::vector<IrOp>> replacements;
 
-  for (const auto candidate : candidates) {
+  for (const auto& entry : candidates) {
+    const auto candidate = entry.begin;
+    const auto store = entry.store;
     bool reached = false;
-    const bool scratch = ops[candidate + 1].register_name != "3";
-    bool proved = !scratch || growth_relocatable;
+    const bool scratch = ops[store].register_name != "3";
+    bool proved = (!scratch && !entry.literal) || growth_relocatable;
     if (contextual_flow && std::any_of(ops.begin(), ops.end(), [](const auto& op) {
           return op.target_meta.formal_opcode.has_value();
         })) {
@@ -247,8 +275,8 @@ inline PassResult rematerialize_zero_underflow_constant(
         // No rewritten opcode may be fetched by a formal counter, and no
         // added scratch store may shift a later formal instruction. The
         // independently closed layout retains these exact hardware contexts.
-        if (sites[state] == candidate || sites[state] == candidate + 1U ||
-            (scratch && sites[state] > candidate)) proved = false;
+        if ((sites[state] >= candidate && sites[state] <= store) ||
+            ((scratch || entry.literal) && sites[state] > candidate)) proved = false;
       }
     }
     for (std::size_t state = 0; state < sites.size(); ++state) {
@@ -256,31 +284,59 @@ inline PassResult rematerialize_zero_underflow_constant(
         reached = true;
         proved = proved && canonical_zero(state) &&
             (!scratch || r3_unobserved_until_overwrite(state));
-      } else if (sites[state] == candidate + 1) {
+      } else if (sites[state] > candidate && sites[state] <= store) {
         if (external(state) || predecessors[state].empty()) {
           proved = false;
           break;
         }
         for (const auto& incoming : predecessors[state])
-          proved = proved && sites[incoming.state] == candidate &&
-              incoming.kind == PostLayoutExecutionEdgeKind::Fallthrough;
+          proved = proved && sites[incoming.state] + 1U == sites[state] &&
+              incoming.kind == PostLayoutExecutionEdgeKind::Fallthrough &&
+              flow.execution_states[incoming.state].return_stack == flow.execution_states[state].return_stack &&
+              flow.execution_states[incoming.state].formal_return_stack == flow.execution_states[state].formal_return_stack;
       }
+    }
+    if (proved && entry.literal) {
+      // Literal entry and /-/ differ from a constant recall in deeper stack,
+      // physical last-X and the entry shadow. The fixed-word ROM fact proves
+      // X and the stored destination; every other difference must die on all
+      // actual continuations. Rewritten commands cannot witness convergence.
+      auto proof_items = lower_ir_to_machine(ops);
+      std::size_t item = 0;
+      for (std::size_t i = 0; i < ops.size(); ++i) {
+        if (i >= candidate && i <= store)
+          for (std::size_t part = 0; part < lower_ir_to_machine({ops[i]}).size(); ++part)
+            proof_items[item + part].raw = true;
+        item += lower_ir_to_machine({ops[i]}).size();
+      }
+      std::vector<std::size_t> continuations;
+      for (std::size_t state = 0; state < sites.size(); ++state)
+        if (sites[state] == store)
+          continuations.insert(continuations.end(), flow.execution_successors[state].begin(),
+              flow.execution_successors[state].end());
+      std::sort(continuations.begin(), continuations.end());
+      continuations.erase(std::unique(continuations.begin(), continuations.end()), continuations.end());
+      proved = !continuations.empty() && prove_post_layout_stack_state_equality(
+          proof_items, flow, continuations, {{true, false, false, false}, false, false},
+          {.refine_runtime_selectors = false, .numeric_entry_closed = true,
+           .transport_closed_entry_through_control = true,
+           .use_indirect_store_entry_facts = true});
     }
     if (!reached || !proved)
       continue;
     IrOp seed = make_store("3");
-    seed.meta.source_line = ops[candidate + 1].meta.source_line;
+    seed.meta.source_line = ops[store].meta.source_line;
     std::vector<IrOp> replacement{std::move(seed)};
     IrOp recall;
     recall.kind = IrKind::IndirectRecall;
     recall.register_name = "3";
     recall.opcode = 0xd3;
     recall.meta.mnemonic = opcode_by_code(0xd3).name;
-    recall.meta.source_line = ops[candidate + 1].meta.source_line;
+    recall.meta.source_line = ops[store].meta.source_line;
     recall.meta.indirect_memory_targets = std::vector<int>{3};
     replacement.push_back(std::move(recall));
     if (scratch)
-      replacement.push_back(ops[candidate + 1]);
+      replacement.push_back(ops[store]);
     replacements.emplace(candidate, std::move(replacement));
     ++result.applied;
   }
@@ -293,13 +349,15 @@ inline PassResult rematerialize_zero_underflow_constant(
       result.ops.push_back(ops[site]);
     } else {
       result.ops.insert(result.ops.end(), replacement->second.begin(), replacement->second.end());
-      ++site;
+      const auto original = std::find_if(candidates.begin(), candidates.end(),
+          [&](const auto& entry) { return entry.begin == site; });
+      site = original->store;
     }
   }
   if (result.applied > 0)
     result.optimizations.push_back({"zero-underflow-constant-rematerialization",
         "Rematerialized " + std::to_string(result.applied) +
-        " immutable constant read(s) through canonical zero and self-indexed R3; "
+        " immutable constant read(s) or decimal literal(s) through canonical zero and self-indexed R3; "
         "proved all call/return contexts, scratch liveness and exclusive pair entry. "
         "Released data uses may be rebound only by the independent final-layout proof."});
   return result;

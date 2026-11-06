@@ -2,6 +2,7 @@
 #include "mkpro/core/detail/cell_provenance.hpp"
 #include "mkpro/core/joint_constraint_origins.hpp"
 #include "mkpro/core/passes/semantic_region_folding.hpp"
+#include "mkpro/core/closed_numeric_layout.hpp"
 
 #include "mkpro/core/callee_hole_boundary_normalization.hpp"
 #include "mkpro/core/indirect_addressing.hpp"
@@ -11,6 +12,8 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <cstdlib>
+#include <iostream>
 #include <queue>
 #include <functional>
 #include <numeric>
@@ -34,11 +37,12 @@ bool ends_chain(const IrOp& op) {
 }
 
 bool symbolic(const std::vector<IrOp>& ops, bool preserve_compiler_selector_charges = false,
-              bool preserve_formal_execution_frames = false) {
+              bool preserve_formal_execution_frames = false,
+              bool closed_numeric_layout = false) {
   if (ops.empty() || ops.size() > 640U)
     return false;
   for (const auto& op : ops) {
-    if (op.meta.raw || op.meta.logical_register_analysis ||
+    if ((op.meta.raw && !closed_numeric_layout) || op.meta.logical_register_analysis ||
         op.kind == IrKind::OrphanAddress ||
         (op.target_meta.formal_opcode && !preserve_formal_execution_frames) ||
         op.meta.indirect_flow_formal_targets)
@@ -121,7 +125,13 @@ bool relocated(const std::vector<IrOp>& before, const std::vector<IrOp>& after,
   const auto new_flow_owner = shared_post_layout_control_flow(output, options);
   const auto& old_flow = *old_flow_owner;
   const auto& new_flow = *new_flow_owner;
-  if (!old_flow.proved || !new_flow.proved) return false;
+  if (!old_flow.proved || !new_flow.proved) {
+    if (std::getenv("MKPRO_NATIVE_TRACE_REGION_LAYOUT")) {
+      for (const auto& reason : old_flow.reasons) std::cerr << "[region-layout] source CFG: " << reason << '\n';
+      for (const auto& reason : new_flow.reasons) std::cerr << "[region-layout] result CFG: " << reason << '\n';
+    }
+    return false;
+  }
 
   PostLayoutExecutionRelocationOptions transport;
   if (defer_indirect_entries) {
@@ -150,7 +160,10 @@ bool relocated(const std::vector<IrOp>& before, const std::vector<IrOp>& after,
       }
     }
   }
-  return prove_post_layout_execution_relocation(input, output, old_flow, new_flow, items,transport).proved;
+  const auto proof = prove_post_layout_execution_relocation(input, output, old_flow, new_flow, items,transport);
+  if (!proof.proved && std::getenv("MKPRO_NATIVE_TRACE_REGION_LAYOUT"))
+    for (const auto& reason : proof.reasons) std::cerr << "[region-layout] transport: " << reason << '\n';
+  return proof.proved;
 }
 
 auto effect_fields(const IrOp& op) {
@@ -196,9 +209,23 @@ std::optional<SymbolicRegionLayout> layout_symbolic_regions(
     const PostLayoutControlFlowOptions* control_options,
     bool preserve_compiler_selector_charges,
     const SymbolicRegionProjection* projection) {
+  bool closed_numeric_layout = false;
+  if (projection && projection->numeric_layout_certificate) {
+    if (!projection->numeric_layout_preloads ||
+        !projection->numeric_layout_certificate->matches(lower_ir_to_machine(ops),
+            *projection->numeric_layout_preloads,
+            address_space_model_for_feature_profile(effective_optimizer_feature_profile(context.options)),
+            context.options.ordinary_decimal_keyboard_input))
+      return std::nullopt;
+    closed_numeric_layout = true;
+  }
   if (!symbolic(ops, preserve_compiler_selector_charges,
-                projection && projection->preserve_formal_execution_frames))
+                projection && projection->preserve_formal_execution_frames,
+                closed_numeric_layout)) {
+    if (std::getenv("MKPRO_NATIVE_TRACE_REGION_LAYOUT"))
+      std::cerr << "[region-layout] ineligible symbolic image\n";
     return std::nullopt;
+  }
   auto parts = components(ops);
   if (parts.empty() || parts.size() > 24U)
     return std::nullopt;
@@ -229,6 +256,20 @@ std::optional<SymbolicRegionLayout> layout_symbolic_regions(
   }
   std::vector<std::optional<int>> starts(parts.size());
   starts[0] = 0; // The externally entered root is never moved.
+  // An encoded operand names a concrete physical entry even when its counter
+  // is canonical. Derive its component equation from projected offsets;
+  // freeing ordinary continuations must not accidentally retarget that byte.
+  for (const auto& op : ops) if (op.target_meta.formal_opcode) {
+    const auto* target = std::get_if<std::string>(&op.target);
+    if (!target || !labels.contains(*target) || *op.target_meta.formal_opcode<0 ||
+        *op.target_meta.formal_opcode>255) return std::nullopt;
+    const auto [part,offset] = labels.at(*target);
+    const int actual = formal_address_info(*op.target_meta.formal_opcode,
+        control_options ? control_options->address_space_model : flow_options(context).address_space_model).actual;
+    const int start = actual-offset;
+    if (start<0 || (starts[part] && *starts[part]!=start)) return std::nullopt;
+    starts[part]=start;
+  }
   // A manual protocol is a local layout anchor, not a ban on optimizing
   // unrelated procedures. Keep its entire physical fallthrough component in
   // place; the matched-context transport proof still checks every external
@@ -258,7 +299,9 @@ std::optional<SymbolicRegionLayout> layout_symbolic_regions(
               static_cast<std::size_t>(cells_per_op(ops[i]))); ++cell)
           part_by_item.emplace(machine[i] + cell, part);
     std::set<std::size_t> frozen;
-    for (const auto& state : control.execution_states) if (state.formal_opcode) {
+    for (const auto& state : control.execution_states)
+      if (state.formal_opcode && (!projection->relocate_canonical_formal_frames ||
+          has_noncanonical_post_layout_counter(state, control.address_space_model))) {
       const auto found = part_by_item.find(state.item_index);
       if (found == part_by_item.end()) return std::nullopt;
       frozen.insert(found->second);
@@ -339,6 +382,13 @@ std::optional<SymbolicRegionLayout> layout_symbolic_regions(
   };
   std::vector<int> padding_before(parts.size(),0);
   if (!place(0)) {
+    if (std::getenv("MKPRO_NATIVE_TRACE_REGION_LAYOUT")) {
+      std::cerr << "[region-layout] no gapless placement";
+      for (std::size_t i=0;i<parts.size();++i)
+        std::cerr << " part=" << i << " cells=" << parts[i].cells
+                  << " start=" << starts[i].value_or(-1);
+      std::cerr << '\n';
+    }
     const int padding_limit=projection?projection->maximum_padding_cells:0;
     if(padding_limit<=0 || work>=maximum_work || parts.size()>24U)return std::nullopt;
     // An absolute empty-return root is an entry contract too. Padding may
@@ -635,6 +685,121 @@ std::vector<PassResult> conditional_region_exchange_candidates(
               "Exchanged a complementary direct condition's closed arms without adding "
               "cells; proved labelled edge polarity, all return contexts, numeric-entry "
               "and X2 convergence. Placement and selector bindings remain joint obligations."}}});
+      if (result.size() == maximum_candidates) return result;
+    }
+  }
+  return result;
+}
+
+
+std::vector<DeferredIndirectConditionalRegionExchange>
+indirect_conditional_region_exchange_candidates(
+    const std::vector<IrOp>& ops, const std::vector<PreloadReport>& preloads,
+    const std::map<std::string, int>& encoded_targets, const PassContext& context,
+    const PostLayoutControlFlowOptions& control_options, std::size_t maximum_candidates) {
+  std::vector<DeferredIndirectConditionalRegionExchange> result;
+  if (maximum_candidates == 0 || !symbolic(ops, true) ||
+      control_options.address_space_model != flow_options(context).address_space_model) return result;
+  const auto parts = components(ops);
+  if (parts.size() < 2U || parts.size() > 24U) return result;
+  std::map<std::string, std::size_t> labels;
+  std::map<std::string, const PreloadReport*> words;
+  for (std::size_t i = 0; i < ops.size(); ++i)
+    if (ops[i].kind == IrKind::Label && !labels.emplace(ops[i].name, i).second) return result;
+  for (const auto& word : preloads)
+    if (!words.emplace(word.register_name, &word).second) return result;
+  const auto input = lower_ir_to_machine(ops);
+  const auto flow = build_post_layout_control_flow(input, control_options);
+  if (!flow.proved) return result;
+  const auto old_machine = machine_indexes(ops);
+  for (std::size_t part = 0; part < parts.size(); ++part) {
+    for (std::size_t source = parts[part].begin; source < parts[part].end; ++source) {
+      const auto& condition = ops[source];
+      const int family = condition.opcode & 0xf0, reg = condition.opcode & 15;
+      const int inverse = family == 0x70 ? 0xe0 : family == 0xe0 ? 0x70 :
+                          family == 0x90 ? 0xc0 : family == 0xc0 ? 0x90 : -1;
+      if (condition.kind != IrKind::IndirectCondJump || inverse < 0 || reg < 7 || reg > 14 ||
+          condition.meta.manual_interaction || source + 1U == parts[part].end ||
+          !condition.meta.indirect_flow_targets || condition.meta.indirect_flow_targets->size() != 1U)
+        continue;
+      const auto* target = std::get_if<std::string>(&condition.meta.indirect_flow_targets->front());
+      const std::string name(1, "0123456789abcde"[reg]);
+      if (!target || !labels.contains(*target) || !encoded_targets.contains(*target) || !words.contains(name)) continue;
+      // A second consumer would still need the original destination. Do not
+      // silently reassign the meaning of its delivered address word.
+      bool sole = true;
+      for (std::size_t i = 0; i < input.size(); ++i)
+        if (i != old_machine[source] && input[i].kind == MachineItemKind::Op &&
+            input[i].indirect_flow_targets && (input[i].opcode & 15) == reg) sole = false;
+      if (!sole) continue;
+      const auto& word = *words.at(name);
+      const int origin = encoded_targets.at(*target);
+      const auto decoded = evaluate_indirect_address(name, word.value, IndirectOperationKind::Flow,
+                                                      control_options.address_space_model);
+      if (!decoded || !decoded->formal_address || decoded->formal_address->kind != FormalAddressKind::Official ||
+          decoded->actual_flow_target != std::optional<int>{origin} ||
+          !indirect_writeback_preserves_literal_word(*decoded, word.value)) continue;
+      bool flexible = false;
+      for (const int probe : {1, 2, 0})
+        if (probe != origin && rebind_stable_preloaded_indirect_flow_selector(
+            input, word, flow, origin, probe, control_options.address_space_model, &preloads)) {
+          flexible = true; break;
+        }
+      if (!flexible) continue;
+      auto cut = labels.at(*target);
+      while (cut > 0 && ops[cut - 1U].kind == IrKind::Label) --cut;
+      const auto found = std::find_if(parts.begin(), parts.end(),
+          [&](const auto& candidate) { return candidate.begin == cut; });
+      if (found == parts.end()) continue;
+      const auto other = static_cast<std::size_t>(found - parts.begin());
+      if (other == 0 || other == part || found->cells == 0) continue;
+      const auto manual = [&](std::size_t begin, std::size_t end) {
+        return std::any_of(ops.begin() + static_cast<std::ptrdiff_t>(begin),
+                           ops.begin() + static_cast<std::ptrdiff_t>(end),
+            [](const auto& op) { return op.meta.manual_interaction.has_value(); });
+      };
+      if (manual(source + 1U, parts[part].end) || manual(parts[other].begin, parts[other].end)) continue;
+      std::string continuation = "__indirect_conditional_region_" + std::to_string(source);
+      while (labels.contains(continuation)) continuation += '_';
+      auto flipped = condition;
+      flipped.opcode = inverse + reg;
+      flipped.condition = inverse == 0xe0 ? "==0" : inverse == 0x70 ? "!=0" :
+                          inverse == 0xc0 ? "<0" : ">=0";
+      flipped.meta.mnemonic = opcode_by_code(flipped.opcode).name;
+      flipped.meta.indirect_flow_targets = std::vector<IrTarget>{continuation};
+      std::vector<IrOp> rewritten;
+      std::vector<std::size_t> mapping(ops.size(), ops.size());
+      const auto append = [&](std::size_t begin, std::size_t end) {
+        for (std::size_t i = begin; i < end; ++i) {
+          mapping[i] = rewritten.size(); rewritten.push_back(i == source ? flipped : ops[i]);
+        }
+      };
+      for (std::size_t current = 0; current < parts.size(); ++current) {
+        if (current == part) {
+          append(parts[part].begin, source + 1U); append(parts[other].begin, parts[other].end);
+        } else if (current == other) {
+          IrOp label; label.kind = IrKind::Label; label.name = continuation;
+          rewritten.push_back(std::move(label)); append(source + 1U, parts[part].end);
+        } else append(parts[current].begin, parts[current].end);
+      }
+      const auto output = lower_ir_to_machine(rewritten);
+      const auto new_machine = machine_indexes(rewritten);
+      std::vector<std::optional<std::size_t>> item_mapping(input.size());
+      for (std::size_t i = 0; i < ops.size(); ++i) {
+        const auto count = ops[i].kind == IrKind::Label ? 1U : static_cast<std::size_t>(cells_per_op(ops[i]));
+        for (std::size_t cell = 0; cell < count; ++cell)
+          item_mapping[old_machine[i] + cell] = new_machine[mapping[i]] + cell;
+      }
+      PostLayoutExecutionRelocationOptions transport;
+      transport.inverted_indirect_conditional_items.push_back(old_machine[source]);
+      if (!prove_post_layout_execution_relocation(input, output, flow,
+          build_post_layout_control_flow(output, control_options), item_mapping, transport).proved) continue;
+      result.push_back({.transformation = {.ops = std::move(rewritten), .applied = 1,
+          .optimizations = {{"indirect-conditional-region-exchange",
+              "Exchanged complementary nonmutating indirect arms without adding cells; "
+              "proved canonical entries, stack-preserving edge polarity and all return contexts. "
+              "Preserved data/write-back permission; final selector binding remains mandatory."}}},
+          .encoded_target_origins = {{continuation, origin}}});
       if (result.size() == maximum_candidates) return result;
     }
   }

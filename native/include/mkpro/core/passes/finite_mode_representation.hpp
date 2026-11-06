@@ -1,8 +1,10 @@
 #pragma once
 
 #include "mkpro/core/passes/helpers.hpp"
+#include "mkpro/core/closed_numeric_layout.hpp"
 
 #include <map>
+#include <memory>
 #include <string>
 
 namespace mkpro::core::passes {
@@ -63,6 +65,10 @@ struct FiniteModeCandidateOptions {
   // formal hardware counter at the same physical address; transformations
   // elsewhere may still compete without expanding the shared continuation.
   bool preserve_formal_execution_frames = false;
+  // Requires complete final placement: preserve every encoded entry as an
+  // explicit address equation while allowing data-proved canonical bodies.
+  // Legacy clients keep the stronger whole-frame freeze above.
+  bool relocate_canonical_formal_frames = false;
 };
 
 struct FiniteModePreloadReplacement {
@@ -77,6 +83,9 @@ struct DeferredFiniteModeRepresentation {
   // these after matching every original preload field; ordinary IR passes
   // cannot silently replace an already-owned initialization.
   std::vector<FiniteModePreloadReplacement> preload_replacements;
+  // Independent, freshly checked permission for byte-preserving placement of
+  // a closed raw numeric orbit. It never authorizes scalar simplification.
+  std::shared_ptr<const ClosedNumericLayoutCertificate> numeric_layout_certificate = {};
 };
 
 // The relational data/stack proof is complete, but placement is deliberately

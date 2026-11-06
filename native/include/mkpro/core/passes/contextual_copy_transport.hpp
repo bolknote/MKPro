@@ -38,6 +38,9 @@ struct ContextualCopyTransportCandidate {
   // Origins certified for newly introduced selector families, not a preload
   // overwrite or permission to retarget an existing data-bearing family.
   std::map<std::string,int> selector_origins = {};
+  // New command-label bindings are distinct from runtime selector-register
+  // word origins. Never store a label in the register-origin namespace.
+  std::map<std::string,int> target_origins = {};
 };
 std::vector<ContextualCopyTransportCandidate> contextual_copy_transport_candidates(
     const std::vector<IrOp>& ops, const PassContext& context,
@@ -97,4 +100,27 @@ std::vector<RegisterWebRecoloringRequest> contextual_copy_origin_register_reques
 std::vector<ContextualCopyTransportCandidate> contextual_edge_return_completion_candidates(
     const std::vector<IrOp>& ops, const PassContext& context,
     const ContextualCopyTransportOptions& limits = {});
+// Conditional compound alternative. Sink a sign projection only in epochs
+// observed exclusively through that projection, retaining normalization in
+// callers with ordinary data observations. Reuse a canonical-zero private
+// selector as a null callback through an existing bounded readonly traversal.
+// Complete arithmetic totality, private-word death and all stack/X1/X2 effects
+// are proved on the same original graph before their disjoint edits compose.
+// Null completion may also stand independently; an unrelated sign projection
+// is not an admission requirement for its existing totality/death proof.
+// The caller must close every selector/data and formal-frame equation.
+std::vector<ContextualCopyTransportCandidate> contextual_nullable_callback_projection_candidates(
+    const std::vector<IrOp>& ops, const PassContext& context,
+    const ContextualCopyTransportOptions& limits = {});
+
+// Re-materialize a shared X argument from its own memory home, moving its
+// entry store to physical fallthrough while proved memory-view callers bypass
+// it. Equality is either full canonical-word equality or a closed positive
+// integral recall/FL epoch relation ending at a retained overwrite. The latter
+// preserves the actual denormalized counter word, not a canonical-word fact.
+// Both caller classes retain independent stack/X2 and return-entry proofs.
+std::vector<ContextualCopyTransportCandidate> contextual_memory_backed_entry_candidates(
+    const std::vector<IrOp>& ops, const PassContext& context,
+    const ContextualCopyTransportOptions& limits = {});
+
 } // namespace mkpro::core::passes

@@ -6,10 +6,12 @@
 
 #include <cstddef>
 #include <map>
+#include <memory>
 #include <optional>
 #include <string>
 #include <vector>
 
+namespace mkpro::core { class ClosedNumericLayoutCertificate; }
 namespace mkpro::core::passes {
 
 // Each component is a maximal physical fallthrough chain. Multiple labelled
@@ -35,10 +37,20 @@ struct SymbolicRegionProjection {
   // Fallback only, after the unchanged gapless search fails. Padding is
   // unreachable between closed fallthrough chains and is priced in full.
   int maximum_padding_cells = 0;
-  // Freeze whole fallthrough components reached under direct formal counters.
+  // Freeze whole fallthrough components reached under noncanonical counters.
+  // Ordinary canonical physical contexts are not a dark-space footprint.
   // No projected width may change there; rooted hardware CFG/return transport
   // must independently validate every other component permutation.
   bool preserve_formal_execution_frames = false;
+  // Independent complete-artifact lane. Canonical encoded entries remain
+  // hard physical-address equations, but their ordinary continuations may
+  // move after a separate data proof. Noncanonical footprints stay exact.
+  bool relocate_canonical_formal_frames = false;
+  // Byte-preserving placement only. A compiler-owned numeric invariant must
+  // match the complete current artifact, delivered preloads and input/model
+  // contract. An unproved raw instruction remains an unconditional barrier.
+  std::shared_ptr<const ClosedNumericLayoutCertificate> numeric_layout_certificate = {};
+  const std::vector<PreloadReport>* numeric_layout_preloads = nullptr;
 };
 
 struct DeferredStackProducerLimits {
@@ -78,6 +90,22 @@ std::vector<PassResult> conditional_region_exchange_candidates(
     const std::vector<IrOp>& ops, const PassContext& context,
     const PostLayoutControlFlowOptions& control_options,
     std::size_t maximum_candidates = 4);
+
+
+// Deferred, zero-growth alternatives for complementary indirect conditions.
+// The sole flow consumer of an immutable R7..Re word may change its target
+// identity only with a stable-selector data/write-back certificate. Origins
+// still describe the delivered word; final layout must discharge them again.
+struct DeferredIndirectConditionalRegionExchange {
+  PassResult transformation;
+  std::map<std::string, int> encoded_target_origins;
+};
+std::vector<DeferredIndirectConditionalRegionExchange>
+indirect_conditional_region_exchange_candidates(
+    const std::vector<IrOp>& ops, const std::vector<PreloadReport>& preloads,
+    const std::map<std::string, int>& encoded_target_origins,
+    const PassContext& context, const PostLayoutControlFlowOptions& control_options,
+    std::size_t maximum_candidates = 2);
 
 // Deferred enabling alternatives, never standalone size optimizations. The
 // added one-cell bridge reuses an unwritten, exactly preserved R7..Re word.
