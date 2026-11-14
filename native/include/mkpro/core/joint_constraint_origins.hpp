@@ -278,6 +278,27 @@ inline std::optional<JointOriginMap> protected_joint_runtime_charge_targets(
   if (families.empty()) return JointOriginMap{};
   const auto charges = inspect_deferred_decimal_selector_charges(items);
   if (!charges.diagnostics.empty()) return std::nullopt;
+  const auto protected_result = [&]() -> std::optional<JointOriginMap> {
+    JointOriginMap result;
+    for (const auto& charge : charges.charges) {
+      if (!protected_labels.contains(charge.target_label)) continue;
+      const int high = items[charge.high_item_index].opcode;
+      const int low = items[charge.low_item_index].opcode;
+      if (high < 0 || high > 9 || low < 0 || low > 9) return std::nullopt;
+      const int encoded = charge.single_cell ? low : high * 10 + low;
+      const auto [old,inserted] = result.emplace(charge.target_label,encoded);
+      if (!inserted && old->second != encoded) return std::nullopt;
+    }
+    for (const auto& label : protected_labels)
+      if (!result.contains(label)) return std::nullopt;
+    return result;
+  };
+  // No stack-privacy question remains when every charge is already pinned by
+  // an observed register. With no pending origins there is no additional
+  // origin validation to perform before returning the same encoded bindings.
+  if (!pending_origins && std::all_of(charges.charges.begin(),charges.charges.end(),
+      [&](const auto& charge){return protected_labels.contains(charge.target_label);}))
+    return protected_result();
   std::optional<AuthoritativePostLayoutControlFlow> owned_flow;
   if (!prepared_flow) {
     PostLayoutControlFlowOptions options; options.empty_return_target=1;
@@ -378,19 +399,7 @@ inline std::optional<JointOriginMap> protected_joint_runtime_charge_targets(
     if (!protected_labels.contains(charge.target_label) &&
         !joint_runtime_charge_stack_is_private(items,privacy_flow,charge,families,precise_entry_facts))
       protected_labels.insert(charge.target_label);
-  JointOriginMap result;
-  for (const auto& charge : charges.charges) {
-    if (!protected_labels.contains(charge.target_label)) continue;
-    const int high = items[charge.high_item_index].opcode;
-    const int low = items[charge.low_item_index].opcode;
-    if (high < 0 || high > 9 || low < 0 || low > 9) return std::nullopt;
-    const int encoded = charge.single_cell ? low : high * 10 + low;
-    const auto [old,inserted] = result.emplace(charge.target_label,encoded);
-    if (!inserted && old->second != encoded) return std::nullopt;
-  }
-  for (const auto& label : protected_labels)
-    if (!result.contains(label)) return std::nullopt;
-  return result;
+  return protected_result();
 }
 
 } // namespace mkpro::core::detail

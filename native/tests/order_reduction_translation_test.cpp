@@ -15,6 +15,18 @@
 #include <string>
 #include <vector>
 
+namespace mkpro::core {
+std::size_t bounded_numeric_cache_hits_for_testing();
+PostLayoutNumericRangeProof bounded_numeric_uncached_for_testing(
+    const std::vector<MachineItem>&, const AuthoritativePostLayoutControlFlow&,
+    const std::vector<bool>&, const std::vector<std::size_t>&,
+    const std::vector<PreloadReport>&, std::size_t, NumericRangeInputPolicy);
+PostLayoutNumericRangeProof bounded_numeric_sparse_for_testing(
+    const std::vector<MachineItem>&, const AuthoritativePostLayoutControlFlow&,
+    const std::vector<bool>&, const std::vector<std::size_t>&,
+    const std::vector<PreloadReport>&, std::size_t, NumericRangeInputPolicy);
+}
+
 namespace {
 using namespace mkpro;
 using namespace mkpro::core;
@@ -72,6 +84,97 @@ std::vector<std::string> observe(const Fixture& fixture, int seed) {
   require(calc.run_until_stable(6000, 8).stopped, "fixture reaches its terminal display");
   return {calc.read_register("X"), calc.read_register("Y")};
 }
+
+bool same_numeric_proof(const PostLayoutNumericRangeProof& a,
+                        const PostLayoutNumericRangeProof& b) {
+  if (a.work != b.work || a.exhausted != b.exhausted || a.x_before != b.x_before ||
+      a.x_before_state != b.x_before_state ||
+      a.canonical_small_integer_states != b.canonical_small_integer_states ||
+      a.canonical_memory_load_states != b.canonical_memory_load_states ||
+      a.unreachable_states != b.unreachable_states ||
+      a.nonnegative_words_before != b.nonnegative_words_before ||
+      a.nonnegative_words_before_state != b.nonnegative_words_before_state ||
+      a.stack_before_state.size() != b.stack_before_state.size() ||
+      a.memory_selector_before_state.size() != b.memory_selector_before_state.size()) return false;
+  for (const auto& [state, slots] : a.stack_before_state) {
+    const auto found = b.stack_before_state.find(state);
+    if (found == b.stack_before_state.end()) return false;
+    for (std::size_t slot = 0; slot < slots.size(); ++slot)
+      if (slots[slot].range != found->second[slot].range ||
+          slots[slot].ordinary != found->second[slot].ordinary ||
+          slots[slot].enclosure != found->second[slot].enclosure) return false;
+  }
+  for (const auto& [state, word] : a.memory_selector_before_state) {
+    const auto found = b.memory_selector_before_state.find(state);
+    if (found == b.memory_selector_before_state.end() || word.range != found->second.range ||
+        word.integer_selector_word != found->second.integer_selector_word ||
+        word.normalized_or_payload != found->second.normalized_or_payload) return false;
+  }
+  return true;
+}
+
+void bounded_numeric_cache_contracts() {
+  const auto f = fixture("0.125");
+  const auto flow = build_post_layout_control_flow(f.items);
+  require(flow.proved, "numeric cache fixture needs an authoritative CFG");
+  const auto lift = analyze_post_layout_automatic_entry_lift_with_indirect_store_facts(
+      f.items, flow, 100000);
+  require(lift.has_value(), "numeric cache fixture needs a proved entry mode");
+  std::vector<std::size_t> queries;
+  for (std::size_t at = 0; at < f.items.size(); ++at)
+    if (f.items[at].kind == MachineItemKind::Op) queries.push_back(at);
+  constexpr std::size_t budget = 2000000;
+  constexpr auto policy = NumericRangeInputPolicy::ValidatedRegisterTransport;
+  const auto expected = bounded_numeric_uncached_for_testing(
+      f.items, flow, *lift, queries, f.preloads, budget, policy);
+  const auto expected_sparse = bounded_numeric_sparse_for_testing(
+      f.items, flow, *lift, queries, f.preloads, budget, policy);
+  require(!expected.exhausted, "numeric cache fixture must converge");
+  require(same_numeric_proof(expected, expected_sparse),
+          "dense and sparse numeric solvers must preserve all facts and logical work");
+  const auto first = prove_post_layout_bounded_stack_numeric_values(
+      f.items, flow, *lift, queries, f.preloads, budget, policy);
+  const auto hits = bounded_numeric_cache_hits_for_testing();
+  auto cached = prove_post_layout_bounded_stack_numeric_values(
+      f.items, flow, *lift, queries, f.preloads, budget, policy);
+  require(bounded_numeric_cache_hits_for_testing() == hits + 1U &&
+              same_numeric_proof(expected, first) && same_numeric_proof(expected, cached),
+          "an exact cache hit must retain every fact and its original work charge");
+  cached.x_before.clear(); cached.stack_before_state.clear();
+  require(same_numeric_proof(expected, prove_post_layout_bounded_stack_numeric_values(
+              f.items, flow, *lift, queries, f.preloads, budget, policy)),
+          "mutating a returned proof must not alter the cached snapshot");
+  const auto miss = [&](const auto& items, const auto& graph, const auto& entry_lift,
+                        const auto& requested, const auto& words, std::size_t work,
+                        NumericRangeInputPolicy input_policy) {
+    const auto before = bounded_numeric_cache_hits_for_testing();
+    const auto actual = prove_post_layout_bounded_stack_numeric_values(
+        items, graph, entry_lift, requested, words, work, input_policy);
+    const auto direct = bounded_numeric_uncached_for_testing(
+        items, graph, entry_lift, requested, words, work, input_policy);
+    const auto sparse = bounded_numeric_sparse_for_testing(
+        items, graph, entry_lift, requested, words, work, input_policy);
+    require(bounded_numeric_cache_hits_for_testing() == before && same_numeric_proof(actual, direct) &&
+                same_numeric_proof(actual, sparse),
+            "changed inputs must miss the cache and match both numeric solvers");
+  };
+  auto items = f.items; items.front().comment = " distinct metadata";
+  miss(items, flow, *lift, queries, f.preloads, budget, policy);
+  auto graph = flow; ++graph.explored_states;
+  miss(f.items, graph, *lift, queries, f.preloads, budget, policy);
+  auto changed_lift = *lift; changed_lift.front() = !changed_lift.front();
+  miss(f.items, flow, changed_lift, queries, f.preloads, budget, policy);
+  auto changed_queries = queries; changed_queries.pop_back();
+  miss(f.items, flow, *lift, changed_queries, f.preloads, budget, policy);
+  auto words = f.preloads; words[1].value = "0.5";
+  miss(f.items, flow, *lift, queries, words, budget, policy);
+  words = f.preloads; words.front().lowered_data_value = "1";
+  miss(f.items, flow, *lift, queries, words, budget, policy);
+  miss(f.items, flow, *lift, queries, f.preloads, budget, NumericRangeInputPolicy::Forget);
+  miss(f.items, flow, *lift, queries, f.preloads, 1U, policy);
+  miss(f.items, flow, *lift, queries, f.preloads, 1U, policy);
+}
+
 void translation_contracts() {
   for (const char* increment : {"0", "0.0000001", "0.1234567", "0.9999999", "1.0000001", "-0.0000001"}) {
     const auto f = fixture(increment);
@@ -330,7 +433,7 @@ int main(int argc, char** argv) {
     if (argc == 2 && std::string(argv[1]) == "--pending-decimal-baseline") {
       pending_decimal_size_baseline(); return 0;
     }
-    translation_contracts(); rounding_and_ties(); indirect_store_literal_contract(); input_contract(); selector_class_contract(); read_only_word_contract();
+    bounded_numeric_cache_contracts(); translation_contracts(); rounding_and_ties(); indirect_store_literal_contract(); input_contract(); selector_class_contract(); read_only_word_contract();
     negative_divisor_enclosure();
     std::cout << "order-only reduction translation compiler and ROM contracts passed\n";
     return 0;

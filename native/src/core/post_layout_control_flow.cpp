@@ -1436,6 +1436,36 @@ static SelectorConsistentExecutionGraph build_selector_execution_graph_impl(
   if (!has_main)
     return {};
 
+  struct SelectorTransfer {
+    unsigned invalidated = 0;
+    std::optional<std::size_t> stable_slot;
+    bool opaque = false;
+  };
+  std::vector<std::optional<SelectorTransfer>> transfers(items.size());
+  const auto transfer_for = [&](std::size_t at) -> const SelectorTransfer& {
+    auto& entry = transfers[at];
+    if (entry) return *entry;
+    const auto& item = items[at];
+    SelectorTransfer effect;
+    effect.opaque = item.kind != MachineItemKind::Op || item.raw ||
+        item.manual_interaction.has_value() || item.opcode == kStopOpcode ||
+        item.opcode == kErrorStopOpcode || item.opcode < 0 || item.opcode >= 0xf0 ||
+        (item.opcode >= 0x40 && (item.opcode & 15) == 15) ||
+        opcode_by_code(item.opcode).risk == OpcodeRisk::Dangerous;
+    if (!effect.opaque) {
+      for (std::size_t slot = 0; slot < tracked.size(); ++slot)
+        if (tracked[slot] && register_access_effect(
+                item, register_name_for_index(static_cast<int>(slot) + 7)).writes !=
+                RegisterWriteEffect::None)
+          effect.invalidated |= 1U << slot;
+      if (const auto reg = stable_indirect_flow_register(item)) {
+        const auto slot = static_cast<std::size_t>(register_index(*reg) - 7);
+        if (tracked[slot]) effect.stable_slot = slot;
+      }
+    }
+    entry = effect;
+    return *entry;
+  };
   for (std::size_t i = 0; i < states.size(); ++i) {
     // intern() may grow states: never retain a reference to its elements.
     const ProductState input = states[i];
@@ -1444,20 +1474,14 @@ static SelectorConsistentExecutionGraph build_selector_execution_graph_impl(
     auto after = input.choices;
     auto literals = input.literals;
     auto x_literal = input.x_literal;
-    const bool opaque = item.kind != MachineItemKind::Op || item.raw ||
-        item.manual_interaction.has_value() || item.opcode == kStopOpcode ||
-        item.opcode == kErrorStopOpcode || item.opcode < 0 || item.opcode >= 0xf0 ||
-        (item.opcode >= 0x40 && (item.opcode & 15) == 15) ||
-        opcode_by_code(item.opcode).risk == OpcodeRisk::Dangerous;
-    if (opaque) {
+    const auto& transfer = transfer_for(execution.item_index);
+    if (transfer.opaque) {
       after = {};
       literals = {};
       x_literal.reset();
     } else {
       for (std::size_t slot = 0; slot < tracked.size(); ++slot) {
-        if (tracked[slot] && register_access_effect(
-                item, register_name_for_index(static_cast<int>(slot) + 7)).writes !=
-                RegisterWriteEffect::None) {
+        if ((transfer.invalidated & (1U << slot)) != 0U) {
           after[slot].reset();
           literals[slot].reset();
         }
@@ -1475,7 +1499,6 @@ static SelectorConsistentExecutionGraph build_selector_execution_graph_impl(
         x_literal.reset();
       }
     }
-    const auto reg = opaque ? std::nullopt : stable_indirect_flow_register(item);
     for (const auto& edge : control.execution_edges[input.original]) {
       ProductState next{.original = edge.target_state, .choices = after,
                         .literals = literals, .x_literal = x_literal};
@@ -1484,30 +1507,28 @@ static SelectorConsistentExecutionGraph build_selector_execution_graph_impl(
         next.literals = {};
         next.x_literal.reset();
       }
-      if (reg && edge.kind == PostLayoutExecutionEdgeKind::IndirectTarget) {
-        const auto slot = static_cast<std::size_t>(register_index(*reg) - 7);
-        if (tracked[slot]) {
-          const Choice selected = choice_for(edge);
-          // An oversized intermediate uses logical command addresses rather
-          // than hardware counters. A proved ordinary 00..99 literal names
-          // that same logical address; the absence of a hardware counter is
-          // not evidence that the edge is impossible. In a hardware context
-          // keep comparing exact counters: dark aliases of one physical cell
-          // can have different continuations.
-          if (next.literals[slot] &&
-              (selected.formal
-                   ? *selected.formal != address_to_opcode(
-                         *next.literals[slot], control.address_space_model)
-                   : selected.logical != *next.literals[slot])) {
-            ++result.pruned_edges;
-            continue;
-          }
-          if (next.choices[slot] && *next.choices[slot] != selected) {
-            ++result.pruned_edges;
-            continue;
-          }
-          next.choices[slot] = selected;
+      if (transfer.stable_slot && edge.kind == PostLayoutExecutionEdgeKind::IndirectTarget) {
+        const auto slot = *transfer.stable_slot;
+        const Choice selected = choice_for(edge);
+        // An oversized intermediate uses logical command addresses rather
+        // than hardware counters. A proved ordinary 00..99 literal names
+        // that same logical address; the absence of a hardware counter is
+        // not evidence that the edge is impossible. In a hardware context
+        // keep comparing exact counters: dark aliases of one physical cell
+        // can have different continuations.
+        if (next.literals[slot] &&
+            (selected.formal
+                 ? *selected.formal != address_to_opcode(
+                       *next.literals[slot], control.address_space_model)
+                 : selected.logical != *next.literals[slot])) {
+          ++result.pruned_edges;
+          continue;
         }
+        if (next.choices[slot] && *next.choices[slot] != selected) {
+          ++result.pruned_edges;
+          continue;
+        }
+        next.choices[slot] = selected;
       }
       const auto target = intern(next);
       if (!target)

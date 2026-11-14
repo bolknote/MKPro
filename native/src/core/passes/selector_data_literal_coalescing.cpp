@@ -8,6 +8,7 @@
 #include "mkpro/core/layout_search_artifact.hpp"
 
 #include <algorithm>
+#include <array>
 #include <bit>
 #include <map>
 #include <optional>
@@ -210,22 +211,32 @@ struct Family {
   std::set<std::size_t> digits;
 };
 
+std::optional<std::pair<std::string, std::string>> literal_owner(
+    const MachineItem& item, bool allow_coalesced) {
+  if (item.kind != MachineItemKind::Op || item.opcode < 0x47 || item.opcode > 0x4e ||
+      (!allow_coalesced &&
+       std::find(item.roles.begin(), item.roles.end(), "selector-sunk-literal-coalesced") !=
+           item.roles.end()))
+    return std::nullopt;
+  auto id = role(item, "selector-sunk-literal-id:");
+  auto literal = role(item, "selector-sunk-literal-value:");
+  if (!id || !literal || literal->size() > 2 || literal->front() == '0' ||
+      !std::all_of(literal->begin(), literal->end(), [](char c) { return c >= '0' && c <= '9'; }))
+    return std::nullopt;
+  return std::pair{std::move(*id), std::move(*literal)};
+}
+
 std::optional<Family> family_at(const std::vector<MachineItem>& items,
                                 const AuthoritativePostLayoutControlFlow& flow,
                                 std::size_t store, bool verify_entry_bindings = true,
                                 bool allow_coalesced = false,
                                 bool deferred_command_targets = false) {
-  const auto id = role(items[store], "selector-sunk-literal-id:");
-  const auto literal = role(items[store], "selector-sunk-literal-value:");
+  const auto owner = literal_owner(items[store], allow_coalesced);
+  if (!owner) return std::nullopt;
+  const auto& [id, literal] = *owner;
   const bool coalesced = std::find(items[store].roles.begin(), items[store].roles.end(),
       "selector-sunk-literal-coalesced") != items[store].roles.end();
-  if (!id || !literal || literal->empty() || literal->size() > 2 ||
-      !std::all_of(literal->begin(), literal->end(), [](char c) { return c >= '0' && c <= '9'; }) ||
-      literal->front() == '0' || items[store].kind != MachineItemKind::Op ||
-      items[store].opcode < 0x47 || items[store].opcode > 0x4e ||
-      (coalesced && !allow_coalesced))
-    return std::nullopt;
-  Family family{.store = store, .identity = *id, .literal = *literal};
+  Family family{.store = store, .identity = id, .literal = literal};
   const int reg = items[store].opcode & 15;
   const std::string register_name(1, "0123456789abcde"[reg]);
   std::optional<std::size_t> source;
@@ -258,7 +269,7 @@ std::optional<Family> family_at(const std::vector<MachineItem>& items,
     return std::nullopt;
   family.leaf = index.labels.at(*leaf);
   std::size_t digit = store;
-  if (!coalesced) for (const char value : *literal) {
+  if (!coalesced) for (const char value : literal) {
     digit = next(items, digit);
     if (digit >= items.size() || items[digit].kind != MachineItemKind::Op ||
         items[digit].opcode != value - '0' || items[digit].manual_interaction ||
@@ -1201,11 +1212,24 @@ prepare_deferred_selector_data_literal_layouts(
     const std::vector<MachineItem>& items,
     const PostLayoutControlFlowOptions& options, std::size_t maximum_candidates) {
   std::vector<DeferredSelectorDataLiteralLayout> result;
-  if (maximum_candidates == 0 || std::none_of(items.begin(), items.end(),
-      [](const auto& item) {
-        return role(item, "selector-sunk-literal-id:").has_value() &&
-            std::find(item.roles.begin(), item.roles.end(),
-                "selector-sunk-literal-coalesced") == item.roles.end();
+  if (maximum_candidates == 0) return result;
+  std::array<std::size_t, 15> direct_stores{};
+  std::array<bool, 15> direct_reads{};
+  for (const auto& item : items) {
+    if (item.kind != MachineItemKind::Op) continue;
+    if (item.opcode >= 0x47 && item.opcode <= 0x4e)
+      ++direct_stores[static_cast<std::size_t>(item.opcode & 15)];
+    if (item.opcode >= 0x67 && item.opcode <= 0x6e)
+      direct_reads[static_cast<std::size_t>(item.opcode & 15)] = true;
+  }
+  // Symbolization and decimal rebinding do not change direct register
+  // traffic. These are the same rejections as family_at, before preparing
+  // any CFG or attempting literal/selector continuation proofs.
+  if (std::none_of(items.begin(), items.end(), [&](const auto& item) {
+        if (item.kind != MachineItemKind::Op || item.opcode < 0x47 || item.opcode > 0x4e)
+          return false;
+        const auto reg = static_cast<std::size_t>(item.opcode & 15);
+        return !direct_reads[reg] && direct_stores[reg] == 1 && literal_owner(item, false);
       }))
     return result;
   // The owner supplies symbolic command identities and the encoded origins

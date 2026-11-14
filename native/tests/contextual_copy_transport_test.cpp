@@ -1,8 +1,10 @@
 #include "mkpro/compiler.hpp"
 #include "mkpro/core/emit/machine_emitter.hpp"
 #include "mkpro/core/joint_representation_search.hpp"
+#include "mkpro/core/detail/layout_jobs.hpp"
 #include "mkpro/core/search_frontier.hpp"
 #include "mkpro/core/passes/semantic_region_folding.hpp"
+#include "mkpro/core/passes/selector_charge_literal_sinking.hpp"
 #include "mkpro/core/natural_target_component_layout.hpp"
 #include "mkpro/core/helper_invariant_recall_hoist.hpp"
 #include "mkpro/core/shared_helper_dual_mode_layout.hpp"
@@ -37,6 +39,10 @@ namespace mkpro::core {
 std::optional<std::pair<LayoutSearchArtifact, std::map<std::string,int>>>
 contextual_reopened_allocation_root_for_testing(const LayoutSearchArtifact&,
     const CompileOptions&, int);
+std::optional<LayoutSearchArtifact> joint_closure_for_testing(
+    const LayoutSearchArtifact&, const CompileOptions&, const PostLayoutControlFlowOptions&,
+    bool, bool, bool, const std::map<std::string,int>&,
+    const passes::DeferredSelectorDataLiteralLayout*, std::optional<int>);
 }
 namespace {
 using namespace mkpro;using namespace mkpro::core;using mkpro::tests::require;
@@ -444,6 +450,99 @@ void charged_alias_privacy(){
   auto conflicting=origins;conflicting["first"]=21;
   const auto rejected=detail::protected_joint_runtime_charge_targets(e.items,&flow,&words,true,&conflicting);
   require(!rejected || rejected->contains("first"),"conflicting charge origins cannot release a callback address");
+  auto observed=e.items;
+  const auto consumer=std::find_if(observed.begin(),observed.end(),[](const auto& item){
+    return std::find(item.roles.begin(),item.roles.end(),"late-decimal-selector-consumer")!=item.roles.end();
+  });
+  require(consumer!=observed.end(),"observed selector fixture has a consumer");
+  consumer->indirect_flow_targets=std::vector<IrTarget>{std::string("first"),std::string("second")};
+  observed.insert(consumer,MachineItem::op(0x6b,"P-X b"));
+  const auto observed_flow=build_post_layout_control_flow(observed);
+  const detail::JointOriginMap no_origins;
+  const auto fast=detail::protected_joint_runtime_charge_targets(observed,&observed_flow,&words,true);
+  const auto reference=detail::protected_joint_runtime_charge_targets(observed,&observed_flow,&words,true,&no_origins);
+  require(fast==reference && fast && fast->at("first")==20 && fast->at("second")==40,
+      "already observed charge families retain the exact conservative protected bindings");
+}
+void selector_graph_write_contract(){
+  const auto same=[](const auto& a,const auto& b){return a.proved==b.proved &&
+      a.original_states==b.original_states && a.successors==b.successors &&
+      a.execution_edges==b.execution_edges && a.pruned_edges==b.pruned_edges;};
+  for(const bool overwrite:{false,true}){
+    MachineEmitter e;e.emit_op(0xa7);
+    e.items.back().indirect_flow_targets=std::vector<IrTarget>{std::string("first"),std::string("second")};
+    if(overwrite)e.emit_op(0x47);
+    e.emit_op(0xa7);e.items.back().indirect_flow_targets=
+        std::vector<IrTarget>{std::string("first"),std::string("second")};
+    e.emit_stop(StopDisposition::Terminal);
+    e.emit_label("first");e.emit_op(1);e.emit_op(0x52);
+    e.emit_label("second");e.emit_op(2);e.emit_op(0x52);
+    const auto flow=build_post_layout_control_flow(e.items);
+    require(flow.proved,"selector product fixture has a complete matched-return CFG");
+    detail::JointOriginMap origins;int pc=0;
+    for(const auto& item:e.items){if(item.kind==MachineItemKind::Label)origins.emplace(item.name,pc);else ++pc;}
+    for(const std::size_t budget:{0U,1U,3U,20000U}){
+      const auto fast=build_selector_consistent_execution_graph(e.items,flow,budget);
+      const auto deferred=build_deferred_selector_consistent_execution_graph(e.items,flow,origins,budget);
+      require(same(fast,deferred.execution),
+          "exact physical origins preserve the product graph and state limits");
+    }
+    const auto graph=build_selector_consistent_execution_graph(e.items,flow);
+    if (overwrite)
+      require(!graph.proved && graph.original_states.empty(),
+          "contradictory facts after rewriting the selector must not export a refined graph");
+    else
+      require(graph.proved && graph.pruned_edges==2U,
+          "a stable repeated selector prunes exactly the two contradictory choices");
+    auto conflict=origins;conflict["second"]=conflict.at("first");
+    require(!build_deferred_selector_consistent_execution_graph(e.items,flow,conflict).execution.proved,
+        "different callback identities cannot have the same encoded origin");
+  }
+}
+void strict_joint_closure_size_contract(){
+  MachineEmitter e;
+  e.emit_op(0x52); e.emit_label("main");
+  e.emit_jump(0x53,"strict closure call","leaf"); e.emit_stop(StopDisposition::Terminal);
+  e.emit_label("leaf"); e.emit_op(0x61); e.emit_op(0x52);
+  LayoutSearchArtifact root{e.items,{{.register_name="1",.value="17"}},{}};
+  CompileOptions options;
+  PostLayoutControlFlowOptions control;
+  control.empty_return_target=1;
+  const auto run=[&](std::optional<int> limit){
+    return joint_closure_for_testing(root,options,control,true,false,false,{},nullptr,limit);
+  };
+  const auto unrestricted=run(std::nullopt);
+  require(unrestricted && cells(unrestricted->items)==cells(root.items),
+      "an unrestricted closure can be a neutral continuation");
+  require(!run(cells(root.items)),"a strict-size lane cannot use a neutral ordinary closure");
+  const auto admitted=run(cells(root.items)+1);
+  require(admitted && same_layout_search_artifact(*admitted,*unrestricted) &&
+      observe(root,-1,true)==observe(*admitted,-1,true),
+      "a size-compatible closure keeps the same artifact and ROM behavior");
+}
+
+void independent_layout_job_contract(){
+  const auto f=fixture();
+  const LayoutSearchArtifact root{f.items,f.preloads,{}};
+  CompileOptions options;
+  options.analysis=true;
+  using Edges=std::vector<ProvedSearchTransition<LayoutSearchArtifact>>;
+  std::vector<Edges> serial(3),parallel(3);
+  const auto evaluate=[&](auto& results,std::size_t index) {
+    auto artifact=root;
+    artifact.optimizations.push_back({"test-layout-input",std::to_string(index)});
+    results[index]=contextual_copy_transport_layout_transactions(artifact,options);
+  };
+  detail::evaluate_layout_jobs(serial.size(),[&](std::size_t i){evaluate(serial,i);},1);
+  detail::evaluate_layout_jobs(parallel.size(),[&](std::size_t i){evaluate(parallel,i);},3);
+  require(!serial.front().empty(),"test fixture yields at least one complete layout");
+  for(std::size_t i=0;i<serial.size();++i){
+    require(serial[i].size()==parallel[i].size(),"parallel layout does not lose candidates");
+    for(std::size_t j=0;j<serial[i].size();++j)
+      require(serial[i][j].rule==parallel[i][j].rule && serial[i][j].proved==parallel[i][j].proved &&
+              same_layout_search_artifact(serial[i][j].node,parallel[i][j].node),
+          "parallel results retain serial discovery order and exact machine items");
+  }
 }
 void padded_symbolic_packing(){
   for(const bool empty_return:{false,true}){
@@ -2240,6 +2339,9 @@ void data_and_rom(){
   stack_equality_work_bound();
   aliased_helper_operand_abi();
   typed_resume_family_permutation();
+  strict_joint_closure_size_contract();
+  selector_graph_write_contract();
+  independent_layout_job_contract();
   padded_symbolic_packing();
   whole_family_permutation();
   charged_alias_privacy();

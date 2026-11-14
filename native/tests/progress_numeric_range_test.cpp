@@ -18,6 +18,17 @@
 #include <string>
 #include <vector>
 
+namespace mkpro::core {
+PostLayoutNumericRangeProof bounded_numeric_uncached_for_testing(
+    const std::vector<MachineItem>&, const AuthoritativePostLayoutControlFlow&,
+    const std::vector<bool>&, const std::vector<std::size_t>&,
+    const std::vector<PreloadReport>&, std::size_t, NumericRangeInputPolicy);
+PostLayoutNumericRangeProof bounded_numeric_sparse_for_testing(
+    const std::vector<MachineItem>&, const AuthoritativePostLayoutControlFlow&,
+    const std::vector<bool>&, const std::vector<std::size_t>&,
+    const std::vector<PreloadReport>&, std::size_t, NumericRangeInputPolicy);
+}
+
 namespace {
 using namespace mkpro;
 using namespace mkpro::core;
@@ -106,6 +117,49 @@ MonotoneProgressProof progress(const Fixture& f, std::size_t budget=100000) {
   const auto lift=analyze_post_layout_automatic_entry_lift(f.items,control,100000);
   require(lift.has_value(),"progress fixture needs lift facts");
   return prove_post_layout_monotone_progress(f.items,control,*lift,f.preloads,budget);
+}
+
+void dense_progress_numeric_equivalence() {
+  for (const bool interactive : {false, true}) {
+    const auto f = fixture(interactive);
+    const auto flow = build_post_layout_control_flow(f.items);
+    const auto lift = analyze_post_layout_automatic_entry_lift(f.items, flow, 100000);
+    require(flow.proved && lift.has_value(), "dense progress fixture needs a proved CFG and entry mode");
+    std::vector<std::size_t> queries;
+    for (std::size_t at = 0; at < f.items.size(); ++at)
+      if (f.items[at].kind == MachineItemKind::Op) queries.push_back(at);
+    constexpr auto policy = NumericRangeInputPolicy::ValidatedRegisterTransport;
+    const auto dense = bounded_numeric_uncached_for_testing(
+        f.items, flow, *lift, queries, f.preloads, 2000000, policy);
+    const auto sparse = bounded_numeric_sparse_for_testing(
+        f.items, flow, *lift, queries, f.preloads, 2000000, policy);
+    require(!dense.exhausted && dense.work == sparse.work && dense.exhausted == sparse.exhausted &&
+                dense.x_before == sparse.x_before && dense.x_before_state == sparse.x_before_state &&
+                dense.canonical_small_integer_states == sparse.canonical_small_integer_states &&
+                dense.canonical_memory_load_states == sparse.canonical_memory_load_states &&
+                dense.unreachable_states == sparse.unreachable_states &&
+                dense.nonnegative_words_before == sparse.nonnegative_words_before &&
+                dense.nonnegative_words_before_state == sparse.nonnegative_words_before_state &&
+                dense.stack_before_state.size() == sparse.stack_before_state.size() &&
+                dense.memory_selector_before_state.size() == sparse.memory_selector_before_state.size(),
+            "dense and sparse progress analysis must retain identical state facts and work");
+    for (const auto& [state, slots] : dense.stack_before_state) {
+      const auto found = sparse.stack_before_state.find(state);
+      require(found != sparse.stack_before_state.end(), "sparse stack state must exist");
+      for (std::size_t slot = 0; slot < slots.size(); ++slot)
+        require(slots[slot].range == found->second[slot].range &&
+                    slots[slot].ordinary == found->second[slot].ordinary &&
+                    slots[slot].enclosure == found->second[slot].enclosure,
+                "dense and sparse stack slots must agree");
+    }
+    for (const auto& [state, word] : dense.memory_selector_before_state) {
+      const auto found = sparse.memory_selector_before_state.find(state);
+      require(found != sparse.memory_selector_before_state.end() && word.range == found->second.range &&
+                  word.integer_selector_word == found->second.integer_selector_word &&
+                  word.normalized_or_payload == found->second.normalized_or_payload,
+              "dense and sparse selector-word facts must agree");
+    }
+  }
 }
 std::string word(const std::array<unsigned,7>& digits) {
   static const std::array<const char*,16> names{
@@ -392,6 +446,7 @@ void matched_call_contexts() {
 }
 int main() {
   try {
+    dense_progress_numeric_equivalence();
     native_rank_facts();
     bounded_ranges_and_input();
     indirect_progress_contracts();

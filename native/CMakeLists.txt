@@ -3,6 +3,7 @@ cmake_minimum_required(VERSION 3.25)
 project(MKProNative VERSION 0.1.0 LANGUAGES CXX)
 
 include(CTest)
+find_package(Threads REQUIRED)
 
 option(MKPRO_WARNINGS_AS_ERRORS "Treat native compiler warnings as errors" ON)
 option(MKPRO_ENABLE_ASAN_UBSAN "Enable AddressSanitizer and UndefinedBehaviorSanitizer" OFF)
@@ -148,6 +149,7 @@ target_include_directories(mkpro_core PUBLIC
   ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 target_compile_features(mkpro_core PUBLIC cxx_std_23)
+target_link_libraries(mkpro_core PUBLIC Threads::Threads)
 if(UNIX AND NOT APPLE)
   # Some Unix libcs keep math routines outside the default C++ link set.
   target_link_libraries(mkpro_core PUBLIC m)

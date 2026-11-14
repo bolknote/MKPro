@@ -3,6 +3,7 @@
 #include "mkpro/core/joint_proof_input.hpp"
 #include "mkpro/core/joint_constraint_origins.hpp"
 #include "mkpro/core/detail/cell_provenance.hpp"
+#include "mkpro/core/detail/layout_jobs.hpp"
 #include "mkpro/core/post_layout_packed_sign.hpp"
 #include "mkpro/core/order_reduction_translation.hpp"
 
@@ -26,12 +27,14 @@
 #include "mkpro/core/passes/semantic_region_folding.hpp"
 #include "mkpro/core/passes/shared_straight_line_helper.hpp"
 #include "mkpro/core/post_layout_control_flow.hpp"
+#include "mkpro/core/post_layout_indirect_flow.hpp"
 #include "mkpro/core/shared_helper_dual_mode_layout.hpp"
 
 #include <algorithm>
 #include <cstdlib>
 #include <iostream>
 #include <map>
+#include <numeric>
 #include <set>
 #include <string_view>
 #include <utility>
@@ -1127,7 +1130,8 @@ std::optional<LayoutSearchArtifact> close_representation_constraints(
     bool project_shared_tail,
     const passes::DeferredSelectorDataLiteralLayout* pending_literal,
     PreparedJointProofInput& proof_input, bool precise_entry_facts = false,
-    const OrderReductionLiteralDomain* literal_domain = nullptr) {
+    const OrderReductionLiteralDomain* literal_domain = nullptr,
+    std::optional<int> exclusive_result_limit = std::nullopt) {
   if (literal_domain && (!pending_literal ||
       literal_domain->family_id != pending_literal->family_id ||
       literal_domain->original_seed != pending_literal->literal_value ||
@@ -1135,6 +1139,11 @@ std::optional<LayoutSearchArtifact> close_representation_constraints(
       literal_domain->minimum_seed > literal_domain->maximum_seed))
     return std::nullopt;
   const auto& input = proof_input.items();
+  // Ordinary placement only permutes cells and optionally adds padding. A
+  // caller that cannot use a neutral result need not prove such a placement.
+  if (exclusive_result_limit && !project_shared_tail &&
+      machine_cell_count(input) >= *exclusive_result_limit)
+    return std::nullopt;
   const auto& flow = proof_input.flow();
   if (!flow.proved)
     return std::nullopt;
@@ -1142,11 +1151,17 @@ std::optional<LayoutSearchArtifact> close_representation_constraints(
   if (!positions)
     return std::nullopt;
   std::optional<SharedHelperDualModePreparation> preparation;
+  std::optional<std::vector<int>> projected_widths;
   if (project_shared_tail) {
     if (!complete_preloads) return std::nullopt;
     preparation = prepare_shared_helper_dual_mode_layout(
         input, flow, control_options.address_space_model);
     if (preparation->applied <= 0) return std::nullopt;
+    projected_widths = shared_helper_dual_mode_projected_widths(*preparation);
+    if (!projected_widths || (exclusive_result_limit &&
+        std::accumulate(projected_widths->begin(), projected_widths->end(), 0) >=
+            *exclusive_result_limit))
+      return std::nullopt;
   }
   std::map<std::string, std::size_t> preload_by_register;
   for (std::size_t i = 0; i < node.artifact.preloads.size(); ++i)
@@ -1304,19 +1319,18 @@ std::optional<LayoutSearchArtifact> close_representation_constraints(
     projection->maximum_padding_cells = 16;
   }
   if (preparation) {
-    const auto widths = shared_helper_dual_mode_projected_widths(*preparation);
-    if (!widths) return std::nullopt;
+    const auto& widths = *projected_widths;
     if (!projection) projection.emplace();
     std::size_t item = 0;
     for (const auto& op : neutral_ops) {
       const auto length = op.kind == IrKind::Label
           ? 1U : static_cast<std::size_t>(passes::cells_per_op(op));
-      if (item + length > widths->size()) return std::nullopt;
+      if (item + length > widths.size()) return std::nullopt;
       int width = 0;
-      for (std::size_t cell = 0; cell < length; ++cell) width += (*widths)[item++];
+      for (std::size_t cell = 0; cell < length; ++cell) width += widths[item++];
       projection->cell_widths.push_back(width);
     }
-    if (item != widths->size()) return std::nullopt;
+    if (item != widths.size()) return std::nullopt;
     const auto [entry, inserted] = fixed.emplace(
         preparation->continuation.helper_label, preparation->required_final_start_address);
     if (!inserted && entry->second != preparation->required_final_start_address)
@@ -1392,6 +1406,11 @@ std::optional<LayoutSearchArtifact> close_representation_constraints(
     }
     return std::nullopt;
   }
+  // Do not cap the geometry solver itself: a valid padded placement stops
+  // the old solver before its widened-domain retry. Reject only that chosen
+  // result, in lanes that would already reject it before any continuation.
+  if (exclusive_result_limit && placed->projected_cells >= *exclusive_result_limit)
+    return std::nullopt;
   LayoutSearchArtifact output = node.artifact;
   output.items = lower_ir_to_machine(placed->ops);
   std::optional<passes::DeferredSelectorDataLiteralLayout> selected_literal;
@@ -1846,8 +1865,9 @@ parametric_order_reduction_layout_transactions(const ConstrainedRepresentation& 
             pending.literal_value != family.domain.original_seed) continue;
         PreparedJointProofInput proof(pending.items, source.artifact.preloads, control);
         for (const bool projected : {false, true}) {
-          auto closed = close_representation_constraints(source, context, control,
-              true, projected, &pending, proof, true, &family.domain);
+           auto closed = close_representation_constraints(source, context, control,
+               true, projected, &pending, proof, true, &family.domain,
+               finalize ? std::nullopt : std::optional{origin_cells});
           if (!closed) continue;
           // The parameter has become a concrete data/address equality. Retain
           // that witness across the caller's finalizer, not the old seed from
@@ -2423,10 +2443,10 @@ TransactionSearchResult<LayoutSearchArtifact> search_joint_representation_constr
   // allocation states. No larger search limits or source-specific seeds.
   std::optional<LayoutSearchArtifact> data_control_incumbent;
   std::vector<ConstrainedRepresentation> closed_parametric_roots;
-  const auto close_data_control_literals = [&](const ConstrainedRepresentation& node) {
+  const auto needs_literal_closure = [&](const ConstrainedRepresentation& node) {
     if (!preload_environment_complete || limits.maximum_expansions == 0 ||
         limits.maximum_candidates == 0 || limits.maximum_depth == 0)
-      return;
+      return false;
     const auto same_pending = [&](const auto& old) {
       return old.targets == node.targets && old.encoded_selectors == node.encoded_selectors &&
           old.numeric_layout_certificate == node.numeric_layout_certificate &&
@@ -2439,40 +2459,63 @@ TransactionSearchResult<LayoutSearchArtifact> search_joint_representation_constr
     };
     if (std::any_of(closed_parametric_roots.begin(), closed_parametric_roots.end(), same_pending)) {
       ++joint_literal_closure_reuses;
-      return;
+      return false;
     }
     // Both the discrete and parametric closures are pure in this invocation.
     // In particular the final initial-root visit must not replay all discrete
     // placements merely because only the parametric half used to be memoized.
     closed_parametric_roots.push_back(node);
-    const auto& literal_root = node;
+    return true;
+  };
+  const auto prove_literal_closures = [&](const ConstrainedRepresentation& literal_root,
+      JointProofPreparationCounts& counts) -> std::optional<LayoutSearchArtifact> {
+    std::optional<LayoutSearchArtifact> best;
     for (const auto& pending : passes::prepare_deferred_selector_data_literal_layouts(
              literal_root.artifact.items, control_options,
              std::min<std::size_t>(4, limits.maximum_candidates))) {
       PreparedJointProofInput proof_input(pending.items,literal_root.artifact.preloads,
-                                         control_options,&proof_counts);
+                                          control_options,&counts);
       for (const bool projected : {false, true}) {
         auto closed = close_representation_constraints(
-            literal_root, context, control_options, true, projected, &pending, proof_input, pending_root != nullptr);
+             literal_root, context, control_options, true, projected, &pending, proof_input,
+             pending_root != nullptr, nullptr,
+             finalize ? std::nullopt : std::optional{origin_cells});
         if (!closed) continue;
         // A temporarily larger placement can still repay its bounded debt in
         // finalization. Only the complete artifact competes with incumbents.
         if (finalize) closed = finalize(*closed);
-        if (closed) {
+        if (closed && !literal_family_owns_charges(pending,closed->items)) closed.reset();
+        // Closing already proves the bound literal on the exact rebound
+        // image. Only an external finalizer can change that proof input here.
+        if (closed && finalize) {
           const auto delivered_flow=build_post_layout_control_flow(closed->items,control_options);
-          if (!literal_family_owns_charges(pending,closed->items) ||
-              !delivered_flow.proved || !passes::prove_deferred_selector_data_literal_layout(
+          if (!delivered_flow.proved || !passes::prove_deferred_selector_data_literal_layout(
                   pending,closed->items,delivered_flow)) closed.reset();
         }
         if (closed && cells(*closed) < origin_cells &&
-            (!data_control_incumbent || cells(*closed) < cells(*data_control_incumbent)))
-          data_control_incumbent = std::move(*closed);
+            (!best || cells(*closed) < cells(*best)))
+          best = std::move(closed);
       }
     }
     for (auto& edge : parametric_order_reduction_layout_transactions(
-             node, options, control_options, origin_cells, finalize))
-      if (!data_control_incumbent || cells(edge.node) < cells(*data_control_incumbent))
-        data_control_incumbent = std::move(edge.node);
+             literal_root, options, control_options, origin_cells, finalize))
+      if (!best || cells(edge.node) < cells(*best))
+        best = std::move(edge.node);
+    return best;
+  };
+  const auto offer_literal_closure = [&](std::optional<LayoutSearchArtifact> candidate) {
+    if (candidate && (!data_control_incumbent ||
+        cells(*candidate) < cells(*data_control_incumbent)))
+      data_control_incumbent = std::move(candidate);
+  };
+  const auto add_proof_counts = [&](const JointProofPreparationCounts& counts) {
+    proof_counts.inputs += counts.inputs;
+    proof_counts.selector_proofs += counts.selector_proofs;
+    proof_counts.selector_reuses += counts.selector_reuses;
+  };
+  const auto close_data_control_literals = [&](const ConstrainedRepresentation& node) {
+    if (needs_literal_closure(node))
+      offer_literal_closure(prove_literal_closures(node, proof_counts));
   };
   // This independent closure is useful even when the old discrete frontier
   // has no profitable first edge. Do not demand a sacrificial rewrite before
@@ -2608,7 +2651,19 @@ TransactionSearchResult<LayoutSearchArtifact> search_joint_representation_constr
         ? std::min<std::size_t>(128, std::min<std::size_t>(128, limits.maximum_candidates) *
                                       std::min<std::size_t>(128, limits.maximum_expansions))
         : std::min<std::size_t>(24, limits.maximum_candidates);
-    std::size_t roots = 0;
+    // Prepare/close geometry without running any external finalizer on a
+    // worker. Only publish on the search thread, with the old family,
+    // allocation, variant and projection order (including equal-size ties).
+    struct AllocationProofs {
+      std::vector<ConstrainedRepresentation> variants;
+      std::vector<LayoutSearchArtifact> closures;
+      std::vector<const ConstrainedRepresentation*> literal_roots;
+      std::optional<LayoutSearchArtifact> literal_winner;
+      JointProofPreparationCounts literal_counts;
+      JointProofPreparationCounts counts;
+      bool rejected = false;
+    };
+    std::vector<const ConstrainedRepresentation*> roots;
     for (const auto& source : allocation_roots) {
       if (coupled_geometry && std::none_of(
               source.artifact.items.begin(), source.artifact.items.end(), [](const auto& item) {
@@ -2616,9 +2671,14 @@ TransactionSearchResult<LayoutSearchArtifact> search_joint_representation_constr
                                  kTransportedConstantPrefixRole) != item.roles.end();
               }))
         continue;
-      if (roots++ >= limits.maximum_expansions) break;
+      if (roots.size() == limits.maximum_expansions) break;
+      roots.push_back(&source);
+    }
+    const auto calculate_allocations = [&](const ConstrainedRepresentation& source,
+                                            std::map<std::string, int>& encoded)
+        -> std::vector<DeferredNaturalTargetSelectorAllocation> {
       const auto source_flow = build_post_layout_control_flow(source.artifact.items, control_options);
-      std::map<std::string, int> encoded = source.encoded_selectors;
+      encoded = source.encoded_selectors;
       bool consistent = source_flow.proved;
       for (const auto& [command, targets] : source_flow.indirect_flow_targets) {
         const auto& item = source.artifact.items[command];
@@ -2637,32 +2697,33 @@ TransactionSearchResult<LayoutSearchArtifact> search_joint_representation_constr
         }
         (void)targets;
       }
-      if (!consistent) continue;
       const auto allocate = coupled_geometry
           ? balanced_deferred_natural_target_selector_allocations
           : deferred_natural_target_selector_allocations;
-      const auto allocations = allocate(
+      if (!consistent) return {};
+      return allocate(
           source.artifact.items, source.artifact.preloads, source_flow, encoded,
           control_options, {.allow_typed_resume_conversion = coupled_geometry,
                             .maximum_assignments = 128, .maximum_candidates = cap,
                             .maximum_growth_cells = limits.maximum_growth_cells});
-      if (allocations.empty()) continue;
-      ++output.expanded;
-      for (const auto& allocation : allocations) {
+    };
+    const auto prove_allocation = [&](const ConstrainedRepresentation& source,
+                                       const auto& allocation,
+                                       const std::map<std::string, int>& encoded,
+                                       AllocationProofs& proof) {
         ConstrainedRepresentation allocated = source;
         allocated.artifact.items = allocation.items;
         // Factoring may already have borrowed cells. Reallocation cannot
         // reset that debt by measuring only its local delta from source.
         if (!transaction_growth_fits(
                 origin_cells, cells(allocated.artifact), limits.maximum_growth_cells)) {
-          ++output.rejected;
-          continue;
+          proof.rejected = true;
+          return;
         }
         allocated.encoded_selectors = encoded;
         for (const auto& [reg, origin] : allocation.encoded_selector_targets)
           allocated.encoded_selectors[reg] = origin;
-        if (!refresh_constraint_targets(allocated)) continue;
-        ++output.admitted;
+        if (!refresh_constraint_targets(allocated)) return;
         allocated.artifact.optimizations.push_back({"joint-selector-family-allocation",
             "Assigned whole stable flow families and direct-flow groups together (" +
             std::to_string(allocation.changed_flows) + " commands, deferred cell delta " +
@@ -2730,23 +2791,73 @@ TransactionSearchResult<LayoutSearchArtifact> search_joint_representation_constr
         }
         for (const auto& variant : variants) {
           PreparedJointProofInput proof_input(variant.artifact.items,variant.artifact.preloads,
-                                             control_options,&proof_counts);
+                                             control_options,&proof.counts);
           for (bool projected : {false, true}) {
             auto closed = close_representation_constraints(
-                variant, context, control_options, true, projected, nullptr, proof_input, pending_root != nullptr);
+                 variant, context, control_options, true, projected, nullptr, proof_input,
+                 pending_root != nullptr, nullptr, origin_cells);
             // Geometry alone is not a saving. Avoid running the full compiler
             // finalizer on an unpaid release/bridge, even if its CFG is valid.
             if (!closed || cells(*closed) >= origin_cells) continue;
             closed->optimizations.push_back({"joint-selector-allocation-layout",
                 "Closed complete-family allocation, region geometry and pending continuation "
                 "sharing atomically; independently checked delivered selectors and callbacks."});
-            if (finalize) closed = finalize(*closed);
-            if (closed && cells(*closed) < origin_cells &&
-                (!output.incumbent || cells(*closed) < cells(*output.incumbent)))
-              output.incumbent = std::move(*closed);
+            proof.closures.push_back(std::move(*closed));
           }
         }
-        for (const auto& variant : variants) close_data_control_literals(variant);
+        proof.variants = std::move(variants);
+    };
+    for (const auto* source : roots) {
+      std::map<std::string, int> encoded;
+      const auto allocations = calculate_allocations(*source, encoded);
+      if (allocations.empty()) continue;
+      ++output.expanded;
+      // Keep the transient variant vectors bounded even if a coupled root
+      // admits the full 128 allocation alternatives.
+      const auto batch_size = static_cast<std::size_t>(detail::layout_worker_count()) * 2U;
+      for (std::size_t first = 0; first < allocations.size();) {
+        const auto count = std::min(batch_size, allocations.size() - first);
+        std::vector<AllocationProofs> batch(count);
+        detail::evaluate_layout_jobs(count, [&](std::size_t at) {
+          prove_allocation(*source, allocations[first + at], encoded, batch[at]);
+        });
+        if (!finalize) {
+          // The deduplication ledger belongs to the search thread. Workers
+          // evaluate unique immutable roots only, without sharing a winner
+          // or invoking any caller-owned function.
+          for (auto& proof : batch)
+            for (const auto& variant : proof.variants)
+              if (needs_literal_closure(variant))
+                proof.literal_roots.push_back(&variant);
+          detail::evaluate_layout_jobs(count, [&](std::size_t at) {
+            auto& proof = batch[at];
+            for (const auto* pending_variant : proof.literal_roots) {
+              auto closed = prove_literal_closures(*pending_variant, proof.literal_counts);
+              if (closed && (!proof.literal_winner ||
+                  cells(*closed) < cells(*proof.literal_winner)))
+                proof.literal_winner = std::move(closed);
+            }
+          });
+        }
+        for (auto& proof : batch) {
+          if (proof.rejected) ++output.rejected;
+          if (proof.variants.empty()) continue;
+          ++output.admitted;
+          add_proof_counts(proof.counts);
+          for (auto& closed : proof.closures) {
+            auto delivered = finalize ? finalize(closed) : std::optional{std::move(closed)};
+            if (delivered && cells(*delivered) < origin_cells &&
+                (!output.incumbent || cells(*delivered) < cells(*output.incumbent)))
+              output.incumbent = std::move(delivered);
+          }
+          if (finalize) {
+            for (const auto& variant : proof.variants) close_data_control_literals(variant);
+          } else {
+            add_proof_counts(proof.literal_counts);
+            offer_literal_closure(std::move(proof.literal_winner));
+          }
+        }
+        first += count;
       }
     }
   }
@@ -2980,7 +3091,7 @@ addressed_return_pooling_layout_transactions(
   for (const auto& candidate : pool_addressed_return_targets(root, control)) {
     PreparedJointProofInput proof(candidate.artifact.items, candidate.artifact.preloads, control);
     auto closed = close_representation_constraints(
-        candidate, {configured}, control, true, false, nullptr, proof, true);
+        candidate, {configured}, control, true, false, nullptr, proof, true, nullptr, cells(artifact));
     if (closed && cells(*closed) < cells(artifact))
       result.push_back({std::move(*closed), "addressed-return-pooling-layout", true});
   }
@@ -3043,7 +3154,8 @@ zero_underflow_conditional_return_layout_transactions(
   std::vector<ProvedSearchTransition<LayoutSearchArtifact>> result;
   for (const auto& [candidate,refold] : candidates) {
     PreparedJointProofInput proof(candidate.artifact.items,candidate.artifact.preloads,control);
-    auto closed=close_representation_constraints(candidate,context,control,true,refold,nullptr,proof,true);
+    auto closed=close_representation_constraints(candidate,context,control,true,refold,
+        nullptr,proof,true,nullptr,cells(artifact));
     if(!closed || cells(*closed)>=cells(artifact))continue;
     closed=rebind_layout_search_artifact(std::move(*closed));
     if(!closed || !build_post_layout_control_flow(closed->items,control).proved)continue;
@@ -3092,7 +3204,7 @@ zero_underflow_conditional_return_layout_transactions(
           translated.artifact.items,control,4)) {
         PreparedJointProofInput proof(pending.items,translated.artifact.preloads,control);
         auto closed=close_representation_constraints(translated,context,control,
-            true,refold,&pending,proof,true);
+             true,refold,&pending,proof,true,nullptr,cells(artifact));
         if(!closed || cells(*closed)>=cells(artifact))continue;
         closed=rebind_layout_search_artifact(std::move(*closed));if(!closed)continue;
         const auto flow=build_post_layout_control_flow(closed->items,control);
@@ -3169,7 +3281,7 @@ preloaded_finite_state_layout_transactions(const LayoutSearchArtifact& artifact,
         {},proposal.numeric_layout_certificate};
     detail::PreparedJointProofInput proof_input(node.artifact.items, node.artifact.preloads, control);
     auto closed = close_representation_constraints(
-        node, context, control, true, false, nullptr, proof_input, true);
+        node, context, control, true, false, nullptr, proof_input, true, nullptr, cells(artifact));
     if (!closed || cells(*closed) >= cells(artifact)) continue;
     closed = rebind_layout_search_artifact(std::move(*closed));
     if (closed && build_post_layout_control_flow(closed->items, control).proved)
@@ -3324,7 +3436,8 @@ TransactionSearchResult<LayoutSearchArtifact> close_quantized_return_composition
         ++result.admitted;
         PreparedJointProofInput proof(candidate.artifact.items,candidate.artifact.preloads,control);
         for(bool shared:{false,true}){
-          auto closed=close_representation_constraints(candidate,context,control,true,shared,nullptr,proof,true);
+           auto closed=close_representation_constraints(candidate,context,control,true,shared,
+               nullptr,proof,true,nullptr,cells(root));
           if(!closed || cells(*closed)>=cells(root))continue;
           if(finalize)closed=finalize(*closed);
           if(!closed || cells(*closed)>=cells(root))continue;
@@ -3484,6 +3597,9 @@ contextual_copy_transport_layout_transactions_impl(const LayoutSearchArtifact& a
   if(preserve_formal_frames && !encoded_origins)return {};
   std::vector<ProvedSearchTransition<LayoutSearchArtifact>> result;
   std::vector<LayoutSearchArtifact> expanded_closed_roots;
+  using TransportOutcome = ProvedSearchTransition<LayoutSearchArtifact>;
+  std::vector<TransportOutcome> ordered_outcomes;
+  std::vector<std::size_t> joint_roots;
   const passes::ContextualCopyTransportOptions transport_options{
       .control=preserve_formal_frames?&control:nullptr,
       .encoded_target_origins=preserve_formal_frames?&*encoded_origins:nullptr,
@@ -4451,7 +4567,7 @@ contextual_copy_transport_layout_transactions_impl(const LayoutSearchArtifact& a
               "Closed a proved scalar domain, complete register allocation and addressed "
               "continuation against the immutable transaction root. No intermediate "
               "geometry, local size or historical scalar seed is a publication criterion."});
-          result.push_back(std::move(edge));
+           ordered_outcomes.push_back(std::move(edge));
         }
       }
       if(transport_trace){
@@ -4496,19 +4612,28 @@ contextual_copy_transport_layout_transactions_impl(const LayoutSearchArtifact& a
       if(std::any_of(expanded_closed_roots.begin(),expanded_closed_roots.end(),[&](const auto& old){
           return same_layout_search_artifact(old,*closed);}))continue;
       expanded_closed_roots.push_back(*closed);
-      // Finish value/allocation/region sharing from this jointly closed root.
-      // The established search keeps its original beam and incumbent.
-      const auto search=search_joint_representation_constraints(*closed,options,{},
-          {.maximum_expansions=6,.maximum_candidates=24,.maximum_depth=4,.maximum_growth_cells=4},true);
-      if(search.incumbent && cells(*search.incumbent)<cells(*closed))closed=search.incumbent;
-      if(cells(*closed)>=cells(artifact))continue;
-      const auto same=[&](const auto& old){return same_layout_search_artifact(old.node,*closed);};
-      if(std::none_of(result.begin(),result.end(),same))
-        result.push_back({std::move(*closed),"contextual-copy-lifetime-codec-layout",true});
+       joint_roots.push_back(ordered_outcomes.size());
+       ordered_outcomes.push_back({std::move(*closed),"contextual-copy-lifetime-codec-layout",true});
       }
     }
   }
-  if(composed.incumbent && cells(*composed.incumbent)<cells(artifact) &&
+   // These searches have no external finalizer and do not read the result of
+   // any sibling. Keep every original budget and replay the mixed direct/
+   // searched outcomes in discovery order for the same deduplication and ties.
+   detail::evaluate_layout_jobs(joint_roots.size(), [&](std::size_t index) {
+     auto& root = ordered_outcomes[joint_roots[index]].node;
+     auto search = search_joint_representation_constraints(root, options, {},
+         {.maximum_expansions=6,.maximum_candidates=24,.maximum_depth=4,.maximum_growth_cells=4}, true);
+     if (search.incumbent && cells(*search.incumbent) < cells(root))
+       root = std::move(*search.incumbent);
+   });
+   for (auto& outcome : ordered_outcomes)
+     if (cells(outcome.node) < cells(artifact) &&
+         std::none_of(result.begin(), result.end(), [&](const auto& old) {
+           return same_layout_search_artifact(old.node, outcome.node);
+         }))
+       result.push_back(std::move(outcome));
+   if(composed.incumbent && cells(*composed.incumbent)<cells(artifact) &&
       std::none_of(result.begin(),result.end(),[&](const auto& old){
         return same_layout_search_artifact(old.node,*composed.incumbent);
       }))result.push_back({std::move(*composed.incumbent),"final-root-return-composition",true});
@@ -4549,6 +4674,19 @@ std::size_t joint_completed_cache_hits_for_testing() {
 
 std::size_t joint_literal_closure_reuses_for_testing() {
   return joint_literal_closure_reuses;
+}
+
+std::optional<LayoutSearchArtifact> joint_closure_for_testing(
+    const LayoutSearchArtifact& artifact, const CompileOptions& options,
+    const PostLayoutControlFlowOptions& control, bool complete_preloads,
+    bool projected, bool precise, const std::map<std::string, int>& encoded,
+    const passes::DeferredSelectorDataLiteralLayout* pending, std::optional<int> exclusive_result_limit) {
+  ConstrainedRepresentation node{artifact, {}, encoded};
+  if (!refresh_constraint_targets(node)) return std::nullopt;
+  PreparedJointProofInput input(pending ? pending->items : artifact.items,
+                                artifact.preloads, control);
+  return close_representation_constraints(node, passes::PassContext{options}, control,
+      complete_preloads, projected, pending, input, precise, nullptr, exclusive_result_limit);
 }
 
 std::vector<passes::RegisterWebRecoloringRequest> hardware_epoch_storage_requests_for_testing(
@@ -4753,7 +4891,7 @@ order_reduction_selector_layout_transactions(const LayoutSearchArtifact& root,
         PreparedJointProofInput proof_input(pending.items, candidate.artifact.preloads, control);
         for (const bool projected : {false, true}) {
           auto closed = close_representation_constraints(candidate, context, control,
-              true, projected, &pending, proof_input, true);
+               true, projected, &pending, proof_input, true, nullptr, cells(root));
           if (!closed || cells(*closed) >= cells(root)) continue;
           const auto flow = build_post_layout_control_flow(closed->items, control);
           if (!flow.proved || !literal_family_owns_charges(pending, closed->items) ||
@@ -4869,7 +5007,8 @@ nullable_callback_projection_layout_transactions(const LayoutSearchArtifact& roo
     if(!refresh_constraint_targets(next) || !transaction_growth_fits(cells(root),cells(next.artifact),4))continue;
     for(const auto& pending:passes::prepare_deferred_selector_data_literal_layouts(next.artifact.items,control,2)){
       PreparedJointProofInput proof(pending.items,next.artifact.preloads,control);
-      auto closed=close_representation_constraints(next,context,control,true,true,&pending,proof,true);
+       auto closed=close_representation_constraints(next,context,control,true,true,
+           &pending,proof,true,nullptr,cells(root));
       if(trace)std::cerr<<"[nullable-root] closed="<<bool(closed)
           <<" cells="<<(closed?cells(*closed):0)<<'\n';
       if(!closed || cells(*closed)>=cells(root) || shared_helper_dual_mode_closure_rejection_reason(closed->items,control.address_space_model))continue;

@@ -26,6 +26,7 @@
 #include "mkpro/core/indirect_read_observability.hpp"
 #include "mkpro/core/selector_writeback.hpp"
 #include "mkpro/core/search_frontier.hpp"
+#include "mkpro/core/detail/layout_jobs.hpp"
 #include "mkpro/core/layout_search_artifact.hpp"
 #include "mkpro/core/joint_representation_search.hpp"
 #include "mkpro/core/hardware_allocation_opportunities.hpp"
@@ -75446,11 +75447,16 @@ apply_contextual_copy_layout_to_selected_result(
       {selected.items, selected.preloads, {}}, options);
   edges.insert(edges.end(), std::make_move_iterator(projected.begin()),
                std::make_move_iterator(projected.end()));
-  std::vector<core::LayoutSearchArtifact> finalized_context_inputs;
-  for (const auto& edge : edges) {
-    if(std::any_of(finalized_context_inputs.begin(),finalized_context_inputs.end(),
-        [&](const auto& old){return core::same_layout_search_artifact(old,edge.node);}))continue;
-    finalized_context_inputs.push_back(edge.node);
+  std::vector<std::size_t> unique_edges;
+  for (std::size_t i = 0; i < edges.size(); ++i) {
+    if (std::none_of(unique_edges.begin(), unique_edges.end(), [&](std::size_t old) {
+          return core::same_layout_search_artifact(edges[old].node, edges[i].node);
+        }))
+      unique_edges.push_back(i);
+  }
+  std::vector<std::optional<CompileResult>> finalized(unique_edges.size());
+  core::detail::evaluate_layout_jobs(unique_edges.size(), [&](std::size_t index) {
+    const auto& edge = edges[unique_edges[index]];
     SelectedAbsoluteDarkLayout layout{.items = edge.node.items,
         .preloads = edge.node.preloads, .optimizations = {}};
     for (const auto& report : edge.node.optimizations)
@@ -75459,13 +75465,13 @@ apply_contextual_copy_layout_to_selected_result(
     if (!candidate) {
       if (std::getenv("MKPRO_NATIVE_TRACE_COPY_TRANSPORT"))
         std::cerr << "[context-publication] materialization rejected " << core::machine_cell_count(layout.items) << " cells\n";
-      continue;
+      return;
     }
     if (candidate_needs_static_proof_gate(options)) {
       if (const auto reason = optimizer_static_gate_rejection_reason(options, *candidate)) {
         if (std::getenv("MKPRO_NATIVE_TRACE_COPY_TRANSPORT"))
           std::cerr << "[context-publication] static gate: " << *reason << '\n';
-        continue;
+        return;
       }
     }
     // A locally smaller closed layout can block a later erasure/overlay.
@@ -75474,14 +75480,16 @@ apply_contextual_copy_layout_to_selected_result(
     *candidate = apply_finalization_fixed_point_to_selected_result(
         source, std::move(*candidate), options, comparison_options);
     if (!candidate->implemented || (candidate_needs_static_proof_gate(options) &&
-        optimizer_static_gate_rejection_reason(options, *candidate))) continue;
+        optimizer_static_gate_rejection_reason(options, *candidate))) return;
     remember_completed_optimizer_context(*candidate, options);
     if (std::getenv("MKPRO_NATIVE_TRACE_COPY_TRANSPORT"))
       std::cerr << "[context-publication] closed " << core::machine_cell_count(layout.items)
                 << " -> finalized " << candidate->steps.size() << '\n';
-    if (!best || candidate_beats_best(*candidate, *best, comparison_options))
+    finalized[index] = std::move(candidate);
+  });
+  for (auto& candidate : finalized)
+    if (candidate && (!best || candidate_beats_best(*candidate, *best, comparison_options)))
       best = std::move(candidate);
-  }
   return best;
 }
 
@@ -81976,76 +81984,87 @@ CompileResult close_final_contextual_layout_roots(
   constexpr std::size_t maximum_added_winners = 8;
   std::size_t added_enabling = 0;
   constexpr std::size_t maximum_added_enabling = 8;
-  for (std::size_t index = 0; index < seeds.size(); ++index) {
-    auto seed = seeds[index];
-    if(seed.unfrozen_geometry){
-      if(!refresh_proved_layout_annotations(seed.result,seed.options))continue;
-      const auto resolved=resolve_machine_items(seed.result.items,seed.options);
-      if(!resolved.diagnostics.empty())continue;
-      seed.result.steps=resolved.steps;seed.result.labels=label_map(resolved.labels);
+  std::size_t index = 0;
+  while (index < seeds.size()) {
+    // Jobs do not read the incumbent or append roots. Commit their results in
+    // seed order, so equal-size ties and both continuation budgets are the same
+    // as in the serial traversal. Newly appended roots belong to the next batch.
+    struct Ready {
+      CompileResult root;
+      CompileOptions options;
+      bool independent = false;
+      std::optional<CompileResult> result;
+    };
+    std::vector<Ready> ready;
+    const auto batch_end = seeds.size();
+    for (; index < batch_end; ++index) {
+      auto seed = std::move(seeds[index]);
+      const bool independent = independent_lifetime_roots.contains(index);
+      if (seed.unfrozen_geometry) {
+        if (!refresh_proved_layout_annotations(seed.result, seed.options)) continue;
+        const auto resolved = resolve_machine_items(seed.result.items, seed.options);
+        if (!resolved.diagnostics.empty()) continue;
+        seed.result.steps = resolved.steps;
+        seed.result.labels = label_map(resolved.labels);
+      }
+      if (!seed.result.implemented || seed.result.feature_profile != original.feature_profile ||
+          effective_optimizer_feature_profile(seed.options) != owning_profile ||
+          (!independent && !core::transaction_growth_fits(
+              static_cast<int>(original.steps.size()), static_cast<int>(seed.result.steps.size()), 4)))
+        continue;
+      // The root owns its ABI and physical model. Only the input and
+      // exploration contracts can be refined by the publishing caller.
+      if (seed.options.ordinary_decimal_keyboard_input &&
+          !comparison_options.ordinary_decimal_keyboard_input) continue;
+      auto proof_options = std::move(seed.options);
+      proof_options.ordinary_decimal_keyboard_input = comparison_options.ordinary_decimal_keyboard_input;
+      proof_options.budget = comparison_options.budget;
+      proof_options.fast_candidate_search = comparison_options.fast_candidate_search;
+      proof_options.fast_candidate_threshold_ms = comparison_options.fast_candidate_threshold_ms;
+      auto key = reclaim_base_key(proof_options);
+      core::LayoutSearchArtifact artifact{
+          seed.result.items, seed.result.preloads, seed.result.optimizations};
+      if (std::any_of(seen.begin(), seen.end(), [&](const auto& old) {
+            return old.options == key && old.registers == seed.result.registers &&
+                   core::same_layout_search_artifact(old.artifact, artifact);
+          }))
+        continue;
+      seen.push_back({std::move(artifact), seed.result.registers, std::move(key)});
+      ready.push_back({std::move(seed.result), std::move(proof_options), independent, {}});
     }
-    if (!seed.result.implemented || seed.result.feature_profile != original.feature_profile ||
-        effective_optimizer_feature_profile(seed.options) != owning_profile ||
-        (!independent_lifetime_roots.contains(index) &&
-         !core::transaction_growth_fits(static_cast<int>(original.steps.size()),
-            static_cast<int>(seed.result.steps.size()), 4)))
-      continue;
-    // A completed lowering context owns its ABI/model, not the current
-    // caller's runtime contract. An unrestricted artifact may be refined by
-    // an explicitly narrower input contract; the reverse direction is unsafe.
-    if(seed.options.ordinary_decimal_keyboard_input &&
-        !comparison_options.ordinary_decimal_keyboard_input)continue;
-    CompileOptions proof_options = seed.options;
-    proof_options.ordinary_decimal_keyboard_input =
-        comparison_options.ordinary_decimal_keyboard_input;
-    // These PCs belong to the seed's actual lowering model, not its public
-    // target label. Cross-model delivery is a separate proved transaction.
-    proof_options.budget = comparison_options.budget;
-    const core::LayoutSearchArtifact artifact{
-        seed.result.items, seed.result.preloads, seed.result.optimizations};
-    // Exploration policy is not part of the emitted ABI. Preserve every
-    // semantic lowering choice, but actually expand a bounded checkpoint.
-    proof_options.fast_candidate_search = comparison_options.fast_candidate_search;
-    proof_options.fast_candidate_threshold_ms = comparison_options.fast_candidate_threshold_ms;
-    const auto key = reclaim_base_key(proof_options);
-    if (std::any_of(seen.begin(), seen.end(), [&](const auto& old) {
-          return old.options == key && old.registers == seed.result.registers &&
-                 core::same_layout_search_artifact(old.artifact, artifact);
-        }))
-      continue;
-    seen.push_back({artifact, seed.result.registers, key});
-    if (candidate_needs_static_proof_gate(proof_options)) {
-      if (const auto reason = optimizer_static_gate_rejection_reason(proof_options, seed.result)) {
-        if (std::getenv("MKPRO_NATIVE_TRACE_COPY_TRANSPORT"))
-          std::cerr << "[context-root] static gate: " << *reason << '\n';
+    core::detail::evaluate_layout_jobs(ready.size(), [&](std::size_t job) {
+      auto& seed = ready[job];
+      const auto& proof_options = seed.options;
+      if (candidate_needs_static_proof_gate(proof_options)) {
+        if (const auto reason = optimizer_static_gate_rejection_reason(proof_options, seed.root)) {
+          if (std::getenv("MKPRO_NATIVE_TRACE_COPY_TRANSPORT"))
+            std::cerr << "[context-root] static gate: " << *reason << '\n';
+          return;
+        }
+      }
+      auto candidate = apply_contextual_copy_layout_to_selected_result(
+          source, seed.root, proof_options, comparison_options);
+      if (candidate && candidate->implemented &&
+          (!candidate_needs_static_proof_gate(proof_options) ||
+           !optimizer_static_gate_rejection_reason(proof_options, *candidate)))
+        seed.result = std::move(candidate);
+    });
+    for (auto& seed : ready) {
+      if (!seed.result) continue;
+      auto& candidate = *seed.result;
+      if (!candidate_beats_best(candidate, best, comparison_options)) {
+        if (candidate.steps.size() < seed.root.steps.size() &&
+            added_enabling++ < maximum_added_enabling) {
+          if (seed.independent) independent_lifetime_roots.insert(seeds.size());
+          seeds.push_back({std::move(candidate), seed.options});
+        }
         continue;
       }
+      best = std::move(candidate);
+      improved = true;
+      if (added_winners++ < maximum_added_winners)
+        seeds.push_back({best, seed.options});
     }
-    auto candidate = apply_contextual_copy_layout_to_selected_result(
-        source, seed.result, proof_options, comparison_options);
-    if (!candidate) continue;
-    if (!candidate->implemented ||
-        (candidate_needs_static_proof_gate(proof_options) &&
-         optimizer_static_gate_rejection_reason(proof_options, *candidate)))
-      continue;
-    if (!candidate_beats_best(*candidate, best, comparison_options)) {
-      // A separately proved ABI can repay its debt over several rounds.
-      // Retain a strictly shorter local continuation without replacing the
-      // independent global incumbent or spending the winner continuation lane.
-      if (candidate->steps.size() < seed.result.steps.size() &&
-          added_enabling++ < maximum_added_enabling) {
-        if (independent_lifetime_roots.contains(index))
-          independent_lifetime_roots.insert(seeds.size());
-        seeds.push_back({std::move(*candidate),proof_options});
-      }
-      continue;
-    }
-    best = std::move(*candidate);
-    improved = true;
-    // Initial roots always keep their own turn. A bounded winner continuation
-    // composes another allocation/data/layout round without spending old beams.
-    if (added_winners++ < maximum_added_winners)
-      seeds.push_back({best, proof_options});
   }
   if (!improved || ((soft_budget || !comparison_options.analysis) &&
                     best.steps.size() > requested_budget))
