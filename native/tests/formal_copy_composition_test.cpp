@@ -5,6 +5,8 @@
 #include "mkpro/core/passes/semantic_region_folding.hpp"
 #include "mkpro/core/passes/register_coalesce.hpp"
 #include "mkpro/core/joint_constraint_origins.hpp"
+#include "mkpro/core/joint_proof_input.hpp"
+#include "mkpro/core/joint_representation_search.hpp"
 #include "mkpro/core/natural_target_component_layout.hpp"
 #include "mkpro/emulator/mk61.hpp"
 #include "test_support.hpp"
@@ -21,6 +23,30 @@
 using namespace mkpro;
 using namespace mkpro::core;
 using mkpro::tests::require;
+
+namespace mkpro::core { std::size_t joint_completed_cache_hits_for_testing(); }
+namespace mkpro::core { std::size_t joint_literal_closure_reuses_for_testing(); }
+namespace mkpro::core { std::size_t contextual_completed_cache_hits_for_testing(); }
+namespace mkpro::core {
+bool contextual_identity_expansion_demand_for_testing(const std::vector<IrOp>&,
+    const std::vector<PreloadReport>&, const CompileOptions&);
+std::optional<LayoutSearchArtifact> contextual_transport_identity_for_testing(
+    const LayoutSearchArtifact&, const CompileOptions&, bool);
+}
+namespace mkpro::core {
+std::vector<passes::RegisterWebRecoloringRequest> hardware_epoch_storage_requests_for_testing(
+    const std::vector<IrOp>&, std::size_t);
+std::vector<passes::RegisterWebRecoloringRequest> hardware_home_eviction_requests_for_testing(
+    const std::vector<IrOp>&,
+    const std::vector<passes::RegisterWebRecoloringRequest>&,
+    const std::vector<passes::RegisterWebRecoloringRequest>&, std::size_t);
+}
+
+namespace mkpro::core {
+std::size_t contextual_negative_cache_hits_for_testing();
+std::optional<LayoutSearchArtifact> contextual_transport_identity_for_testing(
+    const LayoutSearchArtifact&, const CompileOptions&);
+}
 
 namespace {
 void counter_classification() {
@@ -48,12 +74,13 @@ void counter_classification() {
           !has_noncanonical_post_layout_counter(a5, AddressSpaceModel::Mk61SMiniExpanded),
       "A5 is an alias on stock MK-61 but ordinary program memory in the 112-cell profile");
 }
-std::vector<MachineItem> fixture(bool stale = false, bool raw = false) {
+std::vector<MachineItem> fixture(bool stale = false, bool raw = false, bool sum_stack = false) {
   MachineEmitter e;
   e.emit_jump(0x53, "formal call", "worker");
   e.items.back().formal_opcode = stale ? 0x21 : 0x20;
   e.emit_number("7"); e.emit_op(0x42);
   for (int i = 0; i < 4; ++i) e.emit_op(0x64);
+  if (sum_stack) for (int i = 0; i < 3; ++i) e.emit_op(0x10);
   e.emit_stop(StopDisposition::Terminal);
   while (std::count_if(e.items.begin(), e.items.end(), [](const auto& item) {
     return item.kind != MachineItemKind::Label;
@@ -80,6 +107,68 @@ std::vector<std::string> run(const std::vector<MachineItem>& items,
     result.push_back(machine.read_register(reg));
   machine.press("8"); result.push_back(machine.display_text());
   return result;
+}
+void neutral_symbolic_root_and_rom() {
+  MachineEmitter e;
+  e.emit_op(0x52);
+  e.emit_jump(0x53, "canonical formal call", "worker");
+  e.items.back().formal_opcode = 0x20;
+  e.emit_op(0xaa);
+  e.items.back().indirect_flow_targets = std::vector<IrTarget>{40};
+  for (int i = 0; i < 4; ++i) e.emit_op(0x64);
+  e.emit_stop(StopDisposition::Terminal);
+  const auto pad = [&](int target) {
+    while (std::count_if(e.items.begin(), e.items.end(), [](const auto& item) {
+      return item.kind != MachineItemKind::Label;
+    }) < target) e.emit_op(0x54);
+  };
+  pad(20); e.emit_label("worker");
+  e.emit_op(0x61); e.emit_op(0x42); e.emit_op(0x62);
+  e.emit_number("2"); e.emit_op(0x12); e.emit_op(0x44); e.emit_op(0x52);
+  pad(40); e.emit_op(0x64); e.emit_op(0x52);
+  const LayoutSearchArtifact original{e.items,
+      {{.register_name="1",.value="3.25"}, {.register_name="a",.value="40"}}, {}};
+  CompileOptions options; options.coalesce_copies = true;
+  require(passes::contextual_copy_transport_candidates(
+      raise_machine_to_ir(original.items), {options}).empty(),
+      "ordinary IR transport cannot consume this exact formal counter");
+  const auto normalized = contextual_transport_identity_for_testing(original, options);
+  require(normalized.has_value(),
+      "a neutral copy/layout root must retain numeric destinations as symbolic identities");
+  require(!contextual_transport_identity_for_testing(original, options, false),
+      "the historical frozen branch must not manufacture a symbolic indirect destination");
+  auto frozen = LayoutSearchArtifact{fixture(), {{.register_name="1", .value="3.25"}}, {}};
+  for (auto& item : frozen.items)
+    if (item.kind == MachineItemKind::Address) { item.target = 20; break; }
+  const auto retained = contextual_transport_identity_for_testing(frozen, options, false);
+  require(retained && same_layout_search_artifact(*retained, frozen) &&
+      run(retained->items, retained->preloads) == run(frozen.items, frozen.preloads),
+      "an unrelated frozen identity must retain every old physical target, byte and ROM observation");
+  bool found = false;
+  for (const auto& item : normalized->items) if (item.indirect_flow_targets) {
+    found = true;
+    for (const auto& target : *item.indirect_flow_targets)
+      require(std::holds_alternative<std::string>(target),
+          "the neutral edge must not restore delivered numeric targets");
+  }
+  require(found && same_layout_search_artifact({.preloads=original.preloads},
+      {.preloads=normalized->preloads}), "normalization may not invent or replace setup owners");
+  const auto before = resolve_machine_items(original.items);
+  const auto after = resolve_machine_items(normalized->items);
+  require(before.diagnostics.empty() && after.diagnostics.empty() &&
+      before.steps.size() == after.steps.size(), "neutral normalization has no code-size debt");
+  for (std::size_t i = 0; i < before.steps.size(); ++i)
+    require(before.steps[i].opcode == after.steps[i].opcode,
+        "the encoded counter, operands and every executable byte remain identical");
+  require(run(original.items, original.preloads) == run(normalized->items, normalized->preloads),
+      "neutral symbolic entry preserves stock ROM stack, memory, input mode and exact returns");
+  for (const IrTarget& invalid : {IrTarget{2}, IrTarget{999}, IrTarget{std::string("missing")}}) {
+    auto broken = original;
+    for (auto& item : broken.items) if (item.indirect_flow_targets)
+      item.indirect_flow_targets = std::vector<IrTarget>{invalid};
+    require(!contextual_transport_identity_for_testing(broken, options),
+        "operand, absent and unresolved command destinations must still fail closed");
+  }
 }
 void proof_and_rom() {
   const std::vector<PreloadReport> words{{.register_name="1",.value="3.25"}};
@@ -271,6 +360,18 @@ void finite_encoding_and_rom() {
   }
   require(candidates(coefficient_fixture(true)).empty(),
       "a repeated noncanonical entry cannot inherit the canonical finite-encoding permission");
+  auto without_transition = coefficient_fixture(false);
+  for (auto& item : without_transition)
+    if (item.kind == MachineItemKind::Op && item.opcode == 0x0b)
+      item.opcode = 0x31;
+  require(candidates(without_transition).empty(),
+      "preloaded sign-orbit encoding requires a genuine closed negation transition");
+  auto foreign_transition = coefficient_fixture(false);
+  for (auto& item : foreign_transition)
+    if (item.kind == MachineItemKind::Op && item.opcode == 0x48)
+      item.opcode = 0x49;
+  require(candidates(foreign_transition).empty(),
+      "a negation stored to another home is not a closed preloaded orbit");
   require(saw_closed_raw,"raw coefficient encoding and layout must actually compose, not merely pass ordinary alternatives");
   for (const auto& candidate : candidates(coefficient_fixture(false, true)))
     require(std::none_of(candidate.transformation.ops.begin(), candidate.transformation.ops.end(),
@@ -311,7 +412,107 @@ std::vector<MachineItem> nullable_fixture(bool observe_selector, bool opaque_bod
   e.emit_op(0x54); e.emit_op(0x54); e.emit_op(0x52);
   return e.items;
 }
+void lazy_projection_without_null_completion() {
+  MachineEmitter emitter;
+  emitter.emit_op(0x52);
+  emitter.emit_label("main");
+  emitter.emit_number("2"); emitter.emit_number("3"); emitter.emit_op(0x12);
+  emitter.emit_op(0xab);
+  emitter.items.back().indirect_flow_targets = std::vector<IrTarget>{"worker"};
+  emitter.emit_op(0x44);
+  emitter.emit_number("0"); emitter.emit_op(0x48);
+  for (int i=0; i<4; ++i) emitter.emit_op(0x60);
+  emitter.emit_number("-2"); emitter.emit_jump(0x53, "ordinary caller", "worker");
+  emitter.emit_op(0x45);
+  emitter.emit_number("0"); emitter.emit_op(0x48);
+  for (int i=0; i<4; ++i) emitter.emit_op(0x60);
+  emitter.emit_number("0"); emitter.emit_op(0x10);
+  emitter.emit_stop(StopDisposition::Terminal);
+  emitter.emit_label("spare");
+  while (std::count_if(emitter.items.begin(), emitter.items.end(), [](const auto& item) {
+    return item.kind != MachineItemKind::Label;
+  }) < 50) emitter.emit_op(0x54);
+  emitter.emit_label("worker");
+  emitter.emit_op(0x32); emitter.emit_op(0x48); emitter.emit_op(0x68);
+  emitter.emit_number("0"); emitter.emit_op(0x10); emitter.emit_op(0x52);
+  const auto original = emitter.items;
+  const std::vector<PreloadReport> words{{.register_name="0", .value="0"},
+      {.register_name="8", .value="0"}, {.register_name="b", .value="50"}};
+  const std::map<std::string, int> origins{{"main",1}, {"worker",50}};
+  CompileOptions options; options.coalesce_copies = true;
+  PostLayoutControlFlowOptions control; control.empty_return_target = 1;
+  const auto candidates = [&](const auto& items) {
+    return passes::contextual_lazy_unit_projection_candidates(raise_machine_to_ir(items), {options},
+        {.maximum_work=400000, .maximum_candidates=2, .control=&control,
+         .encoded_target_origins=&origins, .runtime_preloads=&words,
+         .preserve_formal_execution_frames=true});
+  };
+  require(std::none_of(original.begin(), original.end(), [](const auto& item) {
+    return item.kind == MachineItemKind::Op && item.opcode >= 0x70 && item.opcode <= 0x73;
+  }), "lazy projection fixture has no null-return branch or callback dispatcher");
+  const auto proved = candidates(original);
+  require(!proved.empty(), "sign-only storage projection must not require moving a null continuation");
+  for (const auto& candidate : proved) {
+    require(candidate.target_origins.empty() && candidate.selector_origins.empty(),
+        "an independent projection may not invent an address or retarget the fixed return");
+    const auto rewritten = lower_ir_to_machine(candidate.transformation.ops);
+    int address = 0, worker = -1;
+    for (const auto& item : rewritten) {
+      if (item.kind == MachineItemKind::Label) {
+        if (item.name == "worker") worker = address;
+      } else ++address;
+    }
+    require(worker >= 0 && build_post_layout_control_flow(rewritten, control).proved,
+        "independent projection must retain a final rooted command identity");
+    // Rb is a control-only epoch, unlike the observed Ra. Do not hand-edit
+    // an unproved selector to make ROM pass: obtain the independent
+    // whole-program writeback/data certificate.
+    mkpro::core::detail::PreparedJointProofInput proof(original, words, control);
+    const auto rebound = proof.rebind_selector(words.back(), 50, worker);
+    require(rebound.has_value(), "moved worker requires its independent selector certificate");
+    auto delivered_words = words;
+    delivered_words.back().value = *rebound;
+    require(run(original, words) == run(rewritten, delivered_words),
+        "independent projection preserves stock ROM values, next input, hidden state and returns");
+  }
+  auto opaque = original;
+  const auto sign = std::find_if(opaque.begin(), opaque.end(), [](const auto& item) {
+    return item.kind == MachineItemKind::Op && item.opcode == 0x32;
+  });
+  require(sign != opaque.end(), "fixture has a real source projection");
+  sign->raw = true;
+  require(candidates(opaque).empty(), "opaque projections must not inherit the unit theorem");
+  auto unknown = original;
+  const auto producer = std::find_if(unknown.begin(), unknown.end(), [](const auto& item) {
+    return item.kind == MachineItemKind::Op && item.opcode == 2;
+  });
+  require(producer != unknown.end(), "fixture has its independent positive producer");
+  *producer = MachineItem::op(0x66, "unknown caller value");
+  require(candidates(unknown).empty(),
+      "an uninitialized caller value must never acquire an ordinary positive assumption");
+  auto address_use = original;
+  auto recall = std::find_if(address_use.begin(), address_use.end(), [](const auto& item) {
+    return item.kind == MachineItemKind::Op && item.opcode == 0x68;
+  });
+  require(recall != address_use.end(), "fixture has an affected recall");
+  auto indexed = MachineItem::op(0xd8, "observable physical selector");
+  indexed.indirect_memory_targets = std::vector<int>{1};
+  address_use.insert(recall + 1, indexed);
+  require(candidates(address_use).empty(),
+      "using the carrier as a physical selector must prevent delayed sign projection");
+  auto observed_address = original;
+  const auto stop = std::find_if(observed_address.begin(), observed_address.end(), [](const auto& item) {
+    return item.kind == MachineItemKind::Op && item.opcode == 0x50;
+  });
+  require(stop != observed_address.end(), "fixture has a final observation");
+  observed_address.insert(stop, MachineItem::op(0x6b, "observable address value"));
+  mkpro::core::detail::PreparedJointProofInput visible_proof(observed_address, words, control);
+  require(!visible_proof.rebind_selector(words.back(), 50, 51),
+      "a later data observation must prohibit the otherwise control-only address retuning");
+}
+
 void independent_nullable_completion() {
+  lazy_projection_without_null_completion();
   CompileOptions options; options.coalesce_copies=true;
   PostLayoutControlFlowOptions control; control.empty_return_target=1;
   const std::vector<PreloadReport> words{{.register_name="1",.value="2"},
@@ -403,6 +604,54 @@ void literal_preload_provenance() {
   require(!detail::joint_literal_word(word),"program-time setup may not be moved into an entry preload");
 }
 void pending_formal_recoloring() {
+  CompileOptions demand_options;
+  std::vector<MachineItem> full_bank;
+  for (int home=0; home<15; ++home) full_bank.push_back(MachineItem::op(0x60+home, "occupied home"));
+  full_bank.push_back(MachineItem::op(2, "literal"));
+  full_bank.push_back(MachineItem::op(3, "literal"));
+  auto typed_stop = MachineItem::op(0x50, "typed display");
+  typed_stop.roles.push_back(kTypedDisplayObservationRole);
+  typed_stop.stop_disposition = StopDisposition::Terminal;
+  full_bank.push_back(typed_stop);
+  auto typed_input = MachineItem::op(0x43, "typed input store");
+  typed_input.manual_interaction = ManualInteractionAnchor{
+      0, 0, ManualInteractionAnchorKind::SingleStepCommand};
+  full_bank.insert(full_bank.begin(), typed_input);
+  auto known_read = MachineItem::op(0xd3, "known physical alias");
+  known_read.indirect_memory_targets = std::vector<int>{3};
+  full_bank.insert(full_bank.end()-1, known_read);
+  require(!contextual_identity_expansion_demand_for_testing(raise_machine_to_ir(full_bank), {}, demand_options),
+      "a newly normalized identity must not replay compound allocation with no producer or free literal home");
+  const auto demand = [&](const std::vector<MachineItem>& items,
+                          const std::vector<PreloadReport>& words) {
+    return contextual_identity_expansion_demand_for_testing(raise_machine_to_ir(items), words, demand_options);
+  };
+  const std::vector<PreloadReport> orbit_word{{.register_name="8", .value="1"}};
+  require(demand({MachineItem::op(0x68,"read"), MachineItem::op(0x0b,"negate"),
+          MachineItem::op(0x48,"write")}, orbit_word),
+      "a closed finite preload epoch retains its independent neutral composition lane");
+  const std::vector<PreloadReport> no_words;
+  require(demand({MachineItem::op(0xd3,"self-indexed read"), MachineItem::op(0x49,"copy")}, no_words) &&
+      demand({MachineItem::op(2,"literal"), MachineItem::op(3,"literal")}, no_words),
+      "hardware displacement and available literal storage must still activate the new neutral lane");
+  const auto cycle_code = raise_machine_to_ir({MachineItem::op(0x40, "first epoch"),
+      MachineItem::op(0x43, "producer"), MachineItem::op(0xd3, "self reload"),
+      MachineItem::op(0x49, "copy destination"), MachineItem::op(0x40, "later epoch"),
+      MachineItem::op(0xb0, "hardware home")});
+  const std::vector<passes::RegisterWebRecoloringRequest> cycle_primary{{{1,5}}},
+      cycle_copies{{{2,3}}};
+  const passes::RegisterWebRecoloringRequest expected_cycle{{1,5},{2,3},{4,3}};
+  const auto cycles = hardware_home_eviction_requests_for_testing(cycle_code, cycle_primary, cycle_copies, 32);
+  require(!cycles.empty() && cycles.front() == expected_cycle,
+      "a hardware affinity must close the displaced recent epoch instead of guessing unrelated first stores");
+  require(hardware_home_eviction_requests_for_testing(cycle_code, cycle_primary, cycle_copies, 0).empty() &&
+      hardware_home_eviction_requests_for_testing(cycle_code, {{{999,5}}}, cycle_copies, 32).empty(),
+      "disabled or malformed hardware eviction demands must fail closed");
+  auto opaque_cycle = cycle_code; opaque_cycle[4].meta.raw = true;
+  const auto opaque_cycles = hardware_home_eviction_requests_for_testing(
+      opaque_cycle, cycle_primary, cycle_copies, 32);
+  require(std::find(opaque_cycles.begin(), opaque_cycles.end(), expected_cycle) == opaque_cycles.end(),
+      "an opaque definition cannot be chosen as a displaced ordinary epoch");
   MachineEmitter emitter;
   emitter.emit_jump(0x53,"formal call","worker");
   emitter.items.back().formal_opcode=0x20;
@@ -440,7 +689,14 @@ void pending_formal_recoloring() {
   PostLayoutControlFlowOptions control;control.empty_return_target=1;
   const std::map<std::string,int> origins{{"worker",20},{"leaf",60}};
   const std::vector<PreloadReport> words{{.register_name="1",.value="3.25"},{.register_name="b",.value="60"}};
-  const std::vector<passes::RegisterWebRecoloringRequest> requests{{{producer,anchor}}};
+  const passes::RegisterWebRecoloringRequest wanted{{producer, anchor}};
+  const auto automatic = hardware_epoch_storage_requests_for_testing(ops, 32);
+  const auto generated = std::find(automatic.begin(), automatic.end(), wanted);
+  require(generated != automatic.end(),
+      "hardware epoch affinity must be discovered without a copied-store provenance tag");
+  require(hardware_epoch_storage_requests_for_testing(ops, 0).empty(),
+      "automatic hardware affinities respect a disabled request budget");
+  const std::vector<passes::RegisterWebRecoloringRequest> requests{*generated};
   std::vector<std::vector<IrOp>> candidates;
   const auto collect=[&](const auto& code){candidates.push_back(code);};
   passes::for_each_deferred_register_web_recoloring(ops,{options},requests,control,origins,collect,&words,true);
@@ -464,11 +720,175 @@ void pending_formal_recoloring() {
         "pending recoloring plus final geometry must preserve ROM stack, last-X, inputs and return continuation");
   }
   auto opaque=ops;opaque[producer].meta.raw=true;candidates.clear();
+  const auto opaque_requests = hardware_epoch_storage_requests_for_testing(opaque, 32);
+  require(std::find(opaque_requests.begin(), opaque_requests.end(), wanted) == opaque_requests.end(),
+      "an opaque store cannot become an automatic hardware epoch anchor");
   passes::for_each_deferred_register_web_recoloring(opaque,{options},requests,control,origins,collect,&words,true,true);
   require(candidates.empty(),"complete formal allocation does not authorize raw arithmetic");
   candidates.clear();
   passes::for_each_deferred_register_web_recoloring(ops,{options},requests,control,origins,collect,nullptr,true,true);
   require(candidates.empty(),"pending formal allocation requires its complete runtime owner");
+}
+void completed_joint_search_cache() {
+  CompileOptions options; options.analysis = true; options.budget = 999999;
+  const LayoutSearchArtifact root{fixture(false, true),
+      {{.register_name="1", .value="3.25"}}, {{"joint-cache-root", "complete exact input"}}};
+  const TransactionSearchLimits limits{.maximum_expansions=1, .maximum_candidates=2,
+      .maximum_depth=1, .maximum_growth_cells=4};
+  const auto literal_before = joint_literal_closure_reuses_for_testing();
+  const auto first = search_joint_representation_constraints(root, options, {}, limits, true);
+  require(joint_literal_closure_reuses_for_testing() > literal_before,
+      "revisiting the same immutable pending root must reuse its entire literal closure, not just its parametric half");
+  const auto before = joint_completed_cache_hits_for_testing();
+  const auto second = search_joint_representation_constraints(root, options, {}, limits, true);
+  require(joint_completed_cache_hits_for_testing() == before + 1 &&
+      first.expanded == second.expanded && first.admitted == second.admitted &&
+      first.duplicate == second.duplicate && first.rejected == second.rejected &&
+      first.budget_exhausted == second.budget_exhausted &&
+      first.incumbent.has_value() == second.incumbent.has_value() &&
+      (!first.incumbent || same_layout_search_artifact(*first.incumbent, *second.incumbent)),
+      "an identical completed pure frontier must preserve its artifact and all search statistics");
+  auto lowered_policy = options;
+  lowered_policy.alternating_sign_toggle_args = !options.alternating_sign_toggle_args;
+  lowered_policy.zero_underflow_optimizer_root = !options.zero_underflow_optimizer_root;
+  lowered_policy.fast_candidate_threshold_ms += 17;
+  lowered_policy.collect_logical_register_allocation = !options.collect_logical_register_allocation;
+  lowered_policy.compact_logical_register_allocation = !options.compact_logical_register_allocation;
+  lowered_policy.repair_logical_register_assignment_preferences = !options.repair_logical_register_assignment_preferences;
+  lowered_policy.preserve_logical_register_instruction_classes = !options.preserve_logical_register_instruction_classes;
+  lowered_policy.logical_register_dead_store_elimination = !options.logical_register_dead_store_elimination;
+  lowered_policy.stack_argument_helper_entries = !options.stack_argument_helper_entries;
+  lowered_policy.single_x_expression_helper_entries = !options.single_x_expression_helper_entries;
+  lowered_policy.general_constant_preloads = !options.general_constant_preloads;
+  lowered_policy.disable_candidate_search = !options.disable_candidate_search;
+  const auto shared_before = joint_completed_cache_hits_for_testing();
+  (void)search_joint_representation_constraints(root, lowered_policy, {}, limits, true);
+  require(joint_completed_cache_hits_for_testing() == shared_before + 1,
+      "source-generation policy must not replay an identical immutable machine frontier");
+  const auto miss = [&](const auto& artifact, const auto& policy,
+                        const auto& budget, bool complete) {
+    const auto old = joint_completed_cache_hits_for_testing();
+    (void)search_joint_representation_constraints(artifact, policy, {}, budget, complete);
+    require(joint_completed_cache_hits_for_testing() == old,
+        "every changed proof input, search budget and preload contract must miss the cache");
+  };
+  auto changed = root; changed.items.front().source_line = 91; miss(changed, options, limits, true);
+  changed = root; changed.preloads.front().value = "3.5"; miss(changed, options, limits, true);
+  changed = root; changed.optimizations.front().detail = "different proof history";
+  const auto history_before = joint_completed_cache_hits_for_testing();
+  (void)search_joint_representation_constraints(changed, options, {}, limits, true);
+  require(joint_completed_cache_hits_for_testing() == history_before + 1,
+      "pure machine search must not replay an unchanged artifact solely for a different incoming report history");
+  auto policy = options; policy.ordinary_decimal_keyboard_input = true;
+  miss(root, policy, limits, true);
+  policy = options; policy.suppress_constant_preloads.insert("3.25");
+  miss(root, policy, limits, true);
+  policy = options; policy.reserve_suppressed_constant_preload_slots.insert("3.25");
+  miss(root, policy, limits, true);
+  auto budget = limits; ++budget.maximum_depth; miss(root, options, budget, true);
+  miss(root, options, limits, false);
+  const JointRepresentationFinalizer identity = [](const auto& value) {
+    return std::optional<LayoutSearchArtifact>{value};
+  };
+  const auto old = joint_completed_cache_hits_for_testing();
+  (void)search_joint_representation_constraints(root, options, identity, limits, true);
+  (void)search_joint_representation_constraints(root, options, {}, limits, true, identity);
+  require(joint_completed_cache_hits_for_testing() == old,
+      "an arbitrary finalizer or continuation callback must never reuse a pure-search cache entry");
+  // All four recalled stack values participate in the displayed sum. Removing
+  // a deeper producer would now change X rather than only a dead terminal Z.
+  const LayoutSearchArtifact positive{fixture(false, false, true),
+      {{.register_name="1", .value="3.25"}}, {{"first-caller", "source evidence A"}}};
+  const auto winning = search_joint_representation_constraints(positive, options, {}, limits, true);
+  require(winning.incumbent.has_value(), "report-rebasing fixture must really produce a smaller proved artifact");
+  auto other = positive;
+  other.optimizations = {{"second-caller", "source evidence B"}, {"second-fact", "must survive"}};
+  const auto reuse_before = joint_completed_cache_hits_for_testing();
+  const auto reused = search_joint_representation_constraints(other, options, {}, limits, true);
+  require(joint_completed_cache_hits_for_testing() == reuse_before + 1 && reused.incumbent &&
+      same_layout_search_artifact(*winning.incumbent, *reused.incumbent) &&
+      reused.incumbent->optimizations.size() == winning.incumbent->optimizations.size() + 1 &&
+      reused.incumbent->optimizations[0].name == "second-caller" &&
+      reused.incumbent->optimizations[0].detail == "source evidence B" &&
+      reused.incumbent->optimizations[1].name == "second-fact" &&
+      std::equal(winning.incumbent->optimizations.begin()+1, winning.incumbent->optimizations.end(),
+          reused.incumbent->optimizations.begin()+2, [](const auto& a, const auto& b) {
+            return a.name==b.name && a.detail==b.detail;
+          }), "a cached winning suffix must retain exactly the current caller's evidence, never the previous prefix");
+  const auto original_observation = run(positive.items, positive.preloads);
+  const auto reused_observation = run(reused.incumbent->items, reused.incumbent->preloads);
+  if (original_observation != reused_observation) {
+    std::cerr << "relative-cache original:";
+    for (const auto& value : original_observation) std::cerr << ' ' << value;
+    std::cerr << "\nrelative-cache selected:";
+    for (const auto& value : reused_observation) std::cerr << ' ' << value;
+    std::cerr << '\n';
+    for (const auto& report : reused.incumbent->optimizations)
+      std::cerr << report.name << ": " << report.detail << '\n';
+    for (const auto& item : reused.incumbent->items)
+      std::cerr << item.opcode << ' ' << item.mnemonic << '\n';
+  }
+  require(original_observation == reused_observation,
+      "a history-rebased winning artifact must preserve complete stock ROM state and the next input");
+}
+
+void completed_search_cache() {
+  CompileOptions options;options.analysis=true;options.budget=999999;
+  LayoutSearchArtifact root{fixture(false,true),{{.register_name="1",.value="3.25"}},
+      {{"cache-regression-root","exact immutable input"}}};
+  require(contextual_copy_transport_layout_transactions(root,options).empty(),
+      "cache regression uses a completed nonwinning search");
+  const auto before=contextual_negative_cache_hits_for_testing();
+  require(contextual_copy_transport_layout_transactions(root,options).empty() &&
+      contextual_negative_cache_hits_for_testing()==before+1,
+      "an identical completed search must be reused");
+  const auto miss=[&](const auto& changed,const auto& changed_options){
+    const auto old=contextual_negative_cache_hits_for_testing();
+    (void)contextual_copy_transport_layout_transactions(changed,changed_options);
+    require(contextual_negative_cache_hits_for_testing()==old,
+        "changed proof input, reports or compiler policy must never reuse a completed search");
+  };
+  auto changed=root;changed.preloads.front().value="3.5";miss(changed,options);
+  changed=root;changed.items.front().source_line=91;miss(changed,options);
+  changed=root;changed.optimizations.front().detail="different transaction history";miss(changed,options);
+  auto policy=options;policy.ordinary_decimal_keyboard_input=true;miss(root,policy);
+  policy=options;policy.fast_candidate_search=!policy.fast_candidate_search;miss(root,policy);
+  policy=options;policy.feature_profile=FeatureProfile::Mk61SMiniExpanded;miss(root,policy);
+  policy=options;policy.preloaded_constant_registers.emplace("9","7");miss(root,policy);
+  policy = options;
+  policy.alternating_sign_toggle_args = !options.alternating_sign_toggle_args;
+  policy.zero_underflow_optimizer_root = !options.zero_underflow_optimizer_root;
+  policy.fast_candidate_threshold_ms += 17;
+  policy.collect_logical_register_allocation = !options.collect_logical_register_allocation;
+  policy.compact_logical_register_allocation = !options.compact_logical_register_allocation;
+  policy.repair_logical_register_assignment_preferences = !options.repair_logical_register_assignment_preferences;
+  policy.preserve_logical_register_instruction_classes = !options.preserve_logical_register_instruction_classes;
+  policy.logical_register_dead_store_elimination = !options.logical_register_dead_store_elimination;
+  policy.stack_argument_helper_entries = !options.stack_argument_helper_entries;
+  policy.single_x_expression_helper_entries = !options.single_x_expression_helper_entries;
+  policy.general_constant_preloads = !options.general_constant_preloads;
+  policy.disable_candidate_search = !options.disable_candidate_search;
+  const auto shared_before = contextual_completed_cache_hits_for_testing();
+  (void)contextual_copy_transport_layout_transactions(root, policy);
+  require(contextual_completed_cache_hits_for_testing() == shared_before + 1,
+      "completed machine search must ignore only independently audited source-generation switches");
+  const LayoutSearchArtifact positive{fixture(false, false),
+      {{.register_name="1", .value="3.25"}}, {{"positive-cache-root", "exact emitted input"}}};
+  const auto winners = contextual_copy_transport_layout_transactions(positive, options);
+  require(!winners.empty(), "positive cache fixture must actually produce a smaller proved artifact");
+  const auto winning_before = contextual_completed_cache_hits_for_testing();
+  const auto cached_winners = contextual_copy_transport_layout_transactions(positive, policy);
+  require(contextual_completed_cache_hits_for_testing() == winning_before + 1 &&
+      winners.size() == cached_winners.size(), "completed winning frontiers must be reused too");
+  for (std::size_t at=0; at<winners.size(); ++at) {
+    require(same_layout_search_artifact(winners[at].node, cached_winners[at].node) &&
+        winners[at].rule == cached_winners[at].rule && winners[at].proved == cached_winners[at].proved,
+        "a cache hit must preserve every winning command, preload and transaction proof flag");
+    require(run(positive.items, positive.preloads) ==
+        run(cached_winners[at].node.items, cached_winners[at].node.preloads),
+        "reused winning artifacts must retain stock ROM state and the next input");
+  }
+  completed_joint_search_cache();
 }
 void measure_game() {
   std::ifstream input(std::string(MKPRO_FORMAL_COPY_REPO_ROOT) +
@@ -495,7 +915,7 @@ int main(int argc, char** argv) {
     if (argc == 2 && std::string(argv[1]) == "--game") { measure_game(); return 0; }
     counter_classification(); proof_and_rom(); footprint_layout_and_rom(); finite_encoding_and_rom();
     independent_nullable_completion();numeric_formal_origin_metadata();literal_preload_provenance();
-    pending_formal_recoloring();
+    pending_formal_recoloring();completed_search_cache();neutral_symbolic_root_and_rom();
     std::cout << "formal copy composition compiler/ROM tests passed\n";
     return 0;
   } catch (const std::exception& error) {

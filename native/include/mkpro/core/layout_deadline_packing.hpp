@@ -100,6 +100,9 @@ inline DeadlinePackingResult pack_components_with_deadlines(
     result.exhausted = true;
     return result;
   }
+  if (maximum_work > 0 &&
+      capacity_bound.minimum_single_use_padding(0U, capacities) > maximum_padding)
+    return result;
 
   for (std::size_t index = 0; index < components.size(); ++index) {
     Frontier next;
@@ -124,7 +127,7 @@ inline DeadlinePackingResult pack_components_with_deadlines(
               continue;
             extended[choice] += component.cells;
           }
-          if (capacity_bound.minimum_padding(index + 1U, capacities, extended) >
+          if (capacity_bound.minimum_single_use_padding(index + 1U, capacities, extended) >
               maximum_padding)
             continue;
           State candidate = state;

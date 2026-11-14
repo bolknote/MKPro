@@ -115,6 +115,58 @@ bool has_report(const core::LayoutSearchArtifact& artifact, const std::string& n
       [&](const auto& report) { return report.name == name; });
 }
 
+void shifted_command_identity_contracts() {
+  const auto original=fixture(32,'a');
+  auto shifted=original;
+  const auto discard=std::find_if(shifted.begin(),shifted.end(),[](const auto& item){
+    return item.kind==MachineItemKind::Label && item.name=="discard";
+  });
+  require(discard!=shifted.end(),"fixture owns its alternate command label");
+  shifted.insert(discard,MachineItem::op(0x54,"unreachable displacement"));
+  const auto find_role=[&](const auto& items,const std::string& role){
+    const auto at=std::find_if(items.begin(),items.end(),[&](const auto& item){
+      return std::find(item.roles.begin(),item.roles.end(),role)!=item.roles.end();
+    });
+    require(at!=items.end(),"fixture owns its entry/charge metadata");
+    return static_cast<std::size_t>(std::distance(items.begin(),at));
+  };
+  const auto store=find_role(shifted,"selector-sunk-literal-id:shared");
+  const auto charge=find_role(shifted,"late-decimal-selector-high:discard");
+  const int encoded=shifted[charge].opcode*10+shifted[charge+1U].opcode;
+  const auto flow=core::build_post_layout_control_flow(shifted);
+  require(flow.proved,"pending displacement retains a complete symbolic invocation graph");
+  require(!core::passes::prove_selector_charge_sunk_literal_entry(
+      shifted,flow,store,charge,encoded),"strict entry proof must reject an unbound encoded origin");
+  require(core::passes::prove_selector_charge_sunk_literal_entry(
+      shifted,flow,store,charge,encoded,true),
+      "data-only preparation follows the unchanged command identity, not its old numeric origin");
+  const auto bound=core::rebind_late_bound_decimal_selectors(shifted,{.minimum_target_address=0});
+  require(bound.diagnostics.empty(),"final selector digits must independently bind to the moved command");
+  const int delivered=bound.items[charge].opcode*10+bound.items[charge+1U].opcode;
+  require(delivered==encoded+1 && core::passes::prove_selector_charge_sunk_literal_entry(
+      bound.items,core::build_post_layout_control_flow(bound.items),store,charge,delivered),
+      "the default final validator still requires the actual delivered address");
+  for(const std::string seed:{"0","-7","3.25"})
+    require(run(original,seed)==run(bound.items,seed),
+        "displacement plus binding preserves full observed stock ROM state, numeric entry and return continuation");
+  auto missing=shifted;
+  for(auto& role:missing[charge].roles)if(role=="late-decimal-selector-high:discard")
+    role="late-decimal-selector-high:missing";
+  for(auto& role:missing[charge+1U].roles)if(role=="late-decimal-selector-low:discard")
+    role="late-decimal-selector-low:missing";
+  require(!core::passes::prove_selector_charge_sunk_literal_entry(
+      missing,core::build_post_layout_control_flow(missing),store,charge,encoded,true),
+      "an absent owned command identity cannot create a deferred proof");
+  auto opaque=shifted;
+  auto leaf=std::find_if(opaque.begin(),opaque.end(),[](const auto& item){
+    return item.kind==MachineItemKind::Label && item.name=="discard";
+  });
+  std::next(leaf)->raw=true;
+  require(!core::passes::prove_selector_charge_sunk_literal_entry(
+      opaque,core::build_post_layout_control_flow(opaque),store,charge,encoded,true),
+      "deferred targets do not authorize an opaque callee effect");
+}
+
 void deferred_joint_contracts() {
   CompileOptions options;
   options.defer_return_suffix_until_callee_hole = true;
@@ -261,10 +313,122 @@ void deferred_joint_contracts() {
   require(!skipped.incumbent, "the independent closure lane must respect a disabled search");
 }
 
+
+std::vector<MachineItem> order_layout_fixture(char reg, bool visible) {
+  auto items = fixture(88, reg);
+  items.at(0) = MachineItem::op(0x61, "first fractional increment");
+  items.at(2) = MachineItem::op(0x62, "second fractional increment");
+  const auto saved = std::find_if(items.begin(), items.end(), [](const auto& item) {
+    return item.kind == MachineItemKind::Op && item.opcode == 0x43;
+  });
+  require(saved != items.end(), "private reduction result exists");
+  *saved = MachineItem::op(0x48, "private reduction result");
+  auto stop = std::find_if(items.begin(), items.end(), [](const auto& item) {
+    return item.kind == MachineItemKind::Op && item.opcode == 0x50;
+  });
+  require(stop != items.end() && stop != items.begin(), "typed reduction observation exists");
+  *(stop - 1) = MachineItem::op(0x68, "read private candidate");
+  stop->roles.push_back(kTypedDisplayObservationRole);
+  std::vector<MachineItem> consumer;
+  const auto op = [&](int code) { consumer.push_back(MachineItem::op(code, "order-layout consumer")); };
+  op(0x6b); op(0x36); op(0x49); op(0x11);
+  op(0x60);
+  if (!visible) op(0x48);
+  op(0x49);
+  for (int i = 0; i < 4; ++i) op(0x60);
+  op(0); op(0x10);
+  if (visible) op(0x68);
+  items.insert(stop, consumer.begin(), consumer.end());
+  for (auto& item : items)
+    if (std::find(item.roles.begin(), item.roles.end(), "selector-sunk-literal-id:shared") !=
+        item.roles.end()) item.roles.push_back("order-only-reduction-rebased");
+  const auto bound = core::rebind_late_bound_decimal_selectors(
+      items, {.minimum_target_address = 0});
+  require(bound.diagnostics.empty(), "order-layout source charges bind");
+  return bound.items;
+}
+
+void parametric_order_layout_contracts() {
+  CompileOptions options;
+  options.coalesce_copies = true;
+  options.defer_return_suffix_until_callee_hole = true;
+  const std::vector<PreloadReport> words{{.register_name="0",.value="0"},
+      {.register_name="1",.value="0.125"}, {.register_name="2",.value="0.25"},
+      {.register_name="b",.value="-1"}};
+  const auto parameterized = [](const auto& candidate) {
+    return has_report(candidate.node, "joint-parametric-order-reduction-layout");
+  };
+  for (const char reg : {'a', 'd'}) {
+    const auto original = order_layout_fixture(reg, false);
+    const auto candidates = core::order_reduction_selector_layout_transactions(
+        {original, words, {}}, options);
+    const auto selected = std::find_if(candidates.begin(), candidates.end(), parameterized);
+    require(selected != candidates.end(),
+        "a previously rebased reduction must supply a freshly proved layout domain");
+    const auto before_cells = resolve_machine_items(original).steps.size();
+    const auto after_cells = resolve_machine_items(selected->node.items).steps.size();
+    std::cout << "parameterized literal baseline [" << reg << "]: " << before_cells
+              << " -> " << after_cells << '\n';
+    require(before_cells == 57U && after_cells <= 55U,
+        "parameterized layout baseline must repay both literal cells: 57 to at most 55");
+    require(std::any_of(selected->node.items.begin(), selected->node.items.end(), [](const auto& item) {
+      return std::find(item.roles.begin(), item.roles.end(), "selector-sunk-literal-id:shared") !=
+                 item.roles.end() &&
+          std::none_of(item.roles.begin(), item.roles.end(), [](const auto& role) {
+            return role == "selector-sunk-literal-value:88";
+          });
+    }), "geometry must select a new value, not preserve the historical seed by fiat");
+    for (const std::string seed : {"0", "-7", "3.25"})
+      require(run(original, seed, words, true) ==
+                  run(selected->node.items, seed, selected->node.preloads, true),
+          "parameterized seed must preserve ROM observations, future reads and returns");
+    const core::TransactionSearchLimits joint_limits{.maximum_expansions=1,
+        .maximum_candidates=4, .maximum_depth=1, .maximum_growth_cells=4};
+    const auto joined = core::search_joint_representation_constraints(
+        {original, words, {}}, options, {}, joint_limits, true);
+    require(joined.incumbent &&
+        has_report(*joined.incumbent, "joint-parametric-order-reduction-layout") &&
+        resolve_machine_items(joined.incumbent->items).steps.size() <= 55U,
+        "the joint frontier must close the scalar domain without a profitable discrete first edge");
+    for (const std::string seed : {"0", "-7", "3.25"})
+      require(run(original, seed, words, true) ==
+          run(joined.incumbent->items, seed, joined.incumbent->preloads, true),
+          "domain plus joint placement must preserve all resumed ROM observations");
+    auto disabled = joint_limits; disabled.maximum_expansions = 0;
+    const auto no_search = core::search_joint_representation_constraints(
+        {original, words, {}}, options, {}, disabled, true);
+    require(!no_search.incumbent ||
+        !has_report(*no_search.incumbent, "joint-parametric-order-reduction-layout"),
+        "the independent parameter lane still obeys an explicitly disabled search");
+    auto exposed = core::order_reduction_selector_layout_transactions(
+        {order_layout_fixture(reg, true), words, {}}, options);
+    require(std::none_of(exposed.begin(), exposed.end(), parameterized),
+        "a visible reduction value cannot acquire a layout-only representation domain");
+    auto crossing_words = words;
+    crossing_words.at(1).value = "10";
+    crossing_words.at(2).value = "10";
+    const auto crossing = core::order_reduction_selector_layout_transactions(
+        {original, crossing_words, {}}, options);
+    require(std::none_of(crossing.begin(), crossing.end(), parameterized),
+        "a changed environment crossing an exponent band must not reuse a proved domain");
+    auto opaque = original;
+    const auto sum = std::find_if(opaque.begin(), opaque.end(), [](const auto& item) {
+      return item.kind == MachineItemKind::Label && item.name == "sum";
+    });
+    require(sum != opaque.end() && sum + 1 != opaque.end(), "opaque leaf exists");
+    (sum + 1)->raw = true;
+    const auto rejected = core::order_reduction_selector_layout_transactions(
+        {opaque, words, {}}, options);
+    require(std::none_of(rejected.begin(), rejected.end(), parameterized),
+        "historical rebasing roles may not certify an opaque consumer");
+  }
+}
+
 } // namespace
 int main() {
   try {
-    deferred_joint_contracts();
+    deferred_joint_contracts();shifted_command_identity_contracts();
+    parametric_order_layout_contracts();
     for (char reg : {'a', 'd'}) {
       for (int literal : {20, 26, 32}) {
         const auto original = fixture(literal, reg);

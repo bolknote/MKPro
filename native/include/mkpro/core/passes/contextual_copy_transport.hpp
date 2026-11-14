@@ -45,6 +45,13 @@ struct ContextualCopyTransportCandidate {
 std::vector<ContextualCopyTransportCandidate> contextual_copy_transport_candidates(
     const std::vector<IrOp>& ops, const PassContext& context,
     const ContextualCopyTransportOptions& limits = {});
+// Discover non-adjacent copies, including a callee's argument store, from
+// grounded full-word X/register congruences in every exact execution context.
+// Reuse the same source-stability, old-destination demand and return transport
+// proofs as syntactic copies. Unknown recall normalization is not equality.
+std::vector<ContextualCopyTransportCandidate> contextual_grounded_copy_transport_candidates(
+    const std::vector<IrOp>& ops, const PassContext& context,
+    const ContextualCopyTransportOptions& limits = {});
 // Independent per-context alternatives: the destination is dead after the
 // store, X already equals its exact word, or every future use before overwrite
 // is a direct normalizing recall with the same certified canonical result.
@@ -100,6 +107,14 @@ std::vector<RegisterWebRecoloringRequest> contextual_copy_origin_register_reques
 std::vector<ContextualCopyTransportCandidate> contextual_edge_return_completion_candidates(
     const std::vector<IrOp>& ops, const PassContext& context,
     const ContextualCopyTransportOptions& limits = {});
+// Delay a proved sign-only storage projection independently of null callbacks.
+// Normalize ordinary-data callers at their callsite and decode every affected
+// recall. Complete reaching definitions, packed signs, aliases and stack/X1/X2
+// proofs are required; the caller still owns every placement equation.
+std::vector<ContextualCopyTransportCandidate> contextual_lazy_unit_projection_candidates(
+    const std::vector<IrOp>& ops, const PassContext& context,
+    const ContextualCopyTransportOptions& limits = {});
+
 // Conditional compound alternative. Sink a sign projection only in epochs
 // observed exclusively through that projection, retaining normalization in
 // callers with ordinary data observations. Reuse a canonical-zero private

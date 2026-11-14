@@ -1241,13 +1241,32 @@ void optimizer_static_proof_gate_rejects_unproved_dangerous_candidates() {
   CompileOptions fox_aggressive_options;
   fox_aggressive_options.analysis = true;
   fox_aggressive_options.aggressive_post_layout_indirect_flow = true;
-  const CompileResult fox_aggressive_result = compile_source(
+  const CompileResult fox_lowered_result = compile_source(
       read_text_file(project_file("examples/fox-hunt-mk61.mkpro")), fox_aggressive_options);
-  require(fox_aggressive_result.implemented,
+  require(fox_lowered_result.implemented,
           "fox-hunt aggressive post-layout indirect-flow candidate should compile");
-  require(fox_aggressive_result.steps.size() == 60,
-          "fox-hunt aggressive post-layout indirect-flow candidate should keep the measured "
-          "60-cell result");
+  require(fox_lowered_result.steps.size() == 65,
+          "fox-hunt must retain the measured 65-cell lowering instead of generating an unsafe overlap");
+  const auto fox_lowered_rejection = optimizer_static_proof_gate_rejection_reason_for_testing(
+      fox_aggressive_options, fox_lowered_result);
+  require(fox_lowered_rejection && fox_lowered_rejection->find(
+              "missingProof=final-indirect-target-artifact") != std::string::npos,
+          "an aggressive request without a final indirect artifact must not acquire a proof");
+
+  // Exercise the rejected selector/data collision independently of whether
+  // lowering still proposes that unsafe candidate. Keep the real annotated
+  // contiguous payload and all diagnostic assertions below. This legacy
+  // final-artifact fixture deliberately has no machine-item graph.
+  CompileResult fox_aggressive_result = fox_lowered_result;
+  fox_aggressive_result.items.clear();
+  std::erase_if(fox_aggressive_result.preloads, [](const auto& preload) {
+    return preload.register_name == "9";
+  });
+  fox_aggressive_result.preloads.push_back(flow_preload("9", "3"));
+  fox_aggressive_result.optimizations.push_back(optimization_report("preloaded-indirect-flow"));
+  auto overlapping_flow = resolved_step(0x89, indirect_target_comment("9", "3", target));
+  overlapping_flow.address = static_cast<int>(fox_aggressive_result.steps.size());
+  fox_aggressive_result.steps.push_back(std::move(overlapping_flow));
   const std::optional<std::string> fox_aggressive_rejection =
       optimizer_static_proof_gate_rejection_reason_for_testing(fox_aggressive_options,
                                                                fox_aggressive_result);
@@ -2371,8 +2390,14 @@ void optimizer_translation_unit_stays_emulator_free() {
   require(proof_report_source.find("Every required fractional selector value was proved from final "
                                    "artifacts") != std::string::npos,
           "ProofReport detail must describe fractional-selector proof as final-artifact based");
-  require(proof_report_source.find("suppressed_constant_preloads_proved") != std::string::npos,
+  require(proof_report_source.find("suppressed_constant_preload_artifacts_proved") !=
+              std::string::npos,
           "ProofReport must mirror the suppressed-preload verifier result");
+  require(proof_report_source.find("options, preloads, optimizations, items, steps, registers") !=
+              std::string::npos &&
+              proof_report_source.find("if (suppressed_constant_preloads_proved(") ==
+                  std::string::npos,
+          "suppressed-preload reporting must use the complete final artifact, not only setup values");
   require(proof_report_source.find("preloaded_constant_registers_proved") != std::string::npos,
           "ProofReport must mirror the explicit-preload verifier result");
   require(proof_report_source.find("address_code_overlay_artifacts_proved") != std::string::npos,

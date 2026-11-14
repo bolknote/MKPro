@@ -1,5 +1,111 @@
 # MK-Pro Optimization and Lowering Strategy Reference
 
+## Joint scalar domains, allocation and continuation placement
+
+Non-adjacent copies, including shared callee argument stores, can be discovered
+from grounded full-machine-word congruences between X and a physical register
+in every exact incoming context. The ordinary adjacent-copy theorem is reused:
+source writes, indirect observations and old-destination demand still constrain
+forwarding and any delayed materialization. Unknown/raw recall normalization is
+not equality. This independent bounded producer feeds the same allocation,
+finite coefficient encoding and selector-placement product; its neutral and
+historical roots remain independent alternatives.
+
+Over-budget stock artifacts can also reopen a certified shared side-space
+continuation before hardware/copy epoch allocation. The original folded roots
+remain available. The prospective topology keeps the old encoded target
+origins, charges every duplicated command to the same four-cell transaction
+growth allowance, and rebuilds definition webs before literal storage and final
+placement. A bare inverse does not enter that expensive closure: the complete
+allocator must first prove a changed hardware/copy epoch assignment. It is not
+a separately publishable artifact. Repeated folding keeps its generated command
+annotations idempotent instead of manufacturing different cache identities.
+Raw commands, missing
+identities, incompatible formal counters and observable hidden-state changes
+still reject the inverse. Final net size is compared with the original root,
+not with the enlarged topology.
+
+Hardware storage-affinity requests are also derived from actual ordinary
+definition epochs and indirect-memory/FL anchors when a regenerated ABI has no
+copied-store provenance. Recent epochs are enumerated fairly by physical home
+and hardware class. Untagged roots synthesize home-eviction cycles: a hardware
+affinity, a self-indexed reload destination, and a recent ordinary definition
+occupying the requested hardware home are proposed together. This avoids
+guessing a Cartesian product of unrelated first-store pairs. They compose with
+the existing self-reload and third-home
+requests. Every request is independently re-proved by the complete interference,
+alias, typed-input and formal-frame allocator; an affinity is not an equality
+certificate. Historical tagged-root budgets and order are unchanged. A neutral
+formal-capable root retains its normalized command identities even if no copy
+rewrite applies, allowing subsequent encoding/allocation/layout to meet.
+
+Expanding a neutral root from delivered numeric targets to symbolic identities,
+and the new formal identity lane, require structural work for this compound family:
+copy-origin continuation, self-indexed reload displacement, a closed preload
+sign epoch, or available storage for a multi-cell literal. Unknown physical
+effects remain conservative candidates. Unrelated ordinary identity roots keep
+their original frozen artifacts, rather than replaying an expanded symbolic
+search. Historical frozen roots and real transformations retain their complete budgets; this
+is not a time/depth cutoff or a weakened proof. The gate avoids replaying the
+whole compound allocation search on unrelated newly normalized roots.
+
+Storage demand uses the whole program's physical instruction footprint, not
+an opaque callee/manual-command summary. Direct accesses and FL name their
+actual home; indirect memory adds every authoritative alias (unknown aliases
+remain conservative). This is only an admission heuristic: the subsequent
+lifetime, input-boundary, numeric, CFG and return proofs remain unchanged.
+
+A lazy sign-only storage projection can compose independently of null-callback
+completion. It normalizes ordinary-data callers and decodes affected recalls
+using the same packed-sign, reaching-definition, alias and hidden-state proofs,
+with a separately budgeted ordinary positive-range proof when a ROM sign-byte
+certificate is unavailable. Unknown keyboard values and uninitialized homes do
+not acquire a sign or ordinary-value assumption. The rewrite does not move a
+return label into a longer dispatcher. The parametric lane
+prices this alternative with addressed return pooling before fixing geometry;
+the existing compound null-callback law remains an independent candidate.
+
+A proved private order-only scalar domain remains open while the optimizer
+chooses register epochs, addressed return pooling and shared continuations.
+Equation-bearing allocation roots enter this closure before ordinary placement
+can reject them. The unchanged discrete frontier keeps its own budget and
+incumbent; a parametric closure also runs when no profitable discrete first edge
+exists. Debt is priced against the immutable transaction root, not an
+intermediate coloring or a historical scalar seed. The selected scalar must
+still equal its delivered callback address, and that complete-family witness is
+rechecked after any finalizer, together with final CFG and return obligations.
+
+Completed joint searches without callbacks are memoized by the complete typed
+artifact, initializer ownership, frozen machine context,
+all frontier limits and preload-completeness contract. Entries are thread-local
+and bounded; only completed outcomes are stored. Arbitrary finalizers and
+continuation callbacks are never cached. A hit returns the exact artifact and
+statistics, without reducing proof work or exploration budgets on a cache miss.
+
+Pure joint search does not consume its incoming report history. Its cache
+stores a relative winning suffix only when the result retains the exact input
+prefix, and installs that suffix after the current caller's reports on reuse.
+No source/static-gate evidence is borrowed from the previous caller. Contextual
+transaction caches and callback finalizer memos still key the complete history,
+because those consumers can inspect it.
+
+Within one joint invocation, revisiting an identical pending node reuses both
+its discrete and parametric literal closure. Equality includes target equations,
+encoded-selector origins, numeric-certificate identity, complete typed items,
+initializer ownership and proof-report history. Different pending bindings are
+not merged; the final initial-root visit does not replay the same placements.
+
+The frozen machine context excludes only independently audited source-only
+switches: alternating-argument promotion, source zero-underflow regeneration,
+the frontend wall-clock threshold, source logical assignments/share hints,
+logical-allocation probe/repair/class/DSE switches, source helper-argument ABIs,
+general frontend constant-pool planning and the source candidate-search switch.
+They have no consumers in the machine proof/placement dependencies; their
+emitted effects remain in the exact typed artifact. Fast-frontier selection,
+physical preload reservations and all other options remain keyed. Completed
+winning contextual frontiers are cached as well as empty ones. The source
+compiler cache and arbitrary-callback finalizers retain their full contexts.
+
 ## Scalar ordinary-value closure
 
 Scalar range queries retain a separate ordinary-decimal value invariant even
@@ -6220,6 +6326,71 @@ or address proofs are transplanted. Cell count remains primary, runtime cost
 breaks equal-size ties, and JSON/explain records both roots and the selection.
 Explicitly disabled or pinned lowering searches do not gain an automatic root.
 
+### Inverse ordering and return-constrained reduction placement
+
+An atomic continuation search may reopen a certified implicit data/address
+literal before reopening shared code. Each inverse is proved in its own input
+geometry: moving a callback first must not turn a historical literal certificate
+into permission to reopen it later. The expanded intermediate roots are private;
+only a smaller, fully rebound artifact can leave the transaction.
+
+A pinned conditional return supplies affine entry-address candidates through
+the exact offsets of its fallthrough component. These candidates may revisit
+an earlier order-only reduction translation, but require a fresh relational
+proof of the complete permitted interval, rounding bands, ties and future
+observations. No earlier optimization report substitutes for that proof.
+
+During deferred literal preparation, typed callback identity selects the current
+command for the data proof, independently of the still-unbound encoded origin.
+This does not discharge the final address equation: after coalescing, command
+address, encoded word, literal value, complete caller family, stack/X1/X2 and
+rooted return flow must all agree under the strict final checker.
+
+Completed contextual-composition searches are memoized in a bounded,
+thread-local cache. Keys retain the exact typed artifact, preload words,
+optimization history and frozen machine proof/search context, including model,
+input contract, physical reservations and actual exploration policy. Only the
+audited source-generation switches described above are projected out. Empty
+results and complete winning frontiers are reusable; in-progress and exceptional
+searches are never entries. A cache hit changes neither proof obligations nor
+candidate budgets.
+
+### Parametric order-only literals in joint layout
+
+The complete-artifact lane can retain an order-only reduction seed as a proved
+interval rather than enumerate and freeze a scalar before placement. The
+existing relational theorem proves that entire interval on the complete source
+and runtime environment, including exponent bands, ties and later observations.
+An earlier rebasing annotation supplies no permission: its domain is proved
+again. A certified implicit literal is reopened before moving callbacks.
+
+The same layout problem intersects that interval with the callback codec and
+all fixed word, return and side-counter equations. Only after choosing the
+minimum-cell placement does it bind the literal to the selected command address.
+The strict final family proof then checks the chosen value, all encoded charges,
+actual command identity and stack/return obligations. Speculative expanded roots
+and unbound domains are never executable outputs. The historical enumerative
+lane remains independent, including its budgets and tie order.
+
+Stack-equality queries borrow the immutable conservative execution graph when
+no selector refinement is requested, and cache opcode classification only by
+the complete opcode whose synthetic operand is unchanged. Matched-caller literal
+queries run before their conservative fallback. Both proof alternatives and
+their full work limits remain available; no proof or search budget is reduced.
+
+A neutral copy/layout edge retains the already validated symbolic machine view,
+including generated identities for numeric indirect destinations. It must not
+restore the delivered numeric operands when no copy was selected: that would
+silently drop the whole representation before allocation. This normalization
+preserves every executable byte, formal counter and initializer owner; operand
+cells, missing commands and unresolved labels remain invalid destinations.
+
+The separate preloaded sign-orbit lane checks for its mandatory adjacent
+recall/negate/store transition before constructing any context graph. The
+predicate is the same necessary transition shape used by its existing theorem;
+absence cannot remove a valid candidate. Unit-producer and nonnegative-maximum
+lanes bypass this gate and retain their own discovery and proof budgets.
+
 ## Closed coefficient values and implicit data/address continuations
 
 A closed recall/negate/store carrier can supply exact ordinary numeric values
@@ -6426,9 +6597,10 @@ and literal pooling. It supplies the existing command-origin and rooted-return
 relocation proof at admission and retains the historical lane unchanged. Neither
 formal addressing nor private terminal registers are inferred from game identity.
 The lane is demand-limited to internal programs or an explicit ordinary-decimal
-keyboard contract. It does not change any stop's observation contract. Real
-transport proposals are required before allocation/layout expansion; an empty
-formal proposal set never replays unrelated return portfolios.
+keyboard contract. It does not change any stop's observation contract. A neutral
+formal-capable root may also enter the bounded allocation/layout portfolio,
+but only after the same exact command-identity normalization and rooted control
+checks; an absent copy rewrite supplies no value or lifetime assumption.
 
 Formal footprints distinguish the encoded counter from its physical projection.
 A canonical `00..A4` counter is ordinary execution, not a side-space alias.

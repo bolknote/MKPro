@@ -6,6 +6,7 @@
 #include "mkpro/core/post_layout_control_flow.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cstdlib>
 #include <deque>
 #include <iostream>
@@ -157,12 +158,15 @@ static bool prove_post_layout_stack_equality_impl(
   auto graph = options.refine_runtime_selectors
       ? build_selector_consistent_execution_graph(items, flow)
       : SelectorConsistentExecutionGraph{};
-  if (!graph.proved) {
-    // A bounded refinement must never weaken the ordinary conservative proof.
-    graph.successors = flow.execution_successors;
-    for (std::size_t i = 0; i < flow.execution_states.size(); ++i)
-      graph.original_states.push_back(i);
-  }
+  // Borrow an immutable conservative graph rather than deep-copying its
+  // adjacency lists for every stack query. A failed refinement still falls
+  // back to exactly the original complete contexts.
+  const std::size_t state_count = graph.proved
+      ? graph.original_states.size() : flow.execution_states.size();
+  const auto original_state = [&](std::size_t index) {
+    return graph.proved ? graph.original_states[index] : index;
+  };
+  const auto& successors = graph.proved ? graph.successors : flow.execution_successors;
   if (trace && graph.pruned_edges != 0)
     std::cerr << "[stack-entry-equality] selector-inconsistent edges removed="
               << graph.pruned_edges << '\n';
@@ -201,14 +205,14 @@ static bool prove_post_layout_stack_equality_impl(
     // also lose the previously proved fresh-number entry state.
     return closed(a) && closed(b) ? DecimalEntry::Closed : DecimalEntry::Unknown;
   };
-  std::vector<DecimalEntry> entry_modes(graph.original_states.size(), DecimalEntry::Unknown);
-  std::vector<std::optional<StackValueEqualityState>> incoming(graph.original_states.size());
+  std::vector<DecimalEntry> entry_modes(state_count, DecimalEntry::Unknown);
+  std::vector<std::optional<StackValueEqualityState>> incoming(state_count);
   std::deque<std::size_t> pending;
   auto unseeded=requested;
-  for (std::size_t index = 0; index < graph.original_states.size(); ++index) {
-    if (entry_states ? requested.contains(graph.original_states[index]) :
-        flow.execution_states[graph.original_states[index]].address == entry_address) {
-      unseeded.erase(graph.original_states[index]);
+  for (std::size_t index = 0; index < state_count; ++index) {
+    if (entry_states ? requested.contains(original_state(index)) :
+        flow.execution_states[original_state(index)].address == entry_address) {
+      unseeded.erase(original_state(index));
       incoming[index] = initial;
       if (options.numeric_entry_closed) entry_modes[index] = DecimalEntry::Closed;
       pending.push_back(index);
@@ -228,7 +232,7 @@ static bool prove_post_layout_stack_equality_impl(
       continue;
     if (++explored > options.maximum_work)
       return reject("stack equality proof work exhausted");
-    const auto& execution = flow.execution_states[graph.original_states[index]];
+    const auto& execution = flow.execution_states[original_state(index)];
     if (execution.item_index >= items.size())
       return reject("execution state is outside the artifact");
     const auto& item = items[execution.item_index];
@@ -260,18 +264,24 @@ static bool prove_post_layout_stack_equality_impl(
 
     // Classify a complete instruction: an address-taking opcode without its
     // operand is raised as an orphan, not as the branch/call it represents.
-    std::vector<MachineItem> instruction{MachineItem::op(item.opcode,
-                                                        opcode_by_code(item.opcode).name)};
-    if (opcode_by_code(item.opcode).takes_address) {
-      MachineItem operand;
-      operand.kind = MachineItemKind::Address;
-      operand.target = 0;
-      instruction.push_back(std::move(operand));
+    if (item.opcode < 0 || item.opcode > 255)
+      return reject("instruction is outside the opcode table");
+    static thread_local std::array<std::optional<IrKind>, 256> complete_kinds;
+    auto& cached_kind = complete_kinds[static_cast<std::size_t>(item.opcode)];
+    if (!cached_kind) {
+      std::vector<MachineItem> instruction{MachineItem::op(item.opcode,
+                                                          opcode_by_code(item.opcode).name)};
+      if (opcode_by_code(item.opcode).takes_address) {
+        MachineItem operand;
+        operand.kind = MachineItemKind::Address;
+        operand.target = 0;
+        instruction.push_back(std::move(operand));
+      }
+      const auto classified = raise_machine_to_ir(instruction);
+      if (classified.empty()) return reject("instruction has no typed effect");
+      cached_kind = classified.front().kind;
     }
-    const auto classified = raise_machine_to_ir(instruction);
-    if (classified.empty())
-      return reject("instruction has no typed effect");
-    const IrKind kind = classified.front().kind;
+    const IrKind kind = *cached_kind;
     if ((kind == IrKind::Stop && !projected_stop) || item.opcode == 0x29)
       return reject("unequal stack reaches an observable stop");
 
@@ -339,10 +349,10 @@ static bool prove_post_layout_stack_equality_impl(
       entry_mode = DecimalEntry::Unknown;
     if (stack_values_fully_equal(state))
       continue;
-    const auto& successors = graph.successors[index];
-    if (successors.empty())
+    const auto& next_states = successors[index];
+    if (next_states.empty())
       return reject("unequal stack reaches an unknown continuation");
-    for (const auto successor : successors) {
+    for (const auto successor : next_states) {
       if (successor >= incoming.size())
         return reject("successor is outside the execution graph");
       if (!incoming[successor].has_value()) {

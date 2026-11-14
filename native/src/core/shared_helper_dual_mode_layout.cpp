@@ -258,6 +258,15 @@ std::optional<std::size_t> preload_for_register(
 }
 
 void append_comment(MachineItem& item, const std::string& text) {
+  if (item.comment) {
+    std::string_view remaining(*item.comment);
+    while (!remaining.empty()) {
+      const auto separator = remaining.find("; ");
+      if (remaining.substr(0, separator) == text) return;
+      if (separator == std::string_view::npos) break;
+      remaining.remove_prefix(separator + 2U);
+    }
+  }
   if (item.comment.has_value() && !item.comment->empty())
     item.comment = *item.comment + "; " + text;
   else

@@ -123,19 +123,31 @@ struct Plan {
   Id store = 0, work = 0, dead_contexts = 0, observational_contexts = 0, guarded_contexts = 0;
   bool exhausted = false, valid = false;
 };
-Plan discover(const Model& m, Id store, Id budget) {
+Plan discover(const Model& m, Id store, Id budget,
+    const std::string* grounded_source = nullptr,
+    const std::vector<bool>* grounded_roots = nullptr) {
   Plan plan; plan.store = store;
   if (!m.valid || store == 0 || !direct(m.ops[store]) || m.ops[store].kind != IrKind::Store ||
-      !direct(m.ops[store-1U]) || m.ops[store-1U].register_name == m.ops[store].register_name) return plan;
-  plan.source = m.ops[store-1U].register_name;
+      static_cast<bool>(grounded_source) != static_cast<bool>(grounded_roots)) return plan;
+  if (grounded_source) {
+    if (grounded_roots->size()!=m.instruction.size()) return plan;
+    plan.source = *grounded_source;
+  } else {
+    if (!direct(m.ops[store-1U])) return plan;
+    plan.source = m.ops[store-1U].register_name;
+  }
   plan.destination = m.ops[store].register_name;
+  if (plan.source==plan.destination) return plan;
   const auto spend = [&] { if (plan.work >= budget) { plan.exhausted=true; return false; } ++plan.work; return true; };
   const auto count = m.instruction.size();
   std::vector<Id> roots;
   for (Id s=0;s<count;++s) if(m.instruction[s]==store) {
     if (!spend()) return plan;
-    if (m.entries.external[s] || m.predecessors[s].empty() ||
-        !std::all_of(m.predecessors[s].begin(),m.predecessors[s].end(),[&](Id p){return m.instruction[p]==store-1U;})) return plan;
+    if (m.entries.external[s] || m.predecessors[s].empty()) return plan;
+    if (grounded_roots) {
+      if (!(*grounded_roots)[s]) return plan;
+    } else if (!std::all_of(m.predecessors[s].begin(),m.predecessors[s].end(),
+        [&](Id p){return m.instruction[p]==store-1U;})) return plan;
     roots.push_back(s);
   }
   if (roots.empty()) return plan;
@@ -686,6 +698,71 @@ std::vector<ContextualCopyTransportCandidate> contextual_redundant_copy_store_ca
         "inputs and ungrounded cycles provide no identity facts. Excluded only "+std::to_string(equality.unreachable.size())+" exact execution states by complete guarded definition/use proofs; numeric absence is never an exclusion. Independently re-proved the complete "
         "rooted CFG, every return frame and closed numeric-entry deletion."});
     result.push_back(std::move(candidate));
+  }
+  return result;
+}
+
+std::vector<ContextualCopyTransportCandidate> contextual_grounded_copy_transport_candidates(
+    const std::vector<IrOp>& ops,const PassContext& context,const ContextualCopyTransportOptions& limits) {
+  std::vector<ContextualCopyTransportCandidate> result;
+  if (!limits.runtime_preloads || !limits.maximum_work || !limits.maximum_candidates ||
+      !limits.maximum_copy_sites || limits.maximum_growth_cells<0) return result;
+  std::vector<Id> stores;
+  for (Id at=1; at<ops.size(); ++at)
+    if (direct(ops[at]) && ops[at].kind==IrKind::Store && !direct(ops[at-1U]))
+      stores.push_back(at);
+  if (stores.empty()) return result;
+  Model model(ops,context,limits);
+  if (!model.valid) return result;
+  const auto equality=prove_context_words(model,*limits.runtime_preloads,limits.maximum_work);
+  if (!equality.proved || equality.exhausted) return result;
+  Id remaining=limits.maximum_work-std::min(limits.maximum_work,equality.work),attempts=0;
+  // First-entry argument stores precede incidental equal-valued local stores
+  // in this independent bounded family. Neither is a source-name recognizer.
+  std::vector<bool> call_entries(ops.size(),false);
+  for (Id state=0; state<model.instruction.size(); ++state)
+    for (const auto before:model.predecessors[state]) {
+      const auto kind=ops[model.instruction[before]].kind;
+      if (kind==IrKind::Call || kind==IrKind::IndirectCall)
+        call_entries[model.instruction[state]]=true;
+    }
+  std::stable_sort(stores.begin(),stores.end(),[&](Id a,Id b){return call_entries[a]>call_entries[b];});
+  for (const auto store:stores) {
+    if (!remaining || result.size()>=limits.maximum_candidates) break;
+    for (int reg=0; reg<15 && remaining && result.size()<limits.maximum_candidates; ++reg) {
+      const auto source=std::string(1,"0123456789abcde"[reg]);
+      if (source==ops[store].register_name) continue;
+      std::vector<bool> grounded(model.instruction.size(),false);
+      bool reached=false,valid=true;
+      for (Id state=0; state<model.instruction.size(); ++state) {
+        if (model.instruction[state]!=store) continue;
+        if (!remaining) return result;
+        --remaining;
+        reached=true;
+        grounded[state]=equality.unreachable.contains(state) ||
+            (equality.before[state].rows[0] & (std::uint64_t{1}<<(4+reg)))!=0;
+        valid=valid && grounded[state];
+      }
+      if (!reached || !valid) continue;
+      if (attempts++>=limits.maximum_copy_sites) return result;
+      auto plan=discover(model,store,remaining,&source,&grounded);
+      remaining-=std::min(remaining,plan.work);
+      if (!plan.valid || plan.exhausted ||
+          2*static_cast<int>(plan.sinks.size())-1>limits.maximum_growth_cells) continue;
+      ContextualCopyTransportCandidate candidate;
+      candidate.transformation=rewrite(model,plan,candidate.materialized_stores);
+      if (candidate.transformation.applied<=0) continue;
+      for (Id at=0; at<candidate.materialized_stores.size(); ++at)
+        candidate.transformation.ops.at(candidate.materialized_stores[at]).meta.roles.push_back(
+            std::string(detail::kContextualCopyStoreOriginPrefix)+std::to_string(at));
+      candidate.transformation.optimizations.push_back({"grounded-contextual-copy-transport",
+          "Derived a non-adjacent copy from grounded full-machine-word X/R"+source+
+          " congruence at every exact store context, including matched callee entries. "
+          "Re-proved source stability, every retained destination observation, stack/X1/X2 "
+          "and complete rooted return relocation; unknown recall normalization and raw/ungrounded "
+          "initial values supply no equality. Selector placement remains independently mandatory."});
+      result.push_back(std::move(candidate));
+    }
   }
   return result;
 }
@@ -1692,11 +1769,16 @@ struct LazySignPlan {
 };
 std::optional<LazySignPlan> lazy_sign_plan(const Model& m, Id projection,
     const ContextualCopyTransportOptions& limits) {
+  const auto trace = [&](std::string_view stage) {
+    if (std::getenv("MKPRO_NATIVE_TRACE_COPY_TRANSPORT"))
+      std::cerr << "[lazy-unit-projection] at=" << projection << ' ' << stage << '\n';
+  };
   const auto& op=m.ops[projection];
   if(op.kind!=IrKind::Plain || op.opcode!=0x32 || op.meta.raw || op.meta.manual_interaction ||
       projection+1U>=m.ops.size() || !direct(m.ops[projection+1U]) ||
       m.ops[projection+1U].kind!=IrKind::Store) return std::nullopt;
   const Id store=projection+1U; const int reg=register_index(m.ops[store].register_name);
+  trace("shape proved");
   const auto lift=analyze_post_layout_automatic_entry_lift_with_indirect_store_facts(m.items,m.flow,limits.maximum_work);
   if(!lift)return std::nullopt;
   std::vector<Id> states;
@@ -1704,10 +1786,31 @@ std::optional<LazySignPlan> lazy_sign_plan(const Model& m, Id projection,
   const auto signs=prove_post_layout_packed_sign_inputs(m.items,m.flow,*lift,states,
       limits.runtime_preloads,limits.maximum_work);
   if(states.empty()||signs.exhausted)return std::nullopt;
+  trace("entry numeric proof completed");
   LazySignPlan plan{projection,store,reg,{},{}};
+  std::optional<PostLayoutNumericRangeProof> ordinary_inputs;
+  const auto ordinary_positive = [&](Id state) {
+    if (!ordinary_inputs) {
+      const auto remaining = limits.maximum_work - std::min(limits.maximum_work, signs.work);
+      if (!remaining) return false;
+      ordinary_inputs = prove_post_layout_stack_numeric_values(m.items, m.flow, *lift,
+          {m.item[projection]}, limits.runtime_preloads, remaining,
+          NumericRangeInputPolicy::ValidatedRegisterTransport);
+    }
+    if (ordinary_inputs->exhausted || !ordinary_inputs->stack_before_state.contains(state))
+      return false;
+    const auto& value = ordinary_inputs->stack_before_state.at(state).front();
+    return value.ordinary && ((value.range && value.range->lower > 0) ||
+        (value.enclosure && value.enclosure->lower > 0));
+  };
   std::vector<Id> raw_after,normalized_after;
   std::set<Id> producer_states;
   for(const auto s:states){
+    if (std::getenv("MKPRO_NATIVE_TRACE_COPY_TRANSPORT"))
+      std::cerr << "[lazy-unit-projection] state=" << s << " external=" << m.entries.external[s]
+                << " predecessors=" << m.predecessors[s].size()
+                << " successors=" << m.flow.execution_successors[s].size()
+                << " sign=" << (signs.signs.contains(s) ? signs.signs.at(s) : 9) << '\n';
     if(m.entries.external[s] || m.predecessors[s].size()!=1U ||
         m.flow.execution_successors[s].size()!=1U)return std::nullopt;
     const auto next=m.flow.execution_successors[s].front();
@@ -1722,16 +1825,18 @@ std::optional<LazySignPlan> lazy_sign_plan(const Model& m, Id projection,
     if(direct_call){
       if(caller.meta.raw||caller.meta.manual_interaction||caller.target_meta.formal_opcode)return std::nullopt;
       plan.calls.insert(m.instruction[previous]);
-    }else if(!signs.signs.contains(s)||signs.signs.at(s)!=1)return std::nullopt;
+    }else if((!signs.signs.contains(s)||signs.signs.at(s)!=1) &&
+        !ordinary_positive(s))return std::nullopt;
     roots.insert(roots.end(),m.flow.execution_successors[next].begin(),m.flow.execution_successors[next].end());
   }
   if(raw_after.empty()||plan.calls.empty())return std::nullopt;
+  trace("raw and normalized caller classes proved");
   // Source-unit reaching definitions, on matched return contexts. Bottom is
   // not a proved unit. Entry and every unrelated definition are non-unit.
   std::vector<std::optional<bool>> unit(m.instruction.size());std::vector<Id> work;
   const auto merge=[&](Id s,bool value){if(unit[s]){value=value&&*unit[s];if(value==*unit[s])return;}unit[s]=value;work.push_back(s);};
   for(Id s=0;s<unit.size();++s)if(m.entries.external[s]||m.entries.main[s])merge(s,false);
-  Id spent=signs.work;
+  Id spent=signs.work+(ordinary_inputs ? ordinary_inputs->work : 0);
   while(!work.empty()){
     if(++spent>=limits.maximum_work)return std::nullopt;
     const auto s=work.back();work.pop_back();const auto i=m.instruction[s];const auto& effect=m.effects[i];
@@ -1768,6 +1873,7 @@ std::optional<LazySignPlan> lazy_sign_plan(const Model& m, Id projection,
     work.insert(work.end(),m.flow.execution_successors[s].begin(),m.flow.execution_successors[s].end());
   }
   if(plan.reads.empty() || static_cast<int>(plan.calls.size()+plan.reads.size())-1>limits.maximum_growth_cells)return std::nullopt;
+  trace("all reaching definitions and projected reads proved");
   auto proof_items=m.items;proof_items[m.item[projection]].raw=true;
   const PostLayoutStackEntryProofOptions proof_options{.refine_runtime_selectors=false,
       .numeric_entry_closed=true,.transport_closed_entry_through_control=true,.use_indirect_store_entry_facts=true};
@@ -1777,6 +1883,7 @@ std::optional<LazySignPlan> lazy_sign_plan(const Model& m, Id projection,
       {{false,true,true,true},false,false},proof_options) ||
       !prove_post_layout_stack_state_equality(proof_items,m.flow,normalized_after,
       {{true,true,true,true},false,true},proof_options))return std::nullopt;
+  trace("caller hidden-state continuations proved");
   for(const auto read:plan.reads){
     std::vector<Id> continuations;
     for(Id s=0;s<m.instruction.size();++s)if(m.instruction[s]==read){
@@ -1786,6 +1893,7 @@ std::optional<LazySignPlan> lazy_sign_plan(const Model& m, Id projection,
     if(continuations.empty()||!prove_post_layout_stack_state_equality(proof_items,m.flow,continuations,
         {{true,true,true,true},true,false},proof_options))return std::nullopt;
   }
+  trace("every decoder continuation proved");
   return plan;
 }
 
@@ -1904,6 +2012,50 @@ NullableBodyProof total_nullable_body(const Model& m,Id start,int selector,
   return result;
 }
 } // namespace
+
+std::vector<ContextualCopyTransportCandidate> contextual_lazy_unit_projection_candidates(
+    const std::vector<IrOp>& ops, const PassContext& context,
+    const ContextualCopyTransportOptions& limits) {
+  std::vector<ContextualCopyTransportCandidate> result;
+  if (!limits.runtime_preloads || !limits.control || !limits.encoded_target_origins ||
+      !limits.maximum_work || !limits.maximum_candidates || limits.maximum_growth_cells < 0)
+    return result;
+  if (std::none_of(ops.begin(), ops.end(), [](const auto& op) {
+        return op.kind == IrKind::Plain && !op.meta.raw && op.opcode == 0x32;
+      })) return result;
+  Model model(ops, context, limits);
+  if (std::getenv("MKPRO_NATIVE_TRACE_COPY_TRANSPORT"))
+    std::cerr << "[lazy-unit-projection] model=" << model.valid << '\n';
+  if (!model.valid) return result;
+  const auto projection = [] {
+    IrOp op;
+    op.kind = IrKind::Plain;
+    op.opcode = 0x32;
+    op.meta.mnemonic = opcode_by_code(0x32).name;
+    return op;
+  };
+  for (Id at = 0; at < ops.size() && result.size() < limits.maximum_candidates; ++at) {
+    if (ops[at].opcode != 0x32) continue;
+    const auto plan = lazy_sign_plan(model, at, limits);
+    if (!plan) continue;
+    ContextualCopyTransportCandidate candidate;
+    auto& out = candidate.transformation;
+    for (Id i = 0; i < ops.size(); ++i) {
+      if (i == plan->projection) continue;
+      if (plan->calls.contains(i)) out.ops.push_back(projection());
+      out.ops.push_back(ops[i]);
+      if (plan->reads.contains(i)) out.ops.push_back(projection());
+    }
+    out.applied = 1;
+    out.optimizations.push_back({"contextual-lazy-unit-projection",
+        "Delayed a sign-only storage projection without moving any return or callback entry. "
+        "Reused the exact packed-sign, reaching-definition, alias, caller normalization and "
+        "stack/X1/X2 proofs of the compound nullable law. Every affected recall decodes "
+        "the original unit; all existing selector and placement equations remain pending."});
+    result.push_back(std::move(candidate));
+  }
+  return result;
+}
 
 std::vector<ContextualCopyTransportCandidate> contextual_nullable_callback_projection_candidates(
     const std::vector<IrOp>& ops,const PassContext& context,const ContextualCopyTransportOptions& limits){

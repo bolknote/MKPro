@@ -33,6 +33,11 @@ std::optional<CompileResult> materialize_proved_layout_for_testing(
     const std::string&,const CompileResult&,const CompileOptions&,
     const std::vector<MachineItem>&,const std::vector<PreloadReport>&,bool,bool=true);
 }
+namespace mkpro::core {
+std::optional<std::pair<LayoutSearchArtifact, std::map<std::string,int>>>
+contextual_reopened_allocation_root_for_testing(const LayoutSearchArtifact&,
+    const CompileOptions&, int);
+}
 namespace {
 using namespace mkpro;using namespace mkpro::core;using mkpro::tests::require;
 enum class Kind { Normal, ChangedSource, Alias, ObservedStack, Untyped, Raw };
@@ -1088,6 +1093,75 @@ void prologue_reopens_argument_lifetimes(){
   }
 }
 
+void grounded_argument_transport_and_rom(){
+  const auto make=[](int kind){
+    MachineEmitter e;
+    const auto call=[&]{e.emit_jump(0x53,"grounded argument through a call","argument");
+      if(kind==6){e.emit_number("9");e.emit_op(0x48);e.emit_op(0x60);e.emit_op(0x4a);}};
+    e.emit_op(0x68);call();
+    e.emit_op(0x68);e.emit_op(0x0b);e.emit_op(0x48);
+    if(kind==1)e.emit_number("5");
+    call();e.emit_number("7");e.emit_op(0x40);
+    for(int i=0;i<4;++i)e.emit_op(0x64);
+    for(int i=0;i<3;++i)e.emit_op(0x10);
+    e.emit_stop(StopDisposition::Terminal);
+    e.emit_label("argument");e.emit_op(0x40);
+    if(kind==2){e.emit_number("9");e.emit_op(0x48);}
+    if(kind==3){e.emit_number("0");e.emit_op(0x4c);e.emit_op(0xdc);
+      e.items.back().indirect_memory_targets=std::vector<int>{0};}
+    e.emit_op(0x60);e.emit_number("2");e.emit_op(0x12);e.emit_op(0x44);e.emit_op(0x52);
+    Fixture f{e.items,{{.register_name="8",.value=kind==5?"DE-2":"3"}}};
+    if(kind==4)f.preloads.clear();
+    return f;
+  };
+  const auto positive=make(0);
+  const auto ops=raise_machine_to_ir(positive.items);
+  CompileOptions options;options.coalesce_copies=true;
+  require(passes::contextual_copy_transport_candidates(ops,{options}).empty(),
+      "callee argument copying is not a syntactically adjacent register copy");
+  passes::ContextualCopyTransportOptions limits;limits.runtime_preloads=&positive.preloads;
+  const auto candidates=passes::contextual_grounded_copy_transport_candidates(ops,{options},limits);
+  require(!candidates.empty(),"grounded full-word argument equality must enable interprocedural copy transport");
+  for(const auto& candidate:candidates){
+    const auto items=lower_ir_to_machine(candidate.transformation.ops);
+    require(cells(items)<cells(positive.items) &&
+        observe({positive.items,positive.preloads,{}},-1)==observe({items,positive.preloads,{}},-1),
+        "non-adjacent argument forwarding saves a cell and preserves every ROM register, stack slot and next input");
+  }
+  const auto integrated=contextual_copy_transport_layout_transactions({positive.items,positive.preloads,{}},options);
+  require(std::any_of(integrated.begin(),integrated.end(),[&](const auto& edge){
+    return cells(edge.node.items)<cells(positive.items) && std::any_of(edge.node.optimizations.begin(),
+        edge.node.optimizations.end(),[](const auto& report){return report.name=="grounded-contextual-copy-transport";});
+  }),"the public allocation/representation/layout product must discover a callee-store-only root");
+  auto numeric=positive.items;
+  std::map<std::string,int> positions;
+  int position=0;
+  for(const auto& item:numeric){
+    if(item.kind==MachineItemKind::Label)positions[item.name]=position;
+    else ++position;
+  }
+  for(auto& item:numeric)
+    if(item.kind==MachineItemKind::Address)
+      if(const auto* label=std::get_if<std::string>(&item.target))item.target=positions.at(*label);
+  const auto numeric_candidates=contextual_copy_transport_layout_transactions({numeric,positive.preloads,{}},options);
+  require(std::any_of(numeric_candidates.begin(),numeric_candidates.end(),[&](const auto& edge){
+    return cells(edge.node.items)<cells(numeric) && std::any_of(edge.node.optimizations.begin(),
+        edge.node.optimizations.end(),[](const auto& report){return report.name=="grounded-contextual-copy-transport";});
+  }),"delivered numeric call operands must not hide the same proved argument-copy opportunity");
+  for(int kind=1;kind<=6;++kind){
+    const auto negative=make(kind);auto denied=limits;denied.runtime_preloads=&negative.preloads;
+    if(kind==6)denied.maximum_growth_cells=0;
+    const auto rejected=passes::contextual_grounded_copy_transport_candidates(
+        raise_machine_to_ir(negative.items),{options},denied);
+    if(!rejected.empty())std::cerr<<"grounded negative kind="<<kind<<'\n';
+    require(rejected.empty(),
+        "mixed callers, source mutation, indirect destination reads, missing/raw owners and unfunded observing sinks reject forwarding");
+  }
+  auto disabled=limits;disabled.maximum_work=0;
+  require(passes::contextual_grounded_copy_transport_candidates(ops,{options},disabled).empty(),
+      "grounded forwarding cannot bypass its complete proof budget");
+}
+
 void reversible_dual_mode_continuation(){
   for(const bool trailing_store:{false,true}){
     MachineEmitter e;e.emit_op(0x52);e.emit_label("public_entry");
@@ -1113,9 +1187,32 @@ void reversible_dual_mode_continuation(){
     if(!reopened.applied)for(const auto& reason:reopened.reasons)std::cerr<<"reopening: "<<reason<<'\n';
     require(reopened.applied>0 && reopened.continuation.proved && reopened.added_cells==tail &&
         cells(reopened.items)==cells(folded.items)+tail,"inverse law charges every duplicated cell");
+    const LayoutSearchArtifact folded_root{folded.items, folded.preloads, {}};
+    const auto allocation_root = contextual_reopened_allocation_root_for_testing(folded_root, {}, tail);
+    require(allocation_root && cells(allocation_root->first.items)==cells(folded.items)+tail &&
+        observe(folded_root,-1)==observe(allocation_root->first,-1),
+        "the prospective allocation topology charges its full debt and preserves every stock ROM observation");
+    require(!contextual_reopened_allocation_root_for_testing(folded_root, {}, tail-1),
+        "a topology inverse cannot borrow cells outside the caller's transaction growth bound");
     require(observe({e.items,words,{}},-1)==observe({folded.items,folded.preloads,{}},-1) &&
         observe({e.items,words,{}},-1)==observe({reopened.items,words,{}},-1),
         "ROM preserves full stack, all future memory reads and all data registers through fold and reopen");
+    const auto reprepared = prepare_shared_helper_dual_mode_layout(reopened.items,
+        build_post_layout_control_flow(reopened.items,control));
+    require(reprepared.applied>0, "the certified inverse can be folded again without a new source ABI");
+    const auto refolded = finalize_shared_helper_dual_mode_layout(reprepared,reprepared.items,words,
+        build_post_layout_control_flow(reprepared.items,control));
+    require(refolded.applied>0 && refolded.proof.proved &&
+        observe({e.items,words,{}},-1)==observe({refolded.items,refolded.preloads,{}},-1),
+        "repeated continuation folding preserves every ROM observation");
+    for (const auto& item : refolded.items) {
+      if (!item.comment) continue;
+      for (const std::string note : {"shared official helper continuation", "divergent side-space helper entry"}) {
+        const auto at=item.comment->find(note);
+        require(at==std::string::npos || item.comment->find(note,at+note.size())==std::string::npos,
+            "repeated folding must not multiply identical command annotations and replay equivalent machine frontiers");
+      }
+    }
     for(const auto kind:{0,1,2,3}){
       auto invalid=folded.items;
       const auto shared=std::find_if(invalid.begin(),invalid.end(),[](const auto& item){
@@ -1137,6 +1234,8 @@ void reversible_dual_mode_continuation(){
       }
       require(reopen_shared_helper_dual_mode_layout(invalid,control).applied==0,
           "raw, mismatched formal, incomplete provenance and observable X2 reject reopening");
+      require(!contextual_reopened_allocation_root_for_testing({invalid,words,{}}, {}, tail),
+          "the allocation product cannot bypass a rejected continuation, raw or hidden-state proof");
     }
   }
 }
@@ -2125,6 +2224,7 @@ void data_and_rom(){
   exact_finalization_memo();
   composition_depth_scheduling();
   reversible_dual_mode_continuation();
+  grounded_argument_transport_and_rom();
   prologue_reopens_argument_lifetimes();
   proved_neutral_layout_materialization();
   allocation_preferences_are_not_lowering_aliases();

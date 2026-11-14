@@ -82136,6 +82136,10 @@ CompileResult primary_optimizer_root_for_testing(
   return compile_source_for_optimizer_profile(source, options, owner);
 }
 
+std::string compiler_options_fingerprint(const CompileOptions& options) {
+  return compile_result_cache_key({}, options);
+}
+
 CompileResult explicit_lowering_root_for_testing(
     const std::string& source, const CompileOptions& options) {
   return compile_source_once(source, options,

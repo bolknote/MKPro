@@ -20,7 +20,10 @@ PassResult selector_charge_literal_sinking(const std::vector<IrOp>& ops,
 bool prove_selector_charge_sunk_literal_entry(
     const std::vector<MachineItem>& items,
     const AuthoritativePostLayoutControlFlow& flow,
-    std::size_t store, std::size_t charge_start, int leaf);
+    std::size_t store, std::size_t charge_start, int leaf,
+    // Data-only preparation: follow the owned symbolic command while its
+    // encoded origin is pending. Final-artifact callers keep the default.
+    bool deferred_command_targets = false);
 
 // Semantic non-digit entry: a normalized zero equality edge through a just
 // stored low selector. Re-prove the canonical source word, matched entry and

@@ -205,6 +205,14 @@ bool entry_converges(const std::vector<MachineItem>& original,
           barrier = true;
       }
     }
+    if ((barrier || item.raw) && std::getenv("MKPRO_NATIVE_TRACE_SUNK_DISPATCH")) {
+      std::cerr<<"[sunk-dispatch] item="<<index<<" opcode="<<opcode
+               <<" leaf="<<leaf<<" raw="<<item.raw<<" barrier="<<barrier<<" targets:";
+      const auto known=flow.indirect_flow_targets.find(index);
+      if(known!=flow.indirect_flow_targets.end())for(const auto& target:known->second)
+        std::cerr<<' '<<target.address;
+      std::cerr<<'\n';
+    }
     if (barrier)
       item.raw = true;
   }
@@ -491,7 +499,8 @@ PassResult selector_charge_literal_sinking(const std::vector<IrOp>& ops,
 bool prove_selector_charge_sunk_literal_entry(
     const std::vector<MachineItem>& items,
     const AuthoritativePostLayoutControlFlow& flow,
-    std::size_t store, std::size_t charge_start, int leaf) {
+    std::size_t store, std::size_t charge_start, int leaf,
+    bool deferred_command_targets) {
   const auto reject = [&](std::string_view why) {
     if (std::getenv("MKPRO_NATIVE_TRACE_COPY_TRANSPORT"))
       std::cerr << "[sunk-final] store=" << store << " charge=" << charge_start
@@ -530,6 +539,7 @@ bool prove_selector_charge_sunk_literal_entry(
   std::size_t previous = store;
   const bool coalesced = std::find(items[store].roles.begin(), items[store].roles.end(),
       "selector-sunk-literal-coalesced") != items[store].roles.end();
+  if(deferred_command_targets && coalesced)return reject("deferred proof cannot discharge a final data/address equality");
   if (coalesced) {
     // This is a final-artifact obligation, not a trusted historical marker.
     // The unique data-producing charge must actually name this numeric value
@@ -611,10 +621,28 @@ bool prove_selector_charge_sunk_literal_entry(
   int body_address = 0;
   for (std::size_t index = 0; index < body; ++index)
     if (items[index].kind != MachineItemKind::Label) ++body_address;
-  const bool converges = entry_converges(items, flow, body_address, reg, leaf,
-                                         charge_start == *origin) ||
-      entry_converges(items, flow, body_address, reg, leaf,
-                      charge_start == *origin, charge_start);
+  int execution_leaf=leaf;
+  if(deferred_command_targets) {
+    std::optional<int> command;
+    int physical=0;
+    for(const auto& item:items) {
+      if(item.kind==MachineItemKind::Label) {
+        if(item.name==*high_target) {
+          if(command)return reject("ambiguous deferred command identity");
+          command=physical;
+        }
+      }else ++physical;
+    }
+    if(!command)return reject("missing deferred command identity");
+    execution_leaf=*command;
+  }
+  // The matched query is usually both cheaper and more precise. Preserve
+  // the old conservative fallback and its full work budget: this is the
+  // same disjunction, not a weaker theorem or a reduced search frontier.
+  const bool converges = entry_converges(items, flow, body_address, reg, execution_leaf,
+                                         charge_start == *origin, charge_start) ||
+      entry_converges(items, flow, body_address, reg, execution_leaf,
+                      charge_start == *origin);
   if (!converges) return reject("stack convergence");
   return true;
 }

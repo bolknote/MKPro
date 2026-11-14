@@ -82,7 +82,7 @@
    13 | 42    | X→П 2                   | set y
    14 | 61    | П→X 1                   | stage helper stack argument x
    15 | 53    | ПП                      | expr cell_mask(x, y) stack entry
-   16 | EA    | EA                      | divergent side-space helper entry; divergent side-space helper entry; divergent side-space helper entry; divergent side-space helper entry
+   16 | EA    | EA                      | divergent side-space helper entry
    17 | 37    | К ∧                     | bit_and()
    18 | 35    | К {x}                   | frac()
    19 | EC    | К x=0 c                 | false branch for ==; preloaded Rc=90 indirect-target=90 shifted-forward indirect flow
@@ -113,9 +113,9 @@
    45 | 15    | F 10ˣ                   | pow10()
    46 | 34    | К [x]                   | int()
    47 | 10    | +                       | expr +
-   48 | 38    | К ∨                     | retained-operand update; shared official helper continuation; shared official helper continuation; shared official helper continuation; shared official helper continuation
-   49 | 49    | X→П 9                   | set occupied; shared official helper continuation; shared official helper continuation; shared official helper continuation; shared official helper continuation
-   50 | 40    | X→П 0                   | set slot; shared official helper continuation; shared official helper continuation; shared official helper continuation; shared official helper continuation
+   48 | 38    | К ∨                     | retained-operand update; shared official helper continuation
+   49 | 49    | X→П 9                   | set occupied; shared official helper continuation
+   50 | 40    | X→П 0                   | set slot; shared official helper continuation
    51 | 52    | В/О                     | expression helper return
    52 | 15    | F 10ˣ                   | packed_score accumulator helper pow10; callee-hole leaf entry __packed_score_accumulator; callee-hole call-origin=packed_score accumulator helper
    53 | 13    | ÷                       | packed_score accumulator helper divide

@@ -3750,6 +3750,25 @@ static std::vector<DeferredFiniteModeRepresentation> finite_mode_candidates_impl
   if (candidate_options.maximum_candidates == 0 ||
       candidate_options.maximum_growth_cells < 0 || candidate_options.maximum_growth_cells > 4)
     return unchanged();
+  // This independent lane discovers only preloaded sign orbits, whose
+  // theorem requires an actual adjacent recall/negate/store transition.
+  // Do not construct the context/selector products for impossible demands.
+  // Other lanes (including unit producers and nonnegative max cuts) retain
+  // their existing discovery and complete budgets.
+  if (defer_layout && candidate_options.encode_preloaded_state && !units_only &&
+      !candidate_options.normalize_unit_arguments && !candidate_options.nonnegative_max_cuts) {
+    bool transition = false;
+    for (std::size_t at = 2; at < ops.size() && !transition; ++at) {
+      const auto& read = ops[at - 2U];
+      const auto& negate = ops[at - 1U];
+      const auto& store = ops[at];
+      transition = read.kind == IrKind::Recall && read.opcode >= 0x60 && read.opcode <= 0x6e &&
+          negate.kind == IrKind::Plain && negate.opcode == 0x0b &&
+          store.kind == IrKind::Store && store.opcode == read.opcode - 0x20 &&
+          ordinary(read) && ordinary(negate) && ordinary(store);
+    }
+    if (!transition) return unchanged();
+  }
   // This is part of the separately regenerated shared-region candidate. The
   // ordinary lowering remains an incumbent: a local win can lose address
   // coincidences, so final layout, not this pass, chooses the program.

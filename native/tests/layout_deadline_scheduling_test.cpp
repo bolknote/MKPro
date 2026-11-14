@@ -115,6 +115,63 @@ std::vector<std::string> observe(const std::vector<MachineItem>& items,
 }
 
 void run_tests() {
+  {
+    const std::vector<int> lengths{5, 6};
+    const std::vector<int> capacities{5, 5};
+    const LayoutGapCapacityBound bound(lengths, 5);
+    require(bound.minimum_padding(0U, capacities) == 0 &&
+                bound.minimum_single_use_padding(0U, capacities) == 5,
+            "one component cannot independently fill both gaps");
+    const std::vector<DeadlinePackingComponent> impossible{{5, std::nullopt},
+                                                            {6, std::nullopt}};
+    const std::vector<DeadlinePackingGap> gaps{{0, 5}, {6, 5}};
+    const auto rejected = pack_components_with_deadlines(impossible, gaps, 12, 0);
+    require(!rejected.proved && !rejected.exhausted,
+            "single-use capacity shortage must be proved infeasible");
+    require(pack_components_with_deadlines(impossible, gaps, 12, 0, 2, 0).exhausted,
+            "zero work budget must still report exhaustion");
+  }
+  {
+    const std::vector<DeadlinePackingComponent> components{{5, std::nullopt},
+                                                            {6, std::nullopt},
+                                                            {5, std::nullopt}};
+    const std::vector<DeadlinePackingGap> gaps{{0, 5}, {6, 5}};
+    const auto exact = brute_force(components, gaps, 12, 0);
+    const auto actual = pack_components_with_deadlines(components, gaps, 12, 0, 2);
+    const auto repeated = pack_components_with_deadlines(components, gaps, 12, 0, 2);
+    require(exact && *exact == 0 && actual.proved && !actual.exhausted &&
+                actual.padding == *exact && actual.assignment == repeated.assignment &&
+                actual.work == repeated.work,
+            "single-use pruning must find feasible packing within the frontier budget");
+  }
+  for (int seed = 0; seed < 72; ++seed) {
+    std::vector<int> lengths;
+    for (int index = 0; index < 4; ++index)
+      lengths.push_back(1 + (seed * (index + 2) + index) % 8);
+    const auto first = static_cast<std::size_t>(seed % 5);
+    const LayoutGapCapacityBound bound(lengths, 7);
+    std::vector<int> capacities, filled;
+    std::vector<DeadlinePackingGap> gaps;
+    int cursor = 0;
+    int total_residual = 0;
+    for (int index = 0; index < 2 + seed % 2; ++index) {
+      const int capacity = 1 + (seed * (index + 3) + index) % 7;
+      const int used = (seed + index) % (capacity + 1);
+      capacities.push_back(capacity);
+      filled.push_back(used);
+      gaps.push_back({cursor, capacity - used});
+      cursor += capacity - used + 1;
+      total_residual += capacity - used;
+    }
+    std::vector<DeadlinePackingComponent> remaining;
+    for (std::size_t index = first; index < lengths.size(); ++index)
+      remaining.push_back({lengths[index], std::nullopt});
+    const auto exact = brute_force(remaining, gaps, cursor, total_residual);
+    const auto independent = bound.minimum_padding(first, capacities, filled);
+    const auto single_use = bound.minimum_single_use_padding(first, capacities, filled);
+    require(exact && independent <= single_use && single_use <= *exact,
+            "single-use padding bound must remain admissible for every residual gap");
+  }
   // Same total fills do not imply the same remaining deadline capacity.
   for (int seed = 0; seed < 180; ++seed) {
     std::vector<DeadlinePackingComponent> components;

@@ -2090,7 +2090,7 @@ std::optional<NaturalTargetLayoutOrder> compute_layout_order_for_targets(
                               : *std::max_element(gap_capacities.begin(),
                                                   gap_capacities.end());
   const LayoutGapCapacityBound capacity_bound(eligible_lengths, maximum_gap);
-  if (capacity_bound.minimum_padding(0U, gap_capacities) > maximum_padding)
+  if (capacity_bound.minimum_single_use_padding(0U, gap_capacities) > maximum_padding)
     return std::nullopt;
 
   struct GapAssignmentNode {
@@ -2126,8 +2126,9 @@ std::optional<NaturalTargetLayoutOrder> compute_layout_order_for_targets(
                                 assignment) {
       const int filled = std::accumulate(totals.begin(), totals.end(), 0);
       if (filled + remaining_cells < minimum_required_fill ||
-          capacity_bound.minimum_padding(eligible_index + 1U, gap_capacities,
-                                         totals) > maximum_padding)
+          capacity_bound.minimum_single_use_padding(eligible_index + 1U,
+                                                    gap_capacities, totals) >
+              maximum_padding)
         return true;
 
       std::vector<int> deadline_rank =

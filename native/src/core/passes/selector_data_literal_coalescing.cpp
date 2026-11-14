@@ -213,7 +213,8 @@ struct Family {
 std::optional<Family> family_at(const std::vector<MachineItem>& items,
                                 const AuthoritativePostLayoutControlFlow& flow,
                                 std::size_t store, bool verify_entry_bindings = true,
-                                bool allow_coalesced = false) {
+                                bool allow_coalesced = false,
+                                bool deferred_command_targets = false) {
   const auto id = role(items[store], "selector-sunk-literal-id:");
   const auto literal = role(items[store], "selector-sunk-literal-value:");
   const bool coalesced = std::find(items[store].roles.begin(), items[store].roles.end(),
@@ -295,7 +296,8 @@ std::optional<Family> family_at(const std::vector<MachineItem>& items,
   if (verify_entry_bindings) for (const auto high : family.charges) {
     const auto low = next(items, high);
     if (low >= items.size() || !prove_selector_charge_sunk_literal_entry(
-        items, flow, store, high, items[high].opcode * 10 + items[low].opcode))
+        items, flow, store, high, items[high].opcode * 10 + items[low].opcode,
+        deferred_command_targets))
       return std::nullopt;
   }
   return family;
@@ -1216,7 +1218,7 @@ prepare_deferred_selector_data_literal_layouts(
   const auto before = build_post_layout_control_flow(bound.items, options);
   if (!before.proved) return result;
   for (std::size_t store = 0; store < bound.items.size(); ++store) {
-    const auto family = family_at(bound.items, before, store);
+    const auto family = family_at(bound.items, before, store, true, false, true);
     if (!family) continue;
     DeferredSelectorDataLiteralLayout candidate;
     const int reg = bound.items[store].opcode & 15;

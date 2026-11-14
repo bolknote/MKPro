@@ -1,4 +1,5 @@
 #include "mkpro/core/joint_representation_search.hpp"
+#include "mkpro/core/compiler.hpp"
 #include "mkpro/core/joint_proof_input.hpp"
 #include "mkpro/core/joint_constraint_origins.hpp"
 #include "mkpro/core/detail/cell_provenance.hpp"
@@ -37,6 +38,37 @@
 
 namespace mkpro::core {
 namespace {
+
+thread_local std::size_t contextual_negative_cache_hits = 0;
+thread_local std::size_t contextual_completed_cache_hits = 0;
+thread_local std::size_t joint_completed_cache_hits = 0;
+thread_local std::size_t joint_literal_closure_reuses = 0;
+
+std::string representation_context_key(const CompileOptions& options) {
+  // These fields are consumed only by source/profile generation in
+  // compiler.cpp, never by the machine-IR proof/placement dependencies here.
+  // Their effects already belong to the complete typed artifact in the key.
+  // Keep every other option, including physical reservations, model, input
+  // policy and actual fast-frontier selection. Do not apply this projection
+  // to the source compiler cache or to searches with arbitrary callbacks.
+  auto frozen = options;
+  const CompileOptions defaults;
+  frozen.alternating_sign_toggle_args = defaults.alternating_sign_toggle_args;
+  frozen.zero_underflow_optimizer_root = defaults.zero_underflow_optimizer_root;
+  frozen.fast_candidate_threshold_ms = defaults.fast_candidate_threshold_ms;
+  frozen.forced_logical_register_assignments.clear();
+  frozen.forced_register_shares.clear();
+  frozen.collect_logical_register_allocation = defaults.collect_logical_register_allocation;
+  frozen.compact_logical_register_allocation = defaults.compact_logical_register_allocation;
+  frozen.repair_logical_register_assignment_preferences = defaults.repair_logical_register_assignment_preferences;
+  frozen.preserve_logical_register_instruction_classes = defaults.preserve_logical_register_instruction_classes;
+  frozen.logical_register_dead_store_elimination = defaults.logical_register_dead_store_elimination;
+  frozen.stack_argument_helper_entries = defaults.stack_argument_helper_entries;
+  frozen.single_x_expression_helper_entries = defaults.single_x_expression_helper_entries;
+  frozen.general_constant_preloads = defaults.general_constant_preloads;
+  frozen.disable_candidate_search = defaults.disable_candidate_search;
+  return compiler_options_fingerprint(frozen);
+}
 
 int cells(const LayoutSearchArtifact& artifact) {
   return static_cast<int>(std::count_if(artifact.items.begin(), artifact.items.end(),
@@ -396,6 +428,199 @@ struct ConstrainedRepresentation {
   std::shared_ptr<const ClosedNumericLayoutCertificate> numeric_layout_certificate = {};
 };
 
+// A lifetime equality is useful even when no preceding copy transaction gave
+// its store a provenance tag. Prefer recent definition epochs fairly across
+// homes and hardware classes; these are requests, never alias/death facts.
+std::vector<passes::RegisterWebRecoloringRequest> hardware_epoch_storage_requests(
+    const std::vector<IrOp>& code, std::size_t maximum_requests = 32) {
+  std::vector<passes::RegisterWebRecoloringRequest> result;
+  if (!maximum_requests) return result;
+  std::map<std::string, std::vector<std::size_t>> epochs;
+  std::vector<std::size_t> anchors;
+  std::size_t depth_count = 0;
+  constexpr std::string_view homes = "0123456789abcde";
+  for (std::size_t at = 0; at < code.size(); ++at) {
+    const auto& op = code[at];
+    if (op.kind != IrKind::Store || op.opcode < 0x40 || op.opcode > 0x4e ||
+        op.register_name != std::string(1, homes[static_cast<std::size_t>(op.opcode - 0x40)]) ||
+        op.meta.raw || op.meta.tactic || op.meta.logical_register_analysis ||
+        op.procedure_boundary || (op.meta.manual_interaction &&
+            op.meta.manual_interaction->kind != ManualInteractionAnchorKind::SingleStepCommand))
+      continue;
+    auto& definitions = epochs[op.register_name];
+    definitions.push_back(at);
+    depth_count = std::max(depth_count, definitions.size());
+  }
+  for (const auto kind : {IrKind::IndirectStore, IrKind::IndirectRecall, IrKind::Loop})
+    for (std::size_t at = 0; at < code.size(); ++at)
+      if (code[at].kind == kind && !code[at].meta.raw && !code[at].meta.tactic &&
+          !code[at].meta.logical_register_analysis && !code[at].meta.manual_interaction)
+        anchors.push_back(at);
+  for (std::size_t depth = 0; depth < depth_count; ++depth)
+    for (const auto anchor : anchors)
+      for (const auto& [home, definitions] : epochs) {
+        (void)home;
+        if (depth >= definitions.size()) continue;
+        result.push_back({{definitions[definitions.size() - 1U - depth], anchor}});
+        if (result.size() == maximum_requests) return result;
+      }
+  return result;
+}
+
+// Private to this transaction: created only after the relational reduction
+// theorem has proved this complete source, never reconstructed from a role.
+struct OrderReductionLiteralDomain {
+  std::string family_id;
+  int original_seed = -1;
+  int minimum_seed = -1;
+  int maximum_seed = -1;
+};
+
+// A newly normalized identity root is not permission to replay every older
+// portfolio. Admit it for this compound family's actual producers/resources.
+// Historical symbolic identity roots and real transformations are unaffected.
+bool contextual_identity_expansion_demand(const std::vector<IrOp>& code,
+    const std::vector<PreloadReport>& preloads, const CompileOptions& options,
+    const AuthoritativePostLayoutControlFlow* flow = nullptr) {
+  for (std::size_t at = 0; at < code.size(); ++at) {
+    const auto& op = code[at];
+    for (const auto& role : op.meta.roles)
+      if (role.starts_with(detail::kContextualCopyStoreOriginPrefix) &&
+          detail::is_cell_origin_provenance(role)) return true;
+    if (at + 1U < code.size() && op.kind == IrKind::IndirectRecall &&
+        op.opcode >= 0xd0 && op.opcode <= 0xd3 && !op.meta.raw &&
+        code[at+1U].kind == IrKind::Store && !code[at+1U].meta.raw &&
+        op.register_name != code[at+1U].register_name) return true;
+    if (at + 2U < code.size() && op.kind == IrKind::Recall && !op.meta.raw &&
+        code[at+1U].kind == IrKind::Plain && code[at+1U].opcode == 0x0b &&
+        !code[at+1U].meta.raw && code[at+2U].kind == IrKind::Store &&
+        !code[at+2U].meta.raw && code[at+2U].register_name == op.register_name &&
+        std::any_of(preloads.begin(), preloads.end(), [&](const auto& word) {
+          return word.register_name == op.register_name;
+        })) return true;
+  }
+  std::set<std::string> occupied;
+  for (const auto& word : preloads) occupied.insert(word.register_name);
+  for (const auto& [home, word] : options.preloaded_constant_registers) {
+    (void)word;
+    occupied.insert(home);
+  }
+  bool poolable_literal = false;
+  std::size_t digits = 0;
+  std::size_t machine = 0;
+  for (const auto& op : code) {
+    const auto site = machine;
+    machine += lower_ir_to_machine({op}).size();
+    if (op.meta.raw) return true;
+    // This is a whole-program physical footprint, not a callee summary.
+    // Ordinary call bodies are scanned independently below; the control
+    // instruction itself touches only its explicit selector, if any.
+    if (op.kind == IrKind::Call || op.kind == IrKind::Return ||
+        op.kind == IrKind::Jump || op.kind == IrKind::CondJump) {
+      digits = 0;
+      continue;
+    }
+    if (op.kind == IrKind::IndirectCall || op.kind == IrKind::IndirectJump ||
+        op.kind == IrKind::IndirectCondJump) {
+      if (op.register_name.empty()) return true;
+      occupied.insert(op.register_name);
+      digits = 0;
+      continue;
+    }
+    if (op.kind == IrKind::Stop && std::find(op.meta.roles.begin(), op.meta.roles.end(),
+            kTypedDisplayObservationRole) != op.meta.roles.end()) {
+      digits = 0;
+      continue;
+    }
+    if (op.kind == IrKind::Store || op.kind == IrKind::Recall || op.kind == IrKind::Loop) {
+      if (op.register_name.empty()) return true;
+      occupied.insert(op.register_name);
+      digits = 0;
+      continue;
+    }
+    if (op.kind == IrKind::IndirectStore || op.kind == IrKind::IndirectRecall) {
+      if (op.register_name.empty()) return true;
+      occupied.insert(op.register_name);
+      auto aliases = op.meta.indirect_memory_targets;
+      if (flow && flow->proved) {
+        const auto proved = flow->indirect_memory_targets.find(site);
+        if (proved != flow->indirect_memory_targets.end()) aliases = proved->second;
+      }
+      if (!aliases || aliases->empty()) return true;
+      for (const auto home : *aliases) {
+        if (home < 0 || home > 14) return true;
+        occupied.insert(std::string(1, "0123456789abcde"[home]));
+      }
+      digits = 0;
+      continue;
+    }
+    // An unknown physical footprint is not evidence that storage is full.
+    // Leave it to the existing exact proof instead of pruning such a root.
+    if (op.kind != IrKind::Plain && op.kind != IrKind::Label) {
+      const auto effect = passes::register_effects(op);
+      if (effect.uses_all_registers || effect.may_define_any_register) return true;
+      occupied.insert(effect.uses.begin(), effect.uses.end());
+      occupied.insert(effect.must_defs.begin(), effect.must_defs.end());
+      occupied.insert(effect.may_defs.begin(), effect.may_defs.end());
+    }
+    const bool digit = op.kind == IrKind::Plain && !op.meta.raw && op.opcode >= 0 &&
+        op.opcode <= 9 && !op.meta.manual_interaction &&
+        std::all_of(op.meta.roles.begin(), op.meta.roles.end(), detail::is_cell_origin_provenance);
+    digits = digit ? digits + 1U : 0U;
+    poolable_literal = poolable_literal || digits >= 2U;
+  }
+  constexpr std::string_view homes = "0123456789abcde";
+  return poolable_literal && std::any_of(homes.begin(), homes.end(), [&](char home) {
+        return !occupied.contains(std::string(1, home));
+      });
+}
+
+// Resolve a hardware-home move and its displaced ordinary epoch as one
+// preference cycle. Connected first-store products can miss the later epoch
+// that actually occupies the requested home; no interference is assumed here.
+std::vector<passes::RegisterWebRecoloringRequest> hardware_home_eviction_requests(
+    const std::vector<IrOp>& code,
+    const std::vector<passes::RegisterWebRecoloringRequest>& primary,
+    const std::vector<passes::RegisterWebRecoloringRequest>& copies,
+    const std::map<std::string, std::vector<std::size_t>>& epochs,
+    std::size_t maximum_requests = 32) {
+  std::vector<passes::RegisterWebRecoloringRequest> result;
+  if (!maximum_requests || primary.empty() || copies.empty()) return result;
+  std::size_t maximum_depth = 0;
+  for (const auto& [home, definitions] : epochs) {
+    (void)home;
+    maximum_depth = std::max(maximum_depth, definitions.size());
+  }
+  for (std::size_t diagonal = 0;
+       diagonal < primary.size() + copies.size() + maximum_depth && result.size() < maximum_requests;
+       ++diagonal)
+    for (std::size_t p = 0; p < primary.size() && p <= diagonal && result.size() < maximum_requests; ++p) {
+      if (primary[p].empty()) continue;
+      const auto [producer, anchor] = primary[p].front();
+      if (producer >= code.size() || anchor >= code.size()) continue;
+      const auto& old_home = code[anchor].register_name;
+      if (old_home.empty() || code[producer].register_name == old_home) continue;
+      const auto occupants = epochs.find(old_home);
+      if (occupants == epochs.end()) continue;
+      for (std::size_t c = 0; c < copies.size() && p + c <= diagonal && result.size() < maximum_requests; ++c) {
+        if (copies[c].empty()) continue;
+        const auto [read, destination] = copies[c].front();
+        if (read >= code.size() || destination >= code.size() || code[read].register_name == old_home)
+          continue;
+        const auto depth = diagonal - p - c;
+        if (depth >= occupants->second.size()) continue;
+        const auto displaced = occupants->second[occupants->second.size() - 1U - depth];
+        if (displaced >= code.size() || code[displaced].meta.raw) continue;
+        auto request = primary[p];
+        request.insert(request.end(), copies[c].begin(), copies[c].end());
+        request.push_back({displaced, destination});
+        if (std::find(result.begin(), result.end(), request) == result.end())
+          result.push_back(std::move(request));
+      }
+    }
+  return result;
+}
+
 // Storage affinities only: the web allocator still proves interference and
 // every indirect effect. A self-indexed destructive reload followed by a
 // direct copy is a useful hardware home even when it is not a plain Recall.
@@ -459,9 +684,46 @@ bool refresh_constraint_targets(ConstrainedRepresentation& node) {
   return true;
 }
 
+std::optional<ConstrainedRepresentation> contextual_transport_root(
+    const LayoutSearchArtifact& parent, const std::vector<MachineItem>& symbolic,
+    const std::map<std::string, int>& positions, const passes::PassResult& proposal,
+    bool normalize_identity = true) {
+  auto child = proposal.applied > 0 ? apply(parent, proposal)
+                                   : std::optional<LayoutSearchArtifact>{parent};
+  if (!child) return std::nullopt;
+  // A neutral edge still belongs to the already validated symbolic view.
+  // Restoring the delivered numeric operands here loses their command
+  // identities and rejects the root before any allocation/layout can run.
+  if (proposal.applied <= 0 && normalize_identity) child->items = symbolic;
+  ConstrainedRepresentation root{std::move(*child), positions};
+  if (!refresh_constraint_targets(root)) return std::nullopt;
+  return root;
+}
+
 bool charged_constraint_consumer(const MachineItem& item) {
   return std::find(item.roles.begin(), item.roles.end(),
                    "late-decimal-selector-consumer") != item.roles.end();
+}
+
+std::optional<ConstrainedRepresentation> reopened_allocation_topology(
+    const ConstrainedRepresentation& root, const PostLayoutControlFlowOptions& control,
+    int maximum_growth_cells) {
+  const auto opened = reopen_shared_helper_dual_mode_layout(root.artifact.items, control);
+  if (opened.applied <= 0 || !opened.continuation.proved ||
+      opened.added_cells > maximum_growth_cells)
+    return std::nullopt;
+  auto next = root;
+  next.artifact.items = opened.items;
+  for (const auto& report : opened.optimizations)
+    next.artifact.optimizations.push_back({report.name, report.detail});
+  // The inverse moves commands, not the words that already encode their old
+  // addresses. Keep those bindings as equations until the final placement.
+  if (!refresh_constraint_targets(next)) return std::nullopt;
+  next.artifact.optimizations.push_back({"allocation-before-continuation-layout",
+      "Reopened a fully proved shared continuation before rebuilding physical definition webs. "
+      "Retained every encoded target origin and charged all duplicated cells to the same "
+      "transaction; neither the enlarged root nor a locally cheaper coloring is publishable."});
+  return next;
 }
 
 // Identical V/O instructions have no data effects, but their incoming edges
@@ -864,7 +1126,14 @@ std::optional<LayoutSearchArtifact> close_representation_constraints(
     const PostLayoutControlFlowOptions& control_options, bool complete_preloads,
     bool project_shared_tail,
     const passes::DeferredSelectorDataLiteralLayout* pending_literal,
-    PreparedJointProofInput& proof_input, bool precise_entry_facts = false) {
+    PreparedJointProofInput& proof_input, bool precise_entry_facts = false,
+    const OrderReductionLiteralDomain* literal_domain = nullptr) {
+  if (literal_domain && (!pending_literal ||
+      literal_domain->family_id != pending_literal->family_id ||
+      literal_domain->original_seed != pending_literal->literal_value ||
+      literal_domain->minimum_seed < 10 || literal_domain->maximum_seed > 99 ||
+      literal_domain->minimum_seed > literal_domain->maximum_seed))
+    return std::nullopt;
   const auto& input = proof_input.items();
   const auto& flow = proof_input.flow();
   if (!flow.proved)
@@ -912,9 +1181,11 @@ std::optional<LayoutSearchArtifact> close_representation_constraints(
     if (!literal_family_owns_charges(*pending_literal,input)) return std::nullopt;
     for (const auto& certified_target:pending_literal->charge_targets) fixed.erase(certified_target);
 
-    const auto [binding,inserted] = fixed.emplace(
-        pending_literal->target_label,pending_literal->literal_value);
-    if (!inserted && binding->second != pending_literal->literal_value) return std::nullopt;
+    if (!literal_domain) {
+      const auto [binding,inserted] = fixed.emplace(
+          pending_literal->target_label,pending_literal->literal_value);
+      if (!inserted && binding->second != pending_literal->literal_value) return std::nullopt;
+    }
   }
   constexpr std::string_view names = "0123456789abcde";
   for (const auto& [source, destinations] : flow.indirect_flow_targets) {
@@ -1001,6 +1272,18 @@ std::optional<LayoutSearchArtifact> close_representation_constraints(
       if (!label) return std::nullopt;
       projection->target_bounds.emplace(*label, std::pair{0, 99});
       decimal_charge_targets.insert(*label);
+    }
+  }
+  if (literal_domain) {
+    if (!projection) projection.emplace();
+    const auto interval = std::pair{literal_domain->minimum_seed,
+                                    literal_domain->maximum_seed};
+    auto [bound, inserted] = projection->target_bounds.emplace(
+        pending_literal->target_label, interval);
+    if (!inserted) {
+      bound->second.first = std::max(bound->second.first, interval.first);
+      bound->second.second = std::min(bound->second.second, interval.second);
+      if (bound->second.first > bound->second.second) return std::nullopt;
     }
   }
   const bool conditional_underflow = std::any_of(input.begin(),input.end(),[](const auto& item) {
@@ -1111,6 +1394,38 @@ std::optional<LayoutSearchArtifact> close_representation_constraints(
   }
   LayoutSearchArtifact output = node.artifact;
   output.items = lower_ir_to_machine(placed->ops);
+  std::optional<passes::DeferredSelectorDataLiteralLayout> selected_literal;
+  if (literal_domain) {
+    const auto address = placed->projected_targets.find(pending_literal->target_label);
+    if (address == placed->projected_targets.end() ||
+        address->second < literal_domain->minimum_seed ||
+        address->second > literal_domain->maximum_seed) return std::nullopt;
+    selected_literal = *pending_literal;
+    selected_literal->literal_value = address->second;
+    const std::string identity = "selector-sunk-literal-id:" + literal_domain->family_id;
+    const std::string old_value = "selector-sunk-literal-value:" +
+        std::to_string(literal_domain->original_seed);
+    std::size_t owners = 0;
+    for (auto& item : output.items) {
+      if (std::find(item.roles.begin(), item.roles.end(), identity) == item.roles.end()) continue;
+      const auto value = std::find(item.roles.begin(), item.roles.end(), old_value);
+      if (value == item.roles.end() || ++owners != 1U) return std::nullopt;
+      *value = "selector-sunk-literal-value:" + std::to_string(address->second);
+      if (std::find(item.roles.begin(), item.roles.end(), "order-only-reduction-rebased") ==
+          item.roles.end()) item.roles.push_back("order-only-reduction-rebased");
+    }
+    if (owners != 1U) return std::nullopt;
+    // All later geometry/data checks use the chosen value, not the origin.
+    pending_literal = &*selected_literal;
+    output.optimizations.push_back({"joint-parametric-order-reduction-layout",
+        "Selected private reduction seed " + std::to_string(address->second) +
+        " from the freshly proved interval " + std::to_string(literal_domain->minimum_seed) +
+        ".." + std::to_string(literal_domain->maximum_seed) +
+        " in the same minimum-cell layout that places its callback. Original seed " +
+        std::to_string(literal_domain->original_seed) +
+        "; retained all rounding, tie, future-read and complete-family obligations. "
+        "The strict final checker must still prove the selected data/address equality."});
+  }
   if (widened_preload_domain)
     output.optimizations.push_back({"joint-official-selector-domain",
         "Solved placement with certified BCD address-only preloads through " +
@@ -1357,10 +1672,16 @@ std::optional<ConstrainedRepresentation> reopen_order_reduction_input(
   return opened;
 }
 
-std::vector<ConstrainedRepresentation> order_reduction_translation_roots(
+struct ProvedOrderReductionFamily {
+  ConstrainedRepresentation source;
+  std::size_t store = 0, first = 0, last = 0;
+  OrderReductionLiteralDomain domain;
+};
+
+std::vector<ProvedOrderReductionFamily> prove_order_reduction_families(
     const ConstrainedRepresentation& node, const CompileOptions& options,
-    const PostLayoutControlFlowOptions& control) {
-  std::vector<ConstrainedRepresentation> result;
+    const PostLayoutControlFlowOptions& control, bool reconsider_rebased = false) {
+  std::vector<ProvedOrderReductionFamily> result;
   if (!options.ordinary_decimal_keyboard_input && std::any_of(node.artifact.items.begin(),
       node.artifact.items.end(), [](const auto& item) { return item.manual_interaction.has_value(); }))
     return result;
@@ -1373,7 +1694,8 @@ std::vector<ConstrainedRepresentation> order_reduction_translation_roots(
   for (std::size_t store = 0; store < node.artifact.items.size(); ++store) {
     const auto& owner = node.artifact.items[store];
     if (owner.raw || owner.kind != MachineItemKind::Op || owner.opcode < 0x47 || owner.opcode > 0x4e ||
-        std::find(owner.roles.begin(), owner.roles.end(), "order-only-reduction-rebased") != owner.roles.end()) continue;
+        (!reconsider_rebased && std::find(owner.roles.begin(), owner.roles.end(),
+             "order-only-reduction-rebased") != owner.roles.end())) continue;
     const auto marker = std::find_if(owner.roles.begin(), owner.roles.end(),
         [&](const auto& role) { return role.starts_with(prefix); });
     if (marker == owner.roles.end()) continue;
@@ -1415,23 +1737,154 @@ std::vector<ConstrainedRepresentation> order_reduction_translation_roots(
         for (const auto& reason : proof.reasons) std::cerr << "[order-reduction] " << reason << '\n';
       continue;
     }
-    const int old = (literal[0] - '0') * 10 + literal[1] - '0';
-    for (int seed = proof.minimum_seed; seed <= proof.maximum_seed; ++seed) {
-      if (seed == old) continue;
-      auto candidate = *opened;
+    std::string identity;
+    constexpr std::string_view identity_prefix = "selector-sunk-literal-id:";
+    for (const auto& role : owner.roles)
+      if (role.starts_with(identity_prefix)) identity = role.substr(identity_prefix.size());
+    const int original_seed = (literal[0] - '0') * 10 + literal[1] - '0';
+    result.push_back({*opened, store, first, last,
+        {identity, original_seed, std::max(10, proof.minimum_seed), std::min(99, proof.maximum_seed)}});
+  }
+  return result;
+}
+
+std::vector<ConstrainedRepresentation> order_reduction_translation_roots(
+    const ConstrainedRepresentation& node, const CompileOptions& options,
+    const PostLayoutControlFlowOptions& control, bool reconsider_rebased = false,
+    const std::set<int>* demanded_seeds = nullptr) {
+  std::vector<ConstrainedRepresentation> result;
+  for (const auto& family : prove_order_reduction_families(node, options, control, reconsider_rebased)) {
+    const auto& domain = family.domain;
+    for (int seed = domain.minimum_seed; seed <= domain.maximum_seed; ++seed) {
+      if (seed == domain.original_seed || (demanded_seeds && !demanded_seeds->contains(seed))) continue;
+      auto candidate = family.source;
       auto& changed = candidate.artifact.items;
-      changed[first].opcode = seed / 10; changed[first].mnemonic = std::to_string(seed / 10);
-      changed[last].opcode = seed % 10; changed[last].mnemonic = std::to_string(seed % 10);
-      for (auto& annotation : changed[store].roles)
-        if (annotation.starts_with(prefix)) annotation = std::string(prefix) + std::to_string(seed);
-      changed[store].roles.push_back("order-only-reduction-rebased");
+      changed[family.first].opcode = seed / 10;
+      changed[family.first].mnemonic = std::to_string(seed / 10);
+      changed[family.last].opcode = seed % 10;
+      changed[family.last].mnemonic = std::to_string(seed % 10);
+      for (auto& annotation : changed[family.store].roles)
+        if (annotation.starts_with("selector-sunk-literal-value:"))
+          annotation = "selector-sunk-literal-value:" + std::to_string(seed);
+      if (std::find(changed[family.store].roles.begin(), changed[family.store].roles.end(),
+          "order-only-reduction-rebased") == changed[family.store].roles.end())
+        changed[family.store].roles.push_back("order-only-reduction-rebased");
       candidate.artifact.optimizations.push_back({"order-only-reduction-translation",
-          "Translated private order-only reduction seed " + std::to_string(old) + " to " + std::to_string(seed) +
+          "Translated private order-only reduction seed " + std::to_string(domain.original_seed) +
+          " to " + std::to_string(seed) +
           "; proved identical exponent bands, maximum/tie/branch decisions and all resumed stack/X1/X2 uses. " +
           (options.ordinary_decimal_keyboard_input ? "Uses explicit ordinary-decimal keyboard input contract. " : "No keyboard assumption. ") +
           "Final data/address sharing still requires the independent complete-artifact layout proof."});
       result.push_back(std::move(candidate));
     }
+  }
+  return result;
+}
+
+std::vector<ProvedSearchTransition<LayoutSearchArtifact>>
+parametric_order_reduction_layout_transactions(const ConstrainedRepresentation& root,
+    const CompileOptions& options, const PostLayoutControlFlowOptions& control,
+    int comparison_origin_cells = -1,
+    const JointRepresentationFinalizer& finalize = {}) {
+  std::vector<ProvedSearchTransition<LayoutSearchArtifact>> result;
+  const int origin_cells = comparison_origin_cells >= 0
+      ? comparison_origin_cells : cells(root.artifact);
+  auto configured = options;
+  configured.defer_return_suffix_until_callee_hole = true;
+  const passes::PassContext context{configured};
+  for (const auto& family : prove_order_reduction_families(root, options, control, true)) {
+    if (family.domain.family_id.empty()) continue;
+    // The literal inverse is proved before moving any callback. A previous
+    // translation is not a frozen choice: prove its full domain again.
+    std::vector<ConstrainedRepresentation> sources{family.source};
+    const auto reopened = reopen_shared_helper_dual_mode_layout(family.source.artifact.items, control);
+    if (reopened.applied > 0 && reopened.added_cells <= 4) {
+      auto source = family.source;
+      source.artifact.items = reopened.items;
+      for (const auto& report : reopened.optimizations)
+        source.artifact.optimizations.push_back({report.name, report.detail});
+      if (refresh_constraint_targets(source)) sources.push_back(std::move(source));
+    }
+    // Keep the family domain open while choosing a return continuation. A
+    // return shared at a hardware address can constrain the callback's start;
+    // fixing the scalar first would reject an otherwise valid joint layout.
+    const auto projected_count = sources.size();
+    for (std::size_t at = 0; at < projected_count; ++at) {
+      const auto source = sources[at];
+      const auto origins = detail::joint_target_origins(
+          source.artifact.items, source.targets, source.encoded_selectors);
+      if (!origins) continue;
+      const auto code = raise_machine_to_ir(source.artifact.items,
+          effective_optimizer_feature_profile(options));
+      for (auto& proposal : passes::contextual_lazy_unit_projection_candidates(code, context,
+               {.maximum_work=400000, .maximum_candidates=2, .maximum_copy_sites=8,
+                .maximum_growth_cells=4, .control=&control, .encoded_target_origins=&*origins,
+                .runtime_preloads=&source.artifact.preloads,
+                .preserve_formal_execution_frames=true})) {
+        if (auto image = apply(source.artifact, std::move(proposal.transformation))) {
+          auto next = source;
+          next.artifact = std::move(*image);
+          if (refresh_constraint_targets(next)) sources.push_back(std::move(next));
+        }
+      }
+    }
+    const auto unpooled_count = sources.size();
+    for (std::size_t at = 0; at < unpooled_count; ++at) {
+      const auto source = sources[at];
+      for (auto& pooled : pool_addressed_return_targets(source, control))
+        sources.push_back(std::move(pooled));
+      if (auto folded = zero_underflow_conditional_return(source, context, control)) {
+        for (auto& pooled : pool_addressed_return_targets(*folded, control))
+          sources.push_back(std::move(pooled));
+        sources.push_back(std::move(*folded));
+      }
+    }
+    for (const auto& source : sources)
+      for (const auto& pending : passes::prepare_deferred_selector_data_literal_layouts(
+          source.artifact.items, control, 4)) {
+        if (pending.family_id != family.domain.family_id ||
+            pending.literal_value != family.domain.original_seed) continue;
+        PreparedJointProofInput proof(pending.items, source.artifact.preloads, control);
+        for (const bool projected : {false, true}) {
+          auto closed = close_representation_constraints(source, context, control,
+              true, projected, &pending, proof, true, &family.domain);
+          if (!closed) continue;
+          // The parameter has become a concrete data/address equality. Retain
+          // that witness across the caller's finalizer, not the old seed from
+          // the pending input. A finalizer is never permission to skip binding.
+          auto delivered = pending;
+          std::optional<int> selected_seed;
+          for (const auto& owner : closed->items) {
+            if (std::find(owner.roles.begin(), owner.roles.end(),
+                    "selector-sunk-literal-id:" + pending.family_id) == owner.roles.end())
+              continue;
+            constexpr std::string_view value_prefix = "selector-sunk-literal-value:";
+            for (const auto& role : owner.roles) {
+              if (!role.starts_with(value_prefix)) continue;
+              const auto value = std::string_view(role).substr(value_prefix.size());
+              if (selected_seed || value.size() != 2U || value[0] < '1' ||
+                  value[0] > '9' || value[1] < '0' || value[1] > '9') {
+                closed.reset();
+                break;
+              }
+              selected_seed = (value[0] - '0') * 10 + value[1] - '0';
+            }
+            if (!closed) break;
+          }
+          if (!closed || !selected_seed || *selected_seed < family.domain.minimum_seed ||
+              *selected_seed > family.domain.maximum_seed) continue;
+          delivered.literal_value = *selected_seed;
+          if (finalize) closed = finalize(*closed);
+          if (!closed || cells(*closed) >= origin_cells) continue;
+          const auto final_flow = build_post_layout_control_flow(closed->items, control);
+          if (!final_flow.proved || !literal_family_owns_charges(delivered, closed->items) ||
+              !passes::prove_deferred_selector_data_literal_layout(
+                  delivered, closed->items, final_flow)) continue;
+          if (std::none_of(result.begin(), result.end(), [&](const auto& old) {
+                return same_layout_search_artifact(old.node, *closed);
+              })) result.push_back({std::move(*closed), "parametric-order-reduction-layout", true});
+        }
+      }
   }
   return result;
 }
@@ -1969,10 +2422,29 @@ TransactionSearchResult<LayoutSearchArtifact> search_joint_representation_constr
   // closure lane, borrowing exactly the already-admitted representation and
   // allocation states. No larger search limits or source-specific seeds.
   std::optional<LayoutSearchArtifact> data_control_incumbent;
+  std::vector<ConstrainedRepresentation> closed_parametric_roots;
   const auto close_data_control_literals = [&](const ConstrainedRepresentation& node) {
     if (!preload_environment_complete || limits.maximum_expansions == 0 ||
         limits.maximum_candidates == 0 || limits.maximum_depth == 0)
       return;
+    const auto same_pending = [&](const auto& old) {
+      return old.targets == node.targets && old.encoded_selectors == node.encoded_selectors &&
+          old.numeric_layout_certificate == node.numeric_layout_certificate &&
+          same_layout_search_artifact(old.artifact, node.artifact) &&
+          old.artifact.optimizations.size() == node.artifact.optimizations.size() &&
+          std::equal(old.artifact.optimizations.begin(), old.artifact.optimizations.end(),
+              node.artifact.optimizations.begin(), [](const auto& a, const auto& b) {
+                return a.name == b.name && a.detail == b.detail;
+              });
+    };
+    if (std::any_of(closed_parametric_roots.begin(), closed_parametric_roots.end(), same_pending)) {
+      ++joint_literal_closure_reuses;
+      return;
+    }
+    // Both the discrete and parametric closures are pure in this invocation.
+    // In particular the final initial-root visit must not replay all discrete
+    // placements merely because only the parametric half used to be memoized.
+    closed_parametric_roots.push_back(node);
     const auto& literal_root = node;
     for (const auto& pending : passes::prepare_deferred_selector_data_literal_layouts(
              literal_root.artifact.items, control_options,
@@ -1997,7 +2469,15 @@ TransactionSearchResult<LayoutSearchArtifact> search_joint_representation_constr
           data_control_incumbent = std::move(*closed);
       }
     }
+    for (auto& edge : parametric_order_reduction_layout_transactions(
+             node, options, control_options, origin_cells, finalize))
+      if (!data_control_incumbent || cells(edge.node) < cells(*data_control_incumbent))
+        data_control_incumbent = std::move(edge.node);
   };
+  // This independent closure is useful even when the old discrete frontier
+  // has no profitable first edge. Do not demand a sacrificial rewrite before
+  // the domain and geometry are allowed to meet.
+  close_data_control_literals(initial);
 
   const auto retain_closed_continuation = [&](const LayoutSearchArtifact& artifact,
                                               std::vector<ConstrainedRepresentation>* continuations) {
@@ -2510,6 +2990,9 @@ addressed_return_pooling_layout_transactions(
 std::vector<ProvedSearchTransition<LayoutSearchArtifact>>
 zero_underflow_conditional_return_layout_transactions(
     const LayoutSearchArtifact& artifact, const CompileOptions& options) {
+  if(std::none_of(artifact.items.begin(),artifact.items.end(),[](const auto& item){
+      return item.kind==MachineItemKind::Op && item.opcode==0xd3;
+    }))return {};
   const auto view=representation_view(artifact,options);if(!view)return {};
   auto configured=options;configured.defer_return_suffix_until_callee_hole=true;
   const passes::PassContext context{configured};
@@ -2517,19 +3000,114 @@ zero_underflow_conditional_return_layout_transactions(
   control.address_space_model=address_space_model_for_feature_profile(effective_optimizer_feature_profile(options));
   auto positions=constraint_positions(lower_ir_to_machine(*view));if(!positions)return {};
   ConstrainedRepresentation root{artifact,*positions};root.artifact.items=lower_ir_to_machine(*view);
-  auto folded=zero_underflow_conditional_return(root,context,control);if(!folded)return {};
-  std::vector<ConstrainedRepresentation> candidates{*folded};
-  auto pooled = pool_addressed_return_targets(*folded, control);
-  candidates.insert(candidates.end(), std::make_move_iterator(pooled.begin()),
-                    std::make_move_iterator(pooled.end()));
+  std::vector<std::pair<ConstrainedRepresentation,bool>> seeds{{root,false}};
+  // Inverses have their own geometry preconditions. Open an implicit
+  // data/address literal while its original, completely bound layout still
+  // exists, not after a different inverse has moved one of its callbacks.
+  // Keep this debt-bearing root private until the same transaction repays it.
+  std::vector<ConstrainedRepresentation> literal_roots{root};
+  for(std::size_t store=0;store<root.artifact.items.size();++store) {
+    const auto& owner=root.artifact.items[store];
+    if(std::find(owner.roles.begin(),owner.roles.end(),"selector-sunk-literal-coalesced")==
+        owner.roles.end())continue;
+    constexpr std::string_view prefix="selector-sunk-literal-value:";
+    const auto value=std::find_if(owner.roles.begin(),owner.roles.end(),[prefix](const auto& role){
+      return role.starts_with(prefix);
+    });
+    if(value==owner.roles.end() || value->size()!=prefix.size()+2U)continue;
+    if(auto opened=reopen_order_reduction_input(root,store,value->substr(prefix.size()),control)) {
+      literal_roots.push_back(*opened);
+      seeds.push_back({std::move(*opened),false});
+    }
+  }
+  // Keep the original geometry and its budgets intact. Reopening is a
+  // separately proved inverse, not permission to relax a frozen side frame.
+  // Fold only after that inverse, then repay every added cell by completing
+  // the same shared-tail law in one final placement transaction.
+  for(const auto& source:literal_roots) {
+  const auto reopened=reopen_shared_helper_dual_mode_layout(source.artifact.items,control);
+  if(reopened.applied>0 && reopened.added_cells<=4) {
+    auto next=source;next.artifact.items=reopened.items;
+    for(const auto& report:reopened.optimizations)
+      next.artifact.optimizations.push_back({report.name,report.detail});
+    if(refresh_constraint_targets(next))seeds.push_back({std::move(next),true});
+  }
+  }
+  std::vector<std::pair<ConstrainedRepresentation,bool>> candidates;
+  for(const auto& [seed,refold]:seeds) {
+    auto folded=zero_underflow_conditional_return(seed,context,control);if(!folded)continue;
+    candidates.push_back({*folded,refold});
+    for(auto& pooled:pool_addressed_return_targets(*folded,control))
+      candidates.push_back({std::move(pooled),refold});
+  }
   std::vector<ProvedSearchTransition<LayoutSearchArtifact>> result;
-  for (const auto& candidate : candidates) {
+  for (const auto& [candidate,refold] : candidates) {
     PreparedJointProofInput proof(candidate.artifact.items,candidate.artifact.preloads,control);
-    auto closed=close_representation_constraints(candidate,context,control,true,false,nullptr,proof,true);
+    auto closed=close_representation_constraints(candidate,context,control,true,refold,nullptr,proof,true);
     if(!closed || cells(*closed)>=cells(artifact))continue;
     closed=rebind_layout_search_artifact(std::move(*closed));
     if(!closed || !build_post_layout_control_flow(closed->items,control).proved)continue;
+    if(refold)closed->optimizations.push_back({"reopen-fold-refold-continuation",
+        "Composed an independently proved shared-tail inverse, zero-underflow branch fold and "
+        "the original dual-entry continuation law before final placement. Preserved encoded "
+        "selector origins, repaid every duplicated cell and rechecked physical return 99, "
+        "all side counters and complete rooted return frames without weakening any fold gate."});
     result.push_back({std::move(*closed),"zero-underflow-conditional-return-layout",true});
+  }
+  // A pinned return also determines the possible entry addresses in its
+  // fallthrough component. Feed those affine equations into the existing
+  // order-only translation theorem; never freeze a seed selected by an
+  // earlier geometry, and never replace its fresh relational proof by a tag.
+  for(const auto& [candidate,refold]:candidates) {
+    const auto code=raise_machine_to_ir(candidate.artifact.items,
+        effective_optimizer_feature_profile(options));
+    std::map<std::string,std::pair<int,int>> labels;
+    int component=0,offset=0;
+    for(const auto& op:code) {
+      if(op.kind==IrKind::Label)labels.emplace(op.name,std::pair{component,offset});
+      offset+=passes::cells_per_op(op);
+      if(op.kind==IrKind::Return || op.kind==IrKind::Jump || op.kind==IrKind::IndirectJump ||
+          (op.kind==IrKind::Stop && op.meta.stop_disposition==StopDisposition::Terminal)) {
+        ++component;offset=0;
+      }
+    }
+    std::set<int> demanded_seed_values;
+    for(const auto& op:code) {
+      if(std::find(op.meta.roles.begin(),op.meta.roles.end(),"zero-underflow-conditional-return")==
+          op.meta.roles.end() || !op.meta.indirect_flow_targets)continue;
+      for(const auto& target:*op.meta.indirect_flow_targets) {
+        const auto* name=std::get_if<std::string>(&target);
+        if(!name || !labels.contains(*name) || !candidate.targets.contains(*name))continue;
+        const auto [part,at]=labels.at(*name);
+        for(const auto& [label,position]:labels) {
+          (void)label;
+          if(position.first==part)demanded_seed_values.insert(candidate.targets.at(*name)-at+position.second);
+        }
+      }
+    }
+    if(demanded_seed_values.empty())continue;
+    for(const auto& translated:order_reduction_translation_roots(
+        candidate,configured,control,true,&demanded_seed_values))
+      for(const auto& pending:passes::prepare_deferred_selector_data_literal_layouts(
+          translated.artifact.items,control,4)) {
+        PreparedJointProofInput proof(pending.items,translated.artifact.preloads,control);
+        auto closed=close_representation_constraints(translated,context,control,
+            true,refold,&pending,proof,true);
+        if(!closed || cells(*closed)>=cells(artifact))continue;
+        closed=rebind_layout_search_artifact(std::move(*closed));if(!closed)continue;
+        const auto flow=build_post_layout_control_flow(closed->items,control);
+        if(!flow.proved || !literal_family_owns_charges(pending,closed->items) ||
+            !passes::prove_deferred_selector_data_literal_layout(pending,closed->items,flow))continue;
+        if(std::any_of(result.begin(),result.end(),[&](const auto& old){
+            return same_layout_search_artifact(old.node,*closed);
+          }))continue;
+        closed->optimizations.push_back({"return-constrained-reduction-translation",
+            "Derived reduction-entry candidates from a pinned return and exact fallthrough offsets; "
+            "freshly re-proved the complete integer-translation interval even for an earlier rebased seed. "
+            "Composed return pooling, any certified sharing inverse and final shared-tail placement; "
+            "rechecked all data/address, hidden-state and rooted-return obligations before final-cell pricing."});
+        result.push_back({std::move(*closed),"return-constrained-reduction-translation",true});
+      }
   }
   return result;
 }
@@ -2836,6 +3414,39 @@ contextual_copy_transport_layout_transactions_impl(const LayoutSearchArtifact& a
         b.opcode>=0x40 && b.opcode<=0x4e &&
         ((a.opcode>=0x40 && a.opcode<=0x4e) || (a.opcode>=0x60 && a.opcode<=0x6e));
   }
+  if (!demand) {
+    std::set<std::string> argument_entries;
+    std::set<int> argument_addresses;
+    std::vector<std::string> labels;
+    int address=0;
+    for (const auto& item:artifact.items) {
+      if (item.kind==MachineItemKind::Label) { labels.push_back(item.name); continue; }
+      if (item.kind==MachineItemKind::Op && !item.raw && !item.manual_interaction &&
+          item.opcode>=0x40 && item.opcode<=0x4e) {
+        argument_entries.insert(labels.begin(),labels.end());
+        argument_addresses.insert(address);
+      }
+      labels.clear();
+      ++address;
+    }
+    const auto argument_entry=[&](const IrTarget& target) {
+      if (const auto* name=std::get_if<std::string>(&target)) return argument_entries.contains(*name);
+      return argument_addresses.contains(std::get<int>(target));
+    };
+    for (std::size_t at=0; at<artifact.items.size() && !demand; ++at) {
+      const auto& item=artifact.items[at];
+      if (item.kind!=MachineItemKind::Op || item.raw) continue;
+      if (item.opcode==0x53) {
+        auto operand=at+1U;
+        while (operand<artifact.items.size() && artifact.items[operand].kind==MachineItemKind::Label) ++operand;
+        if (operand<artifact.items.size() && artifact.items[operand].kind==MachineItemKind::Address)
+          demand=argument_entry(artifact.items[operand].target);
+      } else if (item.opcode>=0xa0 && item.opcode<=0xae && item.indirect_flow_targets) {
+        for (const auto& target:*item.indirect_flow_targets)
+          demand=demand || argument_entry(target);
+      }
+    }
+  }
   const auto return_limits = joint_representation_search_limits(options.fast_candidate_search);
   TransactionSearchResult<LayoutSearchArtifact> composed;
   if (!preserve_formal_frames) {
@@ -2888,27 +3499,38 @@ contextual_copy_transport_layout_transactions_impl(const LayoutSearchArtifact& a
   // A previous round can already have removed the copy. Its new lifetime,
   // literal and helper choices still deserve the same joint closure; do not
   // require an unrelated second copy to compose the remaining mechanisms.
-  if(transports.empty() && !preserve_formal_frames)transports.push_back({{.ops=*ops},{}});
+  const auto identity_flow = shared_post_layout_control_flow(symbolic, control);
+  const bool identity_work = contextual_identity_expansion_demand(
+      *ops, artifact.preloads, options, identity_flow.get());
+  if(transports.empty() && (!preserve_formal_frames || identity_work))
+    transports.push_back({{.ops=*ops},{}});
+  // Keep every historical proposal (including its neutral fallback) first.
+  // Grounded argument transport has an independent proof/candidate budget.
+  auto grounded=passes::contextual_grounded_copy_transport_candidates(*ops,context,transport_options);
+  transports.insert(transports.end(),std::make_move_iterator(grounded.begin()),
+      std::make_move_iterator(grounded.end()));
   const bool transport_trace=std::getenv("MKPRO_NATIVE_TRACE_COPY_TRANSPORT")!=nullptr;
   const bool composition_trace=std::getenv("MKPRO_NATIVE_TRACE_JOINT_COMPOSITION")!=nullptr;
   if(composition_trace) {
     std::cerr<<"[joint-composition] root="<<cells(artifact)<<" formal="<<preserve_formal_frames
-             <<" transports="<<transports.size()<<" preloads:";
+             <<" transports="<<transports.size()
+             <<" neutral="<<std::count_if(transports.begin(),transports.end(),[](const auto& p){return p.transformation.applied<=0;})
+             <<" normalized-neutral="<<identity_work
+             <<" preloads:";
     for(const auto& word:artifact.preloads) std::cerr<<' '<<word.register_name<<'='<<word.value;
     std::cerr<<'\n';
   }
   if(transport_trace)std::cerr<<"[copy-transport-layout] proposals="<<transports.size()<<"\n";
   for(auto& proposal:transports) {
-    auto child=proposal.transformation.applied>0 ? apply(artifact,proposal.transformation)
-        : std::optional<LayoutSearchArtifact>{artifact};
-    if(!child)continue;
-    ConstrainedRepresentation base{std::move(*child),*positions};
-    if(!refresh_constraint_targets(base))continue;
+    auto prepared_root = contextual_transport_root(
+        artifact, symbolic, *positions, proposal.transformation, identity_work);
+    if (!prepared_root) continue;
+    auto base = std::move(*prepared_root);
     std::vector<ConstrainedRepresentation> allocations{base};
     // All entry facts must name the same normalized command identities as
     // the lifetime/transport proof. The delivered image can still carry an
     // older logical target beside an exact hardware counter.
-    auto source_flow=build_post_layout_control_flow(symbolic,control);
+    const auto& source_flow=*identity_flow;
     auto entry=resolve_post_layout_external_entry_contexts(source_flow);
     const auto deaths=passes::prove_post_layout_register_deadness(*ops,
         build_post_layout_control_flow(lower_ir_to_machine(*ops),control),100000);
@@ -3045,6 +3667,48 @@ contextual_copy_transport_layout_transactions_impl(const LayoutSearchArtifact& a
                 return same_layout_search_artifact(old.artifact,next.artifact);}))allocations.push_back(std::move(next));
           },&root.artifact.preloads,true);
     }
+    // A folded side-space tail changes the reaching definitions seen by the
+    // allocator. Its certified inverse must precede the hardware/copy epoch
+    // products, not be deferred until after one frozen coloring has won.
+    // Retain the historical roots and give this new topology its own two
+    // complete setup alternatives; no speculative root is published here.
+    if (preserve_formal_frames && identity_work &&
+        cells(artifact) > official_program_step_limit(control.address_space_model)) {
+      std::vector<ConstrainedRepresentation> prospective;
+      for (std::size_t n=0; n<seed_count && prospective.size()<2U; ++n) {
+        auto opened = reopened_allocation_topology(allocations[n], control, 4);
+        if (!opened || !transaction_growth_fits(cells(artifact), cells(opened->artifact), 4)) continue;
+        const auto code = raise_machine_to_ir(opened->artifact.items,
+            effective_optimizer_feature_profile(options));
+        auto demands = hardware_epoch_storage_requests(code);
+        const auto copies = self_reload_copy_requests(code, control);
+        std::map<std::string,std::vector<std::size_t>> epochs;
+        for (std::size_t at=0; at<code.size(); ++at)
+          if (code[at].kind==IrKind::Store) epochs[code[at].register_name].push_back(at);
+        auto cycles = hardware_home_eviction_requests(code, demands, copies, epochs);
+        demands.insert(demands.end(), cycles.begin(), cycles.end());
+        recolor_deferred(code, context, demands, control, opened->targets,
+            [&](std::vector<IrOp> recolored) {
+              if (prospective.size()>=2U) return;
+              auto next = *opened;
+              next.artifact.items = lower_ir_to_machine(recolored);
+              retire_moved_initializers(next);
+              const auto same = [&](const auto& old) {
+                return same_layout_search_artifact(old.artifact, next.artifact);
+              };
+              if (same(*opened) || !transaction_growth_fits(cells(artifact),cells(next.artifact),4) ||
+                  std::any_of(allocations.begin(),allocations.end(),same) ||
+                  std::any_of(prospective.begin(),prospective.end(),same)) return;
+              next.artifact.optimizations.push_back({"prospective-continuation-register-epochs",
+                  "Proved a changed complete hardware/copy epoch allocation on the reopened continuation. "
+                  "Only this enabling allocation, never a bare inverse, enters representation and placement closure."});
+              prospective.push_back(std::move(next));
+            }, &opened->artifact.preloads, true);
+      }
+      if (composition_trace)
+        std::cerr << "[joint-composition] prospective-epoch roots=" << prospective.size() << '\n';
+      for (auto& next : prospective) allocations.push_back(std::move(next));
+    }
     const auto allocated_count=allocations.size();
     if(transport_trace)std::cerr<<"[copy-transport-layout] allocations="<<allocated_count<<"\n";
     for(std::size_t n=0;n<allocated_count && allocations.size()<16U;++n) {
@@ -3118,11 +3782,16 @@ contextual_copy_transport_layout_transactions_impl(const LayoutSearchArtifact& a
               !identities.insert(role).second)unique=false;
           stores.push_back(i);
         }
-      if(!unique || stores.empty())continue;
+      if(!unique || (stores.empty() && !identity_work))continue;
       std::vector<passes::RegisterWebRecoloringRequest> demands;
       for(const auto store:stores)for(const auto kind:{IrKind::IndirectStore,IrKind::IndirectRecall,IrKind::Loop})
         for(std::size_t i=0;i<code.size() && demands.size()<12U;++i)
           if(code[i].kind==kind)demands.push_back({{store,i}});
+      // Source-ABI and finite-encoding roots need not descend from a copy
+      // rewrite. Give that previously absent family its own ordinary hardware
+      // epoch requests, then compose the same self-reload/third-home products.
+      // Tagged historical roots keep their exact old request order/budgets.
+      if (stores.empty()) demands = hardware_epoch_storage_requests(code);
       // One hardware equality may move an ordinary epoch into a third home.
       // Price simultaneous, cost-equivalent storage equalities as well; a
       // greedy first coloring is not a reason to freeze that third home.
@@ -3207,6 +3876,14 @@ contextual_copy_transport_layout_transactions_impl(const LayoutSearchArtifact& a
             request.insert(request.end(),connected[h][ordinary].begin(),connected[h][ordinary].end());
             joint_demands.push_back(std::move(request));
           }
+      if (stores.empty()) {
+        // This is the new untagged-ABI family, not the historical tagged
+        // request portfolio. Close the actual home-eviction chain instead of
+        // spending its bounded product on unrelated first-store pairs.
+        auto cycles = hardware_home_eviction_requests(
+            code, primary_demands, hardware_copies, store_epochs);
+        if (!cycles.empty()) joint_demands = std::move(cycles);
+      }
       if(composition_trace && !joint_demands.empty())
         std::cerr<<"[joint-composition] hardware-epoch requests="<<joint_demands.size()
                  <<" self-reloads="<<hardware_copies.size()<<'\n';
@@ -3762,6 +4439,21 @@ contextual_copy_transport_layout_transactions_impl(const LayoutSearchArtifact& a
     if(transport_trace)std::cerr<<"[copy-transport-layout] with-codecs="<<allocations.size()<<"\n";
     for(auto node:allocations) {
       if(!refresh_constraint_targets(node))continue;
+      // Allocation is still an equation-bearing state here. Price the scalar
+      // domain, shared continuation and selector geometry before an ordinary
+      // placement failure can discard this complete lifetime alternative.
+      for (auto& edge : parametric_order_reduction_layout_transactions(
+               node, options, control, cells(artifact))) {
+        if (std::none_of(result.begin(), result.end(), [&](const auto& old) {
+              return same_layout_search_artifact(old.node, edge.node);
+            })) {
+          edge.node.optimizations.push_back({"joint-allocation-parametric-continuation-layout",
+              "Closed a proved scalar domain, complete register allocation and addressed "
+              "continuation against the immutable transaction root. No intermediate "
+              "geometry, local size or historical scalar seed is a publication criterion."});
+          result.push_back(std::move(edge));
+        }
+      }
       if(transport_trace){
         const auto has=[&](std::string_view name){return std::any_of(node.artifact.optimizations.begin(),node.artifact.optimizations.end(),[&](const auto& r){return r.name==name;});};
         std::cerr<<"[copy-transport-node] cells="<<cells(node.artifact)<<" homes="<<resource_key(node).second
@@ -3826,7 +4518,127 @@ contextual_copy_transport_layout_transactions_impl(const LayoutSearchArtifact& a
 
 std::vector<ProvedSearchTransition<LayoutSearchArtifact>>
 contextual_copy_transport_layout_transactions(const LayoutSearchArtifact& artifact,
+                                              const CompileOptions& options);
+
+static std::vector<ProvedSearchTransition<LayoutSearchArtifact>>
+contextual_copy_transport_layout_transactions_uncached(const LayoutSearchArtifact& artifact,
+                                                       const CompileOptions& options);
+
+std::size_t contextual_negative_cache_hits_for_testing() {
+  return contextual_negative_cache_hits;
+}
+
+std::size_t contextual_completed_cache_hits_for_testing() {
+  return contextual_completed_cache_hits;
+}
+
+bool contextual_identity_expansion_demand_for_testing(const std::vector<IrOp>& code,
+    const std::vector<PreloadReport>& preloads, const CompileOptions& options) {
+  return contextual_identity_expansion_demand(code, preloads, options);
+}
+
+std::vector<ProvedSearchTransition<LayoutSearchArtifact>>
+contextual_formal_copy_transport_layout_transactions_for_testing(
+    const LayoutSearchArtifact& artifact, const CompileOptions& options) {
+  return contextual_copy_transport_layout_transactions_impl(artifact, options, true);
+}
+
+std::size_t joint_completed_cache_hits_for_testing() {
+  return joint_completed_cache_hits;
+}
+
+std::size_t joint_literal_closure_reuses_for_testing() {
+  return joint_literal_closure_reuses;
+}
+
+std::vector<passes::RegisterWebRecoloringRequest> hardware_epoch_storage_requests_for_testing(
+    const std::vector<IrOp>& code, std::size_t maximum_requests) {
+  return hardware_epoch_storage_requests(code, maximum_requests);
+}
+
+std::vector<passes::RegisterWebRecoloringRequest> hardware_home_eviction_requests_for_testing(
+    const std::vector<IrOp>& code,
+    const std::vector<passes::RegisterWebRecoloringRequest>& primary,
+    const std::vector<passes::RegisterWebRecoloringRequest>& copies,
+    std::size_t maximum_requests) {
+  std::map<std::string, std::vector<std::size_t>> epochs;
+  for (std::size_t at = 0; at < code.size(); ++at)
+    if (code[at].kind == IrKind::Store && !code[at].meta.raw)
+      epochs[code[at].register_name].push_back(at);
+  return hardware_home_eviction_requests(code, primary, copies, epochs, maximum_requests);
+}
+
+std::optional<LayoutSearchArtifact> contextual_transport_identity_for_testing(
+    const LayoutSearchArtifact& artifact, const CompileOptions& options,
+    bool normalize_identity) {
+  const auto view = representation_view(artifact, options);
+  if (!view) return std::nullopt;
+  const auto symbolic = lower_ir_to_machine(*view);
+  const auto positions = constraint_positions(symbolic);
+  if (!positions) return std::nullopt;
+  const auto root = contextual_transport_root(
+      artifact, symbolic, *positions, {.ops = *view}, normalize_identity);
+  return root ? std::optional<LayoutSearchArtifact>{root->artifact} : std::nullopt;
+}
+
+std::optional<LayoutSearchArtifact> contextual_transport_identity_for_testing(
+    const LayoutSearchArtifact& artifact, const CompileOptions& options) {
+  return contextual_transport_identity_for_testing(artifact, options, true);
+}
+
+std::optional<std::pair<LayoutSearchArtifact, std::map<std::string,int>>>
+contextual_reopened_allocation_root_for_testing(const LayoutSearchArtifact& artifact,
+    const CompileOptions& options, int maximum_growth_cells) {
+  const auto view = representation_view(artifact, options);
+  if (!view) return std::nullopt;
+  ConstrainedRepresentation root{artifact, {}};
+  root.artifact.items = lower_ir_to_machine(*view);
+  if (!refresh_constraint_targets(root)) return std::nullopt;
+  PostLayoutControlFlowOptions control;
+  control.empty_return_target = 1;
+  control.address_space_model = address_space_model_for_feature_profile(
+      effective_optimizer_feature_profile(options));
+  auto opened = reopened_allocation_topology(root, control, maximum_growth_cells);
+  if (!opened) return std::nullopt;
+  return std::pair{std::move(opened->artifact), std::move(opened->targets)};
+}
+
+std::vector<ProvedSearchTransition<LayoutSearchArtifact>>
+contextual_copy_transport_layout_transactions(const LayoutSearchArtifact& artifact,
                                               const CompileOptions& options) {
+  struct Entry {
+    std::string options;
+    LayoutSearchArtifact root;
+    std::vector<ProvedSearchTransition<LayoutSearchArtifact>> result;
+  };
+  static thread_local std::vector<Entry> completed;
+  const auto key=representation_context_key(options);
+  const auto same_reports=[](const auto& a,const auto& b){
+    return a.size()==b.size() && std::equal(a.begin(),a.end(),b.begin(),[](const auto& x,const auto& y){
+      return x.name==y.name && x.detail==y.detail;
+    });
+  };
+  for(auto at=completed.begin();at!=completed.end();++at)
+    if(at->options==key && same_layout_search_artifact(at->root,artifact) &&
+        same_reports(at->root.optimizations,artifact.optimizations)) {
+      ++contextual_completed_cache_hits;
+      if (at->result.empty()) ++contextual_negative_cache_hits;
+      std::rotate(completed.begin(),at,std::next(at));
+      if(std::getenv("MKPRO_NATIVE_TRACE_JOINT_CACHE"))
+        std::cerr<<"[joint-layout-cache] completed contextual search reused\n";
+      return completed.front().result;
+    }
+  auto result=contextual_copy_transport_layout_transactions_uncached(artifact,options);
+  // Cache only completed outcomes. No in-progress/throwing search or partial
+  // witness escapes, and no frontier, proof or candidate budget is reduced.
+  if(completed.size()>=32U)completed.pop_back();
+  completed.insert(completed.begin(),Entry{key,artifact,result});
+  return result;
+}
+
+static std::vector<ProvedSearchTransition<LayoutSearchArtifact>>
+contextual_copy_transport_layout_transactions_uncached(const LayoutSearchArtifact& artifact,
+                                                       const CompileOptions& options) {
   auto result = contextual_copy_transport_layout_transactions_impl(artifact, options);
   const auto model = address_space_model_for_feature_profile(effective_optimizer_feature_profile(options));
   // Independent complete-artifact portfolio: historical candidates retain
@@ -3849,6 +4661,10 @@ contextual_copy_transport_layout_transactions(const LayoutSearchArtifact& artifa
   auto pooled = addressed_return_pooling_layout_transactions(artifact, options);
   result.insert(result.end(), std::make_move_iterator(pooled.begin()),
                 std::make_move_iterator(pooled.end()));
+  for(auto& folded:zero_underflow_conditional_return_layout_transactions(artifact,options))
+    if(std::none_of(result.begin(),result.end(),[&](const auto& old){
+      return same_layout_search_artifact(old.node,folded.node);
+    }))result.push_back(std::move(folded));
   auto view = representation_view(artifact, options);
   if (!view) return result;
   ConstrainedRepresentation root{artifact, {}, {}};
@@ -3954,6 +4770,12 @@ order_reduction_selector_layout_transactions(const LayoutSearchArtifact& root,
           result.push_back({std::move(*closed), "order-reduction-selector-layout", true});
         }
       }
+  // This independent lane keeps the scalar as a proved layout domain rather
+  // than enumerating/fixing a value before final component placement.
+  for (auto& candidate : parametric_order_reduction_layout_transactions(initial, configured, control))
+    if (std::none_of(result.begin(), result.end(), [&](const auto& old) {
+          return same_layout_search_artifact(old.node, candidate.node);
+        })) result.push_back(std::move(candidate));
   std::stable_sort(result.begin(), result.end(), [](const auto& a, const auto& b) {
     return cells(a.node) < cells(b.node);
   });
@@ -4073,6 +4895,42 @@ TransactionSearchResult<LayoutSearchArtifact> search_joint_representation_constr
         std::equal(a.optimizations.begin(),a.optimizations.end(),b.optimizations.begin(),
             [](const auto& x,const auto& y){return x.name==y.name && x.detail==y.detail;});
   };
+  struct Completed {
+    std::string options;
+    LayoutSearchArtifact root;
+    TransactionSearchLimits limits;
+    bool complete_preloads = false;
+    TransactionSearchResult<LayoutSearchArtifact> result;
+  };
+  static thread_local std::vector<Completed> completed;
+  // Arbitrary callbacks have no cacheable identity. Only the entirely pure
+  // search may share completed outcomes across independent layout roots.
+  const bool cacheable = !finalize && !finalize_intermediate;
+  const auto cache_key = cacheable ? representation_context_key(options) : std::string{};
+  if (cacheable)
+    for (auto at = completed.begin(); at != completed.end(); ++at)
+      if (at->options == cache_key && at->complete_preloads == preload_environment_complete &&
+          at->limits.maximum_expansions == limits.maximum_expansions &&
+          at->limits.maximum_candidates == limits.maximum_candidates &&
+          at->limits.maximum_depth == limits.maximum_depth &&
+          at->limits.maximum_growth_cells == limits.maximum_growth_cells &&
+          same_layout_search_artifact(at->root, root)) {
+        ++joint_completed_cache_hits;
+        std::rotate(completed.begin(), at, std::next(at));
+        if (std::getenv("MKPRO_NATIVE_TRACE_JOINT_CACHE"))
+          std::cerr << "[joint-layout-cache] completed pure frontier reused\n";
+        auto reused = completed.front().result;
+        if (reused.incumbent) {
+          // Pure machine search does not inspect the incoming report history.
+          // Its completed witness is relative to that history, not permission
+          // to publish a different caller's source/static-gate evidence.
+          auto& reports = reused.incumbent->optimizations;
+          reports.erase(reports.begin(), reports.begin() +
+              static_cast<std::ptrdiff_t>(completed.front().root.optimizations.size()));
+          reports.insert(reports.begin(), root.optimizations.begin(), root.optimizations.end());
+        }
+        return reused;
+      }
   ExactSearchFinalizerMemo<LayoutSearchArtifact,JointRepresentationFinalizer,decltype(same_input)>
       strict_memo(finalize,same_input,16), intermediate_memo(finalize_intermediate,same_input,16);
   const JointRepresentationFinalizer strict = finalize
@@ -4271,6 +5129,17 @@ TransactionSearchResult<LayoutSearchArtifact> search_joint_representation_constr
     }
   }
 
+  const bool retained_report_prefix = !result.incumbent ||
+      (result.incumbent->optimizations.size() >= root.optimizations.size() &&
+       std::equal(root.optimizations.begin(), root.optimizations.end(),
+           result.incumbent->optimizations.begin(), [](const auto& a, const auto& b) {
+             return a.name == b.name && a.detail == b.detail;
+           }));
+  if (cacheable && retained_report_prefix) {
+    if (completed.size() >= 32U) completed.pop_back();
+    completed.insert(completed.begin(), Completed{
+        cache_key, root, limits, preload_environment_complete, result});
+  }
   if (std::getenv("MKPRO_NATIVE_TRACE_JOINT_PROOF_INPUT"))
     std::cerr << "[joint-proof-input] inputs=" << proof_counts.inputs
               << " selector-proofs=" << proof_counts.selector_proofs
