@@ -7,6 +7,7 @@
 #include "mkpro/core/result.hpp"
 
 #include <algorithm>
+#include <array>
 #include <exception>
 #include <map>
 #include <optional>
@@ -160,77 +161,125 @@ inline std::optional<JointOriginMap> transport_joint_selector_word_origins(
 // escape through stack/X1/X2. The store is a ROM-certified entry closer; control
 // and return targets remain obligations of the final relocation/binder proof.
 
+// Together these facts describe all charge continuations of one already
+// selected program, before choosing an order for its components.
+class JointChargeContinuations {
+ public:
+  JointChargeContinuations(const std::vector<MachineItem>& items, PostLayoutExecutionView view)
+      : items_(items), view_(view) {}
+
+  bool stack_is_private(const LateBoundDecimalSelectorProof& charge,
+                        const std::map<int, std::set<std::string>>& families,
+                        bool precise_entry_facts = false) {
+    if (!prepared_) prepare();
+    if (!valid_ || !commands_.contains(charge.target_label) ||
+        charge.low_item_index >= rows_by_item_.size()) return false;
+    return prove(charge, families, precise_entry_facts);
+  }
+
+ private:
+  void prepare() {
+    prepared_ = true;
+    if (!view_.proved() || view_.size() != view_.successors().size()) return;
+    rows_by_item_.resize(items_.size());
+    std::size_t first_label = 0;
+    for (std::size_t i = 0; i < items_.size(); ++i) {
+      if (items_[i].kind == MachineItemKind::Label) continue;
+      for (std::size_t label = first_label; label < i; ++label)
+        if (!commands_.emplace(items_[label].name, i).second) return;
+      first_label = i + 1;
+    }
+    if (first_label != items_.size()) return;
+    for (std::size_t s = 0; s < view_.size(); ++s) {
+      const auto item = view_.state(s).item_index;
+      if (item >= items_.size()) return;
+      rows_by_item_[item].push_back(s);
+    }
+    valid_ = true;
+  }
+
+  bool prove(const LateBoundDecimalSelectorProof& charge,
+             const std::map<int, std::set<std::string>>& families, bool precise_entry_facts);
+
+  const std::vector<MachineItem>& items_;
+  PostLayoutExecutionView view_;
+  std::map<std::string_view, std::size_t> commands_;
+  PostLayoutSuccessors rows_by_item_;
+  std::map<std::pair<bool, std::vector<std::size_t>>, bool> continued_;
+  bool prepared_ = false;
+  bool valid_ = false;
+};
+
+inline bool JointChargeContinuations::prove(
+    const LateBoundDecimalSelectorProof& charge,
+    const std::map<int, std::set<std::string>>& families, bool precise_entry_facts) {
+  const auto target = commands_.at(charge.target_label);
+  const auto& successors = view_.successors();
+  std::vector<std::size_t> pending, entries;
+  for (const auto state : rows_by_item_[charge.low_item_index]) {
+    if (successors[state].empty()) return false;
+    pending.insert(pending.end(), successors[state].begin(), successors[state].end());
+  }
+  std::vector<bool> visited(view_.size(), false);
+  std::size_t visit_count = 0;
+  while (!pending.empty()) {
+    const auto state = pending.back();
+    pending.pop_back();
+    if (state >= view_.size()) return false;
+    if (visited[state]) continue;
+    visited[state] = true;
+    if (++visit_count > 50000U) return false;
+    const auto& item = items_[view_.state(state).item_index];
+    if (item.kind != MachineItemKind::Op || item.raw || item.manual_interaction) return false;
+    const int opcode = item.opcode;
+    const int family = opcode & 0xf0;
+    const auto& next = successors[state];
+    if (next.empty()) return false;
+    if (opcode >= 0x47 && opcode <= 0x4e) {
+      const auto carrier = families.find(opcode & 15);
+      if (carrier == families.end() || !selector_charge_entry_closer_opcode(opcode))
+        return false;
+      const bool owns_command = std::any_of(carrier->second.begin(), carrier->second.end(),
+          [&](const auto& label) {
+            const auto command = commands_.find(label);
+            return command != commands_.end() && command->second == target;
+          });
+      if (!owns_command) return false;
+      entries.insert(entries.end(), next.begin(), next.end());
+      continue;
+    }
+    // The separate relocation proof still owns exact target correlation
+    // and return frames; these commands are transparent only to entry data.
+    if (opcode != 0x51 && opcode != 0x52 && opcode != 0x53 &&
+        !(family == 0x80 && (opcode & 15) <= 14) &&
+        !(family == 0xa0 && (opcode & 15) <= 14)) return false;
+    pending.insert(pending.end(), next.begin(), next.end());
+  }
+  std::sort(entries.begin(), entries.end());
+  entries.erase(std::unique(entries.begin(), entries.end()), entries.end());
+  if (entries.empty()) return false;
+  const StackValueEqualityState initial{{false,true,true,true},false,true};
+  const auto continuation = [&](bool precise) {
+    auto [entry, inserted] = continued_.try_emplace({precise, entries}, false);
+    if (inserted)
+      entry->second = prove_post_layout_stack_state_equality_on_view(
+          items_, view_, entries, initial,
+          {.refine_runtime_selectors=false, .numeric_entry_closed=true,
+           .transport_closed_entry_through_control=precise,
+           .use_indirect_store_entry_facts=precise});
+    return entry->second;
+  };
+  return continuation(false) || (precise_entry_facts && continuation(true));
+}
+
 inline bool joint_runtime_charge_stack_is_private(
     const std::vector<MachineItem>& items,
     const AuthoritativePostLayoutControlFlow& flow,
     const LateBoundDecimalSelectorProof& charge,
     const std::map<int,std::set<std::string>>& families,
     bool precise_entry_facts = false) {
-  if (!flow.proved || flow.execution_states.size()!=flow.execution_successors.size())
-    return false;
-  // Alias identity is the following command, not its provisional address or
-  // the spelling used by a charge. A pending layout may have moved it.
-  std::map<std::string,std::size_t> commands;
-  std::vector<std::string> aliases;
-  for(std::size_t i=0;i<items.size();++i){
-    if(items[i].kind==MachineItemKind::Label)aliases.push_back(items[i].name);
-    else {for(const auto& label:aliases)if(!commands.emplace(label,i).second)return false;aliases.clear();}
-  }
-  if(!aliases.empty() || !commands.contains(charge.target_label))return false;
-  std::vector<std::size_t> pending, entries;
-  for (std::size_t state=0;state<flow.execution_states.size();++state) {
-    if (flow.execution_states[state].item_index!=charge.low_item_index) continue;
-    if (flow.execution_successors[state].empty())
-      return false;
-    pending.insert(pending.end(),flow.execution_successors[state].begin(),
-                   flow.execution_successors[state].end());
-  }
-  std::set<std::size_t> visited;
-  while (!pending.empty()) {
-    const auto state=pending.back(); pending.pop_back();
-    if (state>=flow.execution_states.size()) return false;
-    if (!visited.insert(state).second) continue;
-    if (visited.size()>50000U) return false;
-    const auto& execution=flow.execution_states[state];
-    if (execution.item_index>=items.size()) return false;
-    const auto& item=items[execution.item_index];
-    if (item.kind!=MachineItemKind::Op || item.raw || item.manual_interaction) return false;
-    const int opcode=item.opcode;
-    const int family=opcode & 0xf0;
-    const auto& next=flow.execution_successors[state];
-    if (next.empty()) return false;
-    if (opcode>=0x47 && opcode<=0x4e) {
-      const auto carrier=families.find(opcode & 15);
-      if (carrier==families.end() || !selector_charge_entry_closer_opcode(opcode))
-        return false;
-      bool owns_command=false;
-      for(const auto& label:carrier->second)
-        owns_command=owns_command || (commands.contains(label) &&
-            commands.at(label)==commands.at(charge.target_label));
-      if (!owns_command) return false;
-      entries.insert(entries.end(),next.begin(),next.end());
-      continue;
-    }
-    // These are transparent only for data/entry state. The independent exact
-    // relocation proof still owns target correlation and every return frame.
-    if (opcode!=0x51 && opcode!=0x52 && opcode!=0x53 &&
-        !(family==0x80 && (opcode & 15)<=14) &&
-        !(family==0xa0 && (opcode & 15)<=14)) return false;
-    pending.insert(pending.end(),next.begin(),next.end());
-  }
-  std::sort(entries.begin(),entries.end());
-  entries.erase(std::unique(entries.begin(),entries.end()),entries.end());
-  if (entries.empty()) return false;
-  const StackValueEqualityState initial{{false,true,true,true},false,true};
-  if (prove_post_layout_stack_state_equality(items,flow,entries,initial,
-          {.refine_runtime_selectors=false,.numeric_entry_closed=true}))
-    return true;
-  // A pending transaction may use the independently ROM-proved entry facts.
-  // This changes only the data privacy certificate, never a target binding.
-  return precise_entry_facts && prove_post_layout_stack_state_equality(
-      items,flow,entries,initial,
-      {.refine_runtime_selectors=false,.numeric_entry_closed=true,
-       .transport_closed_entry_through_control=true,.use_indirect_store_entry_facts=true});
+  JointChargeContinuations continuations(items, {flow});
+  return continuations.stack_is_private(charge, families, precise_entry_facts);
 }
 
 // A typed runtime charge is not automatically a private numeric value.
@@ -242,7 +291,8 @@ inline std::optional<JointOriginMap> protected_joint_runtime_charge_targets(
     const AuthoritativePostLayoutControlFlow* prepared_flow = nullptr,
     const std::vector<PreloadReport>* preloads = nullptr,
     bool precise_entry_facts = false,
-    const JointOriginMap* pending_origins = nullptr) {
+    const JointOriginMap* pending_origins = nullptr,
+    std::shared_ptr<const AuthoritativePostLayoutControlFlow> owned_flow = {}) {
   std::map<int, std::set<std::string>> families;
   for (const auto& item : items) {
     if (!joint_charged_flow(item)) continue;
@@ -254,28 +304,38 @@ inline std::optional<JointOriginMap> protected_joint_runtime_charge_targets(
       families[item.opcode & 15].insert(*label);
     }
   }
+  if (families.empty()) return JointOriginMap{};
+  constexpr unsigned all_registers = 0xffffU;
+  const auto register_bit = [](int reg) { return 1U << static_cast<unsigned>(reg & 15); };
+  const auto register_mask = [&](const std::vector<int>& registers) {
+    unsigned mask = 0;
+    for (const int reg : registers)
+      if (reg >= 0 && reg <= 15) mask |= register_bit(reg);
+    return mask;
+  };
+  unsigned observed = 0, directly_written = 0;
+  InlineProofRow<std::size_t, 2> indirect_stores;
+  for (std::size_t at = 0; at < items.size(); ++at) {
+    const auto& item = items[at];
+    if (item.kind != MachineItemKind::Op) continue;
+    if (item.raw) return std::nullopt;
+    const auto code = item.opcode;
+    const int family = code & 0xf0;
+    if (code >= 0x60 && code <= 0x6f) observed |= register_bit(code);
+    if (code >= 0x40 && code <= 0x4f) directly_written |= register_bit(code);
+    if (family == 0xb0 || family == 0xd0) observed |= register_bit(code);
+    if (family == 0xd0)
+      observed |= item.indirect_memory_targets ? register_mask(*item.indirect_memory_targets)
+                                               : all_registers;
+    if (family == 0xb0 && preloads) indirect_stores.push_back(at);
+  }
   std::set<std::string> protected_labels;
   for (const auto& [reg, targets] : families) {
-    bool observed = false;
-    for (const auto& item : items) {
-      if (item.kind != MachineItemKind::Op) continue;
-      if (item.raw) return std::nullopt;
-      const int family = item.opcode & 0xf0;
-      if (item.opcode == 0x60 + reg ||
-          ((family == 0xb0 || family == 0xd0) && (item.opcode & 15) == reg))
-        observed = true;
-      if (family == 0xd0 && (!item.indirect_memory_targets ||
-          std::find(item.indirect_memory_targets->begin(),
-                    item.indirect_memory_targets->end(),reg) !=
-                    item.indirect_memory_targets->end()))
-        observed = true;
-    }
-    if (!observed) continue;
+    if ((observed & register_bit(reg)) == 0U) continue;
     // Self-modifying low selectors need their own counter/word certificate.
     if (reg < 7 || reg > 14) return std::nullopt;
     protected_labels.insert(targets.begin(),targets.end());
   }
-  if (families.empty()) return JointOriginMap{};
   const auto charges = inspect_deferred_decimal_selector_charges(items);
   if (!charges.diagnostics.empty()) return std::nullopt;
   const auto protected_result = [&]() -> std::optional<JointOriginMap> {
@@ -299,17 +359,16 @@ inline std::optional<JointOriginMap> protected_joint_runtime_charge_targets(
   if (!pending_origins && std::all_of(charges.charges.begin(),charges.charges.end(),
       [&](const auto& charge){return protected_labels.contains(charge.target_label);}))
     return protected_result();
-  std::optional<AuthoritativePostLayoutControlFlow> owned_flow;
   if (!prepared_flow) {
     PostLayoutControlFlowOptions options; options.empty_return_target=1;
-    owned_flow=build_post_layout_control_flow(items,options);
-    prepared_flow=&*owned_flow;
+    owned_flow=shared_post_layout_control_flow(items,options);
+    prepared_flow=owned_flow.get();
   }
 
   // A conditional data view only: encoded words identify their original
   // callback commands even while a pending placement has moved the labels.
   // Unsupported/ambiguous origins retain the conservative complete graph.
-  auto privacy_flow=*prepared_flow;
+  std::shared_ptr<const SelectorConsistentExecutionGraph> selection;
   JointOriginMap encoded_origins;
   int address=0;
   bool consistent=true;
@@ -341,63 +400,61 @@ inline std::optional<JointOriginMap> protected_joint_runtime_charge_targets(
     record(charge.target_label,charge.single_cell?low:high*10+low);
   }
   if (preloads) {
+    unsigned written = directly_written;
+    for (const auto at : indirect_stores) {
+      const auto aliases = prepared_flow->indirect_memory_targets.find(at);
+      if (aliases == prepared_flow->indirect_memory_targets.end()) {
+        written = all_registers;
+        break;
+      }
+      written |= register_mask(aliases->second);
+    }
     const auto words=joint_preload_index(*preloads);
     if (!words) consistent=false;
+    std::array<std::optional<int>, 16> decoded_addresses;
     if (words) for (const auto& item:items) {
       if (joint_charged_flow(item) || !joint_stable_flow_operand(item) ||
           !item.indirect_flow_targets) continue;
       const int reg=item.opcode & 15;
       if (!words->contains(reg)) continue;
 
-      bool written=false;
-      for (std::size_t at=0;at<items.size();++at) {
-        const auto& definition=items[at];
-        if (definition.kind!=MachineItemKind::Op) continue;
-        if (definition.opcode==0x40+reg) { written=true; break; }
-        if ((definition.opcode & 0xf0)!=0xb0) continue;
-        const auto aliases=prepared_flow->indirect_memory_targets.find(at);
-        if (aliases==prepared_flow->indirect_memory_targets.end() ||
-            std::find(aliases->second.begin(),aliases->second.end(),reg)!=aliases->second.end()) {
-          written=true; break;
-        }
-      }
       // A Main preload is not a runtime constant after any possible write.
       // Do not record it as an origin, but do not discard independently
       // established callback charge origins either. The selected graph must
       // derive this mutable family's rows from the program, or retain all
       // its declared alternatives. No value is assumed for an unknown row.
-      if (written) continue;
-      const auto& word=*words->at(reg);
-      if (!joint_literal_word(word)) { consistent=false; break; }
-      try {
-      const auto decoded=evaluate_indirect_address(word.register_name,word.value,
-          IndirectOperationKind::Flow,prepared_flow->address_space_model);
-      if (!decoded || !decoded->actual_flow_target || !decoded->formal_address ||
-          decoded->formal_address->kind!=FormalAddressKind::Official) {
-        consistent=false; break;
+      if ((written & register_bit(reg)) != 0U) continue;
+      auto& decoded_address = decoded_addresses[static_cast<std::size_t>(reg)];
+      if (!decoded_address) {
+        const auto& word=*words->at(reg);
+        if (!joint_literal_word(word)) { consistent=false; break; }
+        try {
+          const auto decoded=evaluate_indirect_address(word.register_name,word.value,
+              IndirectOperationKind::Flow,prepared_flow->address_space_model);
+          if (!decoded || !decoded->actual_flow_target || !decoded->formal_address ||
+              decoded->formal_address->kind != FormalAddressKind::Official) {
+            consistent=false; break;
+          }
+          decoded_address = decoded->actual_flow_target;
+        } catch (const std::exception&) { consistent=false; break; }
       }
       for (const auto& target:*item.indirect_flow_targets) {
         const auto* label=std::get_if<std::string>(&target);
         if (!label) { consistent=false; break; }
-        record(*label,*decoded->actual_flow_target);
+        record(*label,*decoded_address);
       }
-      } catch (const std::exception&) { consistent=false; break; }
     }
   }
   if (consistent) {
-    const auto selected=build_deferred_selector_consistent_execution_graph(
-        items,*prepared_flow,encoded_origins).execution;
-    if (selected.proved) {
-      privacy_flow.execution_states.clear();
-      for (const auto state:selected.original_states)
-        privacy_flow.execution_states.push_back(prepared_flow->execution_states.at(state));
-      privacy_flow.execution_successors=selected.successors;
-      privacy_flow.execution_edges=selected.execution_edges;
-    }
+    selection = owned_flow && owned_flow.get() == prepared_flow
+        ? shared_deferred_selector_consistent_execution_graph(items, owned_flow, encoded_origins)
+        : shared_deferred_selector_consistent_execution_graph(items, *prepared_flow, encoded_origins);
   }
+  JointChargeContinuations continuations(items, {*prepared_flow,
+      selection && selection->proved ? selection.get() : nullptr});
   for (const auto& charge:charges.charges)
     if (!protected_labels.contains(charge.target_label) &&
-        !joint_runtime_charge_stack_is_private(items,privacy_flow,charge,families,precise_entry_facts))
+        !continuations.stack_is_private(charge, families, precise_entry_facts))
       protected_labels.insert(charge.target_label);
   return protected_result();
 }

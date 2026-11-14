@@ -3821,7 +3821,7 @@ bool charged_selector_conditional_x2_reconverges(
       continue;
     }
 
-    const std::vector<std::size_t>& successors = flow.execution_successors.at(state);
+    const auto& successors = flow.execution_successors.at(state);
     if (successors.empty()) {
       intrinsically_unsafe.insert(state);
       continue;

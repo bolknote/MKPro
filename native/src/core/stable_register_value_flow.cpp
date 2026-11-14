@@ -8,6 +8,7 @@
 #include <deque>
 #include <set>
 #include <stdexcept>
+#include <unordered_set>
 
 namespace mkpro::core {
 
@@ -43,26 +44,50 @@ struct EntryBuffer {
   bool operator==(const EntryBuffer&) const = default;
 };
 
+using StableWord = const std::string*;
+using StableRegisters = std::array<StableWord, kTrackedRegisters>;
+
+class StableWords {
+ public:
+  StableWord intern(std::string value) {
+    // References into an unordered_set survive rehash. Use exact spellings:
+    // equality for the fixed point is stricter than equality at a join.
+    return &*words_.insert(std::move(value)).first;
+  }
+
+  StableWord known(std::optional<std::string> value) {
+    return value ? intern(std::move(*value)) : nullptr;
+  }
+
+ private:
+  std::unordered_set<std::string> words_;
+};
+
 struct AbstractState {
-  std::optional<std::string> x;
+  StableWord x = nullptr;
   EntryBuffer entry;
-  std::array<std::optional<std::string>, kTrackedRegisters> registers;
+  StableRegisters registers{};
 
   bool operator==(const AbstractState&) const = default;
 };
 
-std::optional<std::string> join_value(const std::optional<std::string>& left,
-                                      const std::optional<std::string>& right) {
+StableWord join_value(StableWord left, StableWord right) {
+  if (left == right)
+    return left;
   // The selector evaluator canonicalizes the exponent marker to lower case.
   // This is spelling only, unlike rewriting a scientific machine word as a
   // fixed-point decimal (which can change its selector interpretation).
   const auto same_character = [](char a, char b) {
     return a == b || (a == 'E' && b == 'e') || (a == 'e' && b == 'E');
   };
-  if (left.has_value() && right.has_value() && left->size() == right->size() &&
+  if (left && right && left->size() == right->size() &&
       std::equal(left->begin(), left->end(), right->begin(), same_character))
     return left;
-  return std::nullopt;
+  return nullptr;
+}
+
+std::optional<std::string> export_word(StableWord word) {
+  return word ? std::optional<std::string>{*word} : std::nullopt;
 }
 
 EntryBuffer join_entry(const EntryBuffer& left, const EntryBuffer& right) {
@@ -90,21 +115,21 @@ std::optional<std::string> canonical_integer(const std::string& digits) {
   }
 }
 
-std::optional<std::string> negated_value(const std::optional<std::string>& value) {
-  if (!value.has_value() || value->empty())
-    return std::nullopt;
+StableWord negated_value(StableWords& words, StableWord value) {
+  if (!value || value->empty())
+    return nullptr;
   if (value->front() == '-')
-    return value->substr(1U);
+    return words.intern(value->substr(1U));
   if (*value == "0")
     return value;
-  return "-" + *value;
+  return words.intern("-" + *value);
 }
 
 // Recall normalizes ordinary fractions in X without rewriting their source
 // memory. A fixed-point spelling must not survive a later store as an order-0
 // selector: for example, -0.1 and -1.0000000e-1 have different addressing.
-std::optional<std::string> recalled_value(const std::optional<std::string>& value) {
-  if(!value)return std::nullopt;
+StableWord recalled_value(StableWords& words, StableWord value) {
+  if(!value)return nullptr;
   const auto normalized=normalized_finite_ordinary_word(*value);
   if(!normalized)return value;
   const auto exponent_at=normalized->find('e');
@@ -113,7 +138,7 @@ std::optional<std::string> recalled_value(const std::optional<std::string>& valu
   for(std::size_t i=normalized->starts_with('-')?1U:0U;i<exponent_at;++i) {
     const char digit=(*normalized)[i];
     if(digit=='.')continue;
-    if(digit!='0' && position>exponent)return normalized;
+    if(digit!='0' && position>exponent)return words.intern(*normalized);
     ++position;
   }
   // Integer spellings are already equivalent selector representatives. Keep
@@ -122,10 +147,10 @@ std::optional<std::string> recalled_value(const std::optional<std::string>& valu
 }
 
 std::optional<std::string> selector_write_back(const std::string& register_name_value,
-                                               const std::optional<std::string>& value,
+                                               StableWord value,
                                                IndirectOperationKind kind,
                                                AddressSpaceModel model) {
-  if (!value.has_value())
+  if (!value)
     return std::nullopt;
   try {
     const std::optional<IndirectAddressEvaluation> evaluated =
@@ -146,19 +171,19 @@ std::optional<std::string> selector_write_back(const std::string& register_name_
 AbstractState transfer(const AbstractState& input, const MachineItem& item,
                        std::size_t item_index,
                        const AuthoritativePostLayoutControlFlow& flow,
-                       AddressSpaceModel model) {
+                       AddressSpaceModel model, StableWords& words) {
   AbstractState state = input;
   const int opcode = item.opcode;
 
   if (opcode >= 0x00 && opcode <= 0x09) {
     if (state.entry.poisoned) {
-      state.x.reset();
+      state.x = nullptr;
     } else {
       std::string digits = state.entry.digits.value_or("");
       digits.push_back(static_cast<char>('0' + opcode));
       state.entry.digits = digits;
-      state.x = canonical_integer(digits);
-      if (!state.x.has_value())
+      state.x = words.known(canonical_integer(digits));
+      if (!state.x)
         state.entry.poisoned = true;
     }
     return state;
@@ -168,7 +193,7 @@ AbstractState transfer(const AbstractState& input, const MachineItem& item,
 
   if (opcode == 0x0a || opcode == 0x0c) {  // '.' and ВП extend an entry
     state.entry.poisoned = true;
-    state.x.reset();
+    state.x = nullptr;
     return state;
   }
   if (opcode == 0x0b) {  // /-/ closes a proved integer entry
@@ -176,13 +201,13 @@ AbstractState transfer(const AbstractState& input, const MachineItem& item,
       // Fractional/exponent entry and ambiguous buffers have different
       // keyboard semantics and remain outside this integer-entry proof.
       state.entry.poisoned = true;
-      state.x.reset();
+      state.x = nullptr;
     } else if (input.entry.digits && state.x && *state.x == "0") {
       // Do not turn a typed signed zero into an ordinary-word certificate.
       // The integer entry is nevertheless closed for the following digit.
-      state.x.reset();
+      state.x = nullptr;
     } else {
-      state.x = negated_value(state.x);
+      state.x = negated_value(words, state.x);
     }
     return state;
   }
@@ -198,8 +223,8 @@ AbstractState transfer(const AbstractState& input, const MachineItem& item,
   if (opcode >= 0x60 && opcode <= 0x6e) {  // П->X r
     const int register_index_value = opcode - 0x60;
     state.x = register_index_value >= 7
-                  ? recalled_value(state.registers[static_cast<std::size_t>(register_index_value - 7)])
-                  : std::nullopt;
+                  ? recalled_value(words, state.registers[static_cast<std::size_t>(register_index_value - 7)])
+                  : nullptr;
     return state;
   }
   if (opcode == 0x50 || opcode == 0x51 || opcode == 0x52 || opcode == 0x53 ||
@@ -213,9 +238,9 @@ AbstractState transfer(const AbstractState& input, const MachineItem& item,
     const int selector = opcode & 0x0f;
     if (selector >= 7 && selector <= 0x0e) {
       const std::size_t slot = static_cast<std::size_t>(selector - 7);
-      state.registers[slot] = selector_write_back(
+      state.registers[slot] = words.known(selector_write_back(
           tracked_register_name(slot), state.registers[slot],
-          IndirectOperationKind::Flow, model);
+          IndirectOperationKind::Flow, model));
     }
     return state;
   }
@@ -223,28 +248,27 @@ AbstractState transfer(const AbstractState& input, const MachineItem& item,
     const int selector = opcode & 0x0f;
     if (selector >= 7 && selector <= 0x0e) {
       const std::size_t slot = static_cast<std::size_t>(selector - 7);
-      state.registers[slot] = selector_write_back(
+      state.registers[slot] = words.known(selector_write_back(
           tracked_register_name(slot), state.registers[slot],
-          IndirectOperationKind::Memory, model);
+          IndirectOperationKind::Memory, model));
     }
     if ((opcode & 0xf0) == 0xb0) {  // К X->П r may write a tracked register
       const auto targets = flow.indirect_memory_targets.find(item_index);
       if (targets == flow.indirect_memory_targets.end()) {
-        for (std::size_t slot = 0; slot < kTrackedRegisters; ++slot)
-          state.registers[slot].reset();
+        state.registers.fill(nullptr);
       } else {
         for (const int target : targets->second) {
           if (target >= 7 && target <= 0x0e)
-            state.registers[static_cast<std::size_t>(target - 7)].reset();
+            state.registers[static_cast<std::size_t>(target - 7)] = nullptr;
         }
       }
     } else {  // К П->X r replaces X with an untracked memory value
-      state.x.reset();
+      state.x = nullptr;
     }
     return state;
   }
 
-  state.x.reset();
+  state.x = nullptr;
   return state;
 }
 
@@ -279,29 +303,42 @@ PostLayoutInputBoundaryProof prove_post_layout_input_boundaries(
     }
   }
 
-  std::vector<std::vector<std::size_t>> predecessors(flow.execution_states.size());
+  PostLayoutSuccessors predecessors(flow.execution_states.size());
   for (std::size_t state = 0; state < flow.execution_successors.size(); ++state) {
     for (const std::size_t successor : flow.execution_successors.at(state)) {
       if (successor >= flow.execution_states.size())
         return fail("the execution graph references a missing state");
       predecessors.at(successor).push_back(state);
     }
-    std::set<std::size_t> labelled;
-    for (const auto& edge : flow.execution_edges.at(state)) {
+    const auto& successors = flow.execution_successors.at(state);
+    const auto& edges = flow.execution_edges.at(state);
+    for (const auto& edge : edges) {
       if (edge.target_state >= flow.execution_states.size())
         return fail("an execution edge references a missing state");
-      labelled.insert(edge.target_state);
+      if (std::find(successors.begin(), successors.end(), edge.target_state) ==
+          successors.end())
+        return fail("labelled execution edges do not match their successor projection");
     }
-    const auto& successors = flow.execution_successors.at(state);
-    if (labelled != std::set<std::size_t>(successors.begin(), successors.end()))
+    if (std::any_of(successors.begin(), successors.end(), [&](std::size_t successor) {
+          return std::none_of(edges.begin(), edges.end(),
+                              [&](const auto& edge) { return edge.target_state == successor; });
+        }))
       return fail("labelled execution edges do not match their successor projection");
   }
 
-  // Match every external entry to the execution states carrying that exact
-  // command identity and return stack.
+  // The bounded progress product can repeat each item in many return
+  // contexts. Narrow the scan by item before matching every frame exactly.
+  PostLayoutSuccessors states_by_item(items.size());
+  std::vector<bool> entry_items(items.size(), false);
+  for (const auto& entry : flow.external_entries)
+    if (entry.entry.item_index < items.size()) entry_items[entry.entry.item_index] = true;
+  for (std::size_t state = 0; state < flow.execution_states.size(); ++state) {
+    const auto item = flow.execution_states[state].item_index;
+    if (entry_items[item]) states_by_item[item].push_back(state);
+  }
   const auto matching_states = [&](const PostLayoutExternalEntryState& entry) {
-    std::vector<std::size_t> matched;
-    for (std::size_t state = 0; state < flow.execution_states.size(); ++state) {
+    detail::InlineProofRow<std::size_t, 2> matched;
+    for (const auto state : states_by_item[entry.entry.item_index]) {
       const PostLayoutExecutionState& candidate = flow.execution_states.at(state);
       if (candidate.item_index != entry.entry.item_index ||
           candidate.address != entry.entry.address ||
@@ -331,7 +368,7 @@ PostLayoutInputBoundaryProof prove_post_layout_input_boundaries(
   for (const PostLayoutExternalEntryState& entry : flow.external_entries) {
     if (entry.entry.item_index >= items.size())
       return fail("an external entry references a missing item");
-    std::vector<std::size_t> matched = matching_states(entry);
+    const auto matched = matching_states(entry);
     if (matched.empty())
       return fail("an external entry has no exact execution context");
     switch (entry.kind) {
@@ -449,12 +486,13 @@ StableRegisterValueFlow analyze_stable_register_value_flow(
   }
   const auto& main_states = boundaries.main_states;
   const auto& input_boundary_states = boundaries.input_boundary_states;
+  StableWords words;
   AbstractState main_entry_state;
   for (const PreloadReport& preload : preloads) {
     const int register_index_value = register_index(preload.register_name);
     if (register_index_value >= 7 && register_index_value <= 0x0e)
       main_entry_state.registers[static_cast<std::size_t>(register_index_value - 7)] =
-          preload.value;
+          words.intern(preload.value);
   }
 
   std::vector<std::optional<AbstractState>> in_value(flow.execution_states.size());
@@ -472,7 +510,7 @@ StableRegisterValueFlow analyze_stable_register_value_flow(
     std::optional<AbstractState>& current = in_value.at(state);
     AbstractState entered = incoming;
     if (input_boundary_states.at(state)) {
-      entered.x.reset();
+      entered.x = nullptr;
       entered.entry = EntryBuffer{.poisoned = true};
     }
     const AbstractState next =
@@ -503,7 +541,7 @@ StableRegisterValueFlow analyze_stable_register_value_flow(
       continue;
     const std::size_t item_index = flow.execution_states.at(state).item_index;
     const AbstractState next_out = transfer(*in_value.at(state), items.at(item_index),
-                                            item_index, flow, model);
+                                            item_index, flow, model, words);
     if (out_value.at(state).has_value() && *out_value.at(state) == next_out)
       continue;
     out_value.at(state) = next_out;
@@ -514,21 +552,29 @@ StableRegisterValueFlow analyze_stable_register_value_flow(
   result.total_states = flow.execution_states.size();
   result.x_before_state.resize(flow.execution_states.size());
   result.x_after_state.resize(flow.execution_states.size());
+  std::vector<std::optional<StableRegisters>> by_item(items.size());
   for (std::size_t state = 0; state < flow.execution_states.size(); ++state) {
     if (!in_value.at(state).has_value() || !out_value.at(state).has_value())
       continue;
     ++result.valued_states;
-    result.x_before_state[state] = in_value.at(state)->x;
-    result.x_after_state[state] = out_value.at(state)->x;
+    result.x_before_state[state] = export_word(in_value.at(state)->x);
+    result.x_after_state[state] = export_word(out_value.at(state)->x);
     const std::size_t item_index = flow.execution_states.at(state).item_index;
-    const auto [existing, inserted] =
-        result.before_item.emplace(item_index, in_value.at(state)->registers);
-    if (!inserted) {
+    auto& existing = by_item[item_index];
+    if (!existing) {
+      existing = in_value.at(state)->registers;
+    } else {
       for (std::size_t slot = 0; slot < kTrackedRegisters; ++slot) {
-        existing->second[slot] =
-            join_value(existing->second[slot], in_value.at(state)->registers[slot]);
+        (*existing)[slot] = join_value((*existing)[slot], in_value.at(state)->registers[slot]);
       }
     }
+  }
+  for (std::size_t item = 0; item < by_item.size(); ++item) {
+    if (!by_item[item]) continue;
+    std::array<std::optional<std::string>, kTrackedRegisters> registers;
+    for (std::size_t slot = 0; slot < kTrackedRegisters; ++slot)
+      registers[slot] = export_word((*by_item[item])[slot]);
+    result.before_item.emplace_hint(result.before_item.end(), item, std::move(registers));
   }
   if (result.valued_states != result.total_states)
     return fail("execution context has no initialized or protocol-derived value state");

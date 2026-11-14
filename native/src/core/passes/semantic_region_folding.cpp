@@ -11,9 +11,13 @@
 #include "mkpro/core/post_layout_control_flow.hpp"
 
 #include <algorithm>
+#include <array>
+#include <bit>
+#include <bitset>
 #include <cstdint>
 #include <cstdlib>
 #include <iostream>
+#include <unordered_map>
 #include <queue>
 #include <functional>
 #include <numeric>
@@ -30,10 +34,244 @@ struct Component {
   int cells = 0;
 };
 
+struct GaplessPackingInput {
+  struct Slot {
+    int width;
+    std::optional<int> start;
+    std::pair<int, int> bounds;
+
+    bool operator==(const Slot&) const = default;
+  };
+  std::vector<Slot> slots;
+  std::size_t maximum_work;
+
+  bool operator==(const GaplessPackingInput&) const = default;
+};
+
+struct GaplessPacking {
+  std::vector<std::size_t> order;
+  std::size_t work = 0;
+  bool placed = false;
+};
+
+// A relaxation: each gap may borrow any subset of the unpinned widths,
+// even widths also used in another gap. Only reject when even that is
+// impossible, or the sum of the independent minimum pad costs is too high.
+bool anchored_gaps_can_fit(const std::vector<Component>& parts,
+    const std::vector<std::optional<int>>& starts,
+    const std::vector<std::pair<int, int>>& bounds, int padding_limit) {
+  std::array<std::size_t, 24> anchors{};
+  std::size_t anchor_count = 0;
+  int free_cells = 0;
+  for (std::size_t part = 0; part < parts.size(); ++part) {
+    if (starts[part] &&
+        (*starts[part] < bounds[part].first || *starts[part] > bounds[part].second))
+      return false;
+    if (starts[part] && parts[part].cells != 0)
+      anchors[anchor_count++] = part;
+    else
+      free_cells += parts[part].cells;
+  }
+  if (anchor_count < 2U) return true;
+  std::sort(anchors.begin(), anchors.begin() + static_cast<std::ptrdiff_t>(anchor_count),
+      [&](auto a, auto b) { return *starts[a] < *starts[b]; });
+  // Exact subset sums for gaps up to 63 cells. Larger gaps still get
+  // total-width and overlap checks. No heuristic result rejects a layout.
+  std::uint64_t widths = 1U;
+  for (std::size_t part = 0; part < parts.size(); ++part)
+    if (!starts[part] && parts[part].cells < 64)
+      widths |= widths << parts[part].cells;
+  std::int64_t end = 0, padding_needed = 0;
+  for (std::size_t index = 0; index < anchor_count; ++index) {
+    const auto part = anchors[index];
+    const std::int64_t start = *starts[part], gap = start - end;
+    if (gap < 0) return false;
+    if (gap < 64) {
+      const auto allowed = gap == 63 ? widths
+          : widths & ((std::uint64_t{1} << (gap + 1)) - 1U);
+      padding_needed += gap - (static_cast<std::int64_t>(std::bit_width(allowed)) - 1);
+    } else {
+      padding_needed += std::max<std::int64_t>(0, gap - free_cells);
+    }
+    if (padding_needed > padding_limit) return false;
+    end = start + parts[part].cells;
+  }
+  return true;
+}
+
+GaplessPacking pack_gapless_regions(const std::vector<Component>& parts,
+    const std::vector<std::optional<int>>& starts, const std::vector<std::pair<int, int>>& bounds,
+    std::size_t maximum_work) {
+  GaplessPackingInput input{.maximum_work = maximum_work};
+  input.slots.reserve(parts.size());
+  std::size_t hash = maximum_work;
+  const auto mix = [&](int value) { hash = hash * 16777619U ^ static_cast<std::size_t>(value); };
+  for (std::size_t i = 0; i < parts.size(); ++i) {
+    input.slots.push_back({parts[i].cells, starts[i], bounds[i]});
+    mix(parts[i].cells);
+    mix(starts[i].value_or(-1));
+    mix(bounds[i].first);
+    mix(bounds[i].second);
+  }
+  struct Entry { GaplessPackingInput input; GaplessPacking result; };
+  // Only placement is shared. The caller still relowers and verifies the
+  // complete output. Store the exact work count too: a failed gapless
+  // search owns that much of the subsequent padding search's budget.
+  static thread_local std::array<std::optional<Entry>, 256> memo;
+  auto& cached = memo[hash % memo.size()];
+  if (cached && cached->input == input) return cached->result;
+
+  GaplessPacking result;
+  result.order.reserve(parts.size());
+  const auto place = [&](auto&& self, std::uint32_t used, int address) -> bool {
+    if (result.work++ >= maximum_work)
+      return false;
+    if (result.order.size() == parts.size())
+      return true;
+    std::optional<std::size_t> due;
+    int deadline = 1000000;
+    for (std::size_t i = 0; i < parts.size(); ++i) {
+      if ((used & (std::uint32_t{1} << i)) || !starts[i])
+        continue;
+      if (*starts[i] < address)
+        return false;
+      if (*starts[i] == address) {
+        if (due && parts[i].cells != 0 && parts[*due].cells != 0)
+          return false;
+        due = i;
+      } else {
+        deadline = std::min(deadline, *starts[i]);
+      }
+    }
+    for (std::size_t i = 0; i < parts.size(); ++i) {
+      const auto bit = std::uint32_t{1} << i;
+      if ((used & bit) || (due && i != *due) || (starts[i] && *starts[i] != address) ||
+          address < bounds[i].first || address > bounds[i].second ||
+          address + parts[i].cells > deadline)
+        continue;
+      result.order.push_back(i);
+      if (self(self, used | bit, address + parts[i].cells))
+        return true;
+      result.order.pop_back();
+      if (result.work >= maximum_work)
+        return false;
+    }
+    return false;
+  };
+  result.placed = place(place, 0, 0);
+  cached = Entry{std::move(input), result};
+  return result;
+}
+
 bool ends_chain(const IrOp& op) {
   return op.kind == IrKind::Return || op.kind == IrKind::Jump ||
          op.kind == IrKind::IndirectJump ||
          (op.kind == IrKind::Stop && op.meta.stop_disposition == StopDisposition::Terminal);
+}
+
+struct PaddedPacking {
+  std::vector<std::size_t> order;
+  std::vector<int> padding_before;
+  std::size_t work = 0;
+};
+
+std::optional<PaddedPacking> pack_padded_regions(const std::vector<Component>& parts,
+    const std::vector<std::optional<int>>& starts, const std::vector<std::pair<int, int>>& bounds,
+    const std::vector<IrOp>& ops, std::size_t work, std::size_t maximum_work, int padding_limit) {
+  struct Key {
+    GaplessPackingInput geometry;
+    std::uint32_t closed_after = 0;
+    int padding_limit = 0;
+    bool operator==(const Key&) const = default;
+  };
+  Key key{.geometry = {.maximum_work = maximum_work - work}, .padding_limit = padding_limit};
+  key.geometry.slots.reserve(parts.size());
+  std::size_t hash = key.geometry.maximum_work;
+  const auto mix = [&](std::size_t value) { hash = hash * 16777619U ^ value; };
+  for (std::size_t part = 0; part < parts.size(); ++part) {
+    key.geometry.slots.push_back({parts[part].cells, starts[part], bounds[part]});
+    mix(static_cast<std::size_t>(parts[part].cells));
+    mix(static_cast<std::size_t>(starts[part].value_or(-1)));
+    mix(static_cast<std::size_t>(bounds[part].first));
+    mix(static_cast<std::size_t>(bounds[part].second));
+    if (parts[part].cells != 0 && ends_chain(ops[parts[part].end - 1U]))
+      key.closed_after |= std::uint32_t{1} << part;
+  }
+  mix(key.closed_after);
+  mix(static_cast<std::size_t>(padding_limit));
+  struct Entry { Key key; std::optional<PaddedPacking> result; };
+  static thread_local std::array<std::optional<Entry>, 256> memo;
+  auto& cached = memo[hash % memo.size()];
+  if (cached && cached->key == key) return cached->result;
+  // Indexes in the queue are discovery-order ties. Cache this same abstract
+  // search, not an arbitrary feasible packing or any verification outcome.
+  const auto compute = [&]() -> std::optional<PaddedPacking> {
+    struct State{std::uint32_t mask=0;int address=0,padding=0;
+      std::size_t parent=0;int part=-2;bool closed=true;};
+    std::vector<State> states(1);
+    const auto key_for = [](const State& state) {
+      return (static_cast<std::uint64_t>(state.mask) << 33U) |
+          (static_cast<std::uint64_t>(state.padding) << 1U) |
+          static_cast<std::uint64_t>(state.closed);
+    };
+    std::unordered_map<std::uint64_t, std::size_t> visited{{key_for(states.front()), 0}};
+    using QueueEntry=std::pair<int,std::size_t>;
+    std::priority_queue<QueueEntry,std::vector<QueueEntry>,std::greater<QueueEntry>> queue;queue.emplace(0,0);
+    const auto all=(std::uint32_t{1}<<parts.size())-1U;
+    std::optional<std::size_t> answer;
+    const auto enqueue=[&](State next){
+      const std::size_t index=states.size();
+      if(!visited.emplace(key_for(next),index).second)return;
+      states.push_back(next);queue.emplace(next.padding,index);
+    };
+    std::size_t padding_work = 0;
+    while(!queue.empty() && padding_work < key.geometry.maximum_work){
+      const auto id=queue.top().second;queue.pop();++padding_work;const State current=states[id];
+      if(current.mask==all){answer=id;break;}
+      std::optional<std::size_t> due;int deadline=1000000;bool valid=true;
+      for(std::size_t i=0;i<parts.size();++i){
+        if((current.mask&(std::uint32_t{1}<<i)) || !starts[i])continue;
+        if(*starts[i]<current.address){valid=false;break;}
+        if(*starts[i]==current.address){
+          if(due && parts[i].cells!=0 && parts[*due].cells!=0){valid=false;break;}
+          due=i;
+        }else deadline=std::min(deadline,*starts[i]);
+      }
+      if(!valid)continue;
+      for(std::size_t i=0;i<parts.size();++i){
+        const auto bit=std::uint32_t{1}<<i;
+        if((current.mask&bit) || (due && *due!=i) ||
+            (starts[i] && *starts[i]!=current.address) ||
+            current.address<bounds[i].first || current.address>bounds[i].second ||
+            current.address+parts[i].cells>deadline || (!current.closed && parts[i].cells!=0))continue;
+        const bool closed=parts[i].cells==0?current.closed:(key.closed_after & bit) != 0U;
+        enqueue({current.mask|bit,current.address+parts[i].cells,current.padding,id,static_cast<int>(i),closed});
+      }
+      if(!due && current.mask!=0U && current.closed && current.padding<padding_limit && current.address<deadline)
+        enqueue({current.mask,current.address+1,current.padding+1,id,-1,true});
+    }
+
+    if (!answer) return std::nullopt;
+    std::vector<int> actions;
+    for (auto id = *answer; id != 0; id = states[id].parent)
+      actions.push_back(states[id].part);
+    PaddedPacking result{.padding_before = std::vector<int>(parts.size()), .work = padding_work};
+    int pad = 0;
+    for (auto at = actions.rbegin(); at != actions.rend(); ++at) {
+      if (*at < 0) {
+        ++pad;
+      } else {
+        const auto part = static_cast<std::size_t>(*at);
+        result.padding_before[part] = std::exchange(pad, 0);
+        result.order.push_back(part);
+      }
+    }
+    if (pad != 0 || result.order.size() != parts.size()) return std::nullopt;
+    return result;
+  };
+  auto result = compute();
+  cached = Entry{std::move(key), result};
+  return result;
 }
 
 bool symbolic(const std::vector<IrOp>& ops, bool preserve_compiler_selector_charges = false,
@@ -203,6 +441,120 @@ bool fixed_indirect_targets(const std::vector<IrOp>& before, const std::vector<I
 
 } // namespace
 
+bool unprojected_symbolic_region_target_may_fit(
+    const std::vector<IrOp>& ops, const std::string& label,
+    int minimum_address, int maximum_address, int maximum_padding_cells) {
+  constexpr std::size_t kDecimalStarts = 100;
+  if (minimum_address < 0 || maximum_address >= static_cast<int>(kDecimalStarts) ||
+      maximum_address < minimum_address || maximum_padding_cells < 0) return true;
+  const auto parts = components(ops);
+  std::optional<std::size_t> target;
+  int target_offset = 0, original_start = 0;
+  std::optional<int> fixed_start;
+  for (std::size_t part = 0; part < parts.size(); ++part) {
+    bool manual = false;
+    int offset = 0;
+    for (std::size_t i = parts[part].begin; i < parts[part].end; ++i) {
+      const auto& op = ops[i];
+      if (op.kind == IrKind::Label && op.name == label) {
+        if (target) return true; // Let the full solver reject a malformed image.
+        target = part;
+        target_offset = offset;
+      }
+      manual |= op.meta.manual_interaction.has_value();
+      offset += cells_per_op(op);
+    }
+    if (target == part && (part == 0U || manual)) fixed_start = original_start;
+    original_start += parts[part].cells;
+  }
+  if (!target || parts[*target].cells == 0) return true;
+  const int low = std::max(0, minimum_address - target_offset);
+  const int high = maximum_address - target_offset;
+  if (high < low) return false;
+  if (fixed_start) return *fixed_start >= low && *fixed_start <= high;
+
+  const int root_width = parts.front().cells;
+  if (root_width > high) return false;
+  std::bitset<kDecimalStarts> starts;
+  starts.set(static_cast<std::size_t>(root_width));
+  for (std::size_t part = 1; part < parts.size(); ++part)
+    if (part != *target) starts |= starts << static_cast<std::size_t>(parts[part].cells);
+  for (int start = std::max(0, low - std::min(maximum_padding_cells, low)); start <= high; ++start)
+    if (starts.test(static_cast<std::size_t>(start))) return true;
+  return false;
+}
+
+bool symbolic_region_constraints_may_fit(
+    const std::vector<IrOp>& ops, const std::vector<int>& projected_widths,
+    const std::map<std::string, int>& required_targets, const std::string& target,
+    int minimum_address, int maximum_address, int padding_limit,
+    std::optional<int> exclusive_cells) {
+  auto parts = components(ops);
+  if (parts.empty() || parts.size() > 24U || minimum_address < 0 ||
+      minimum_address > maximum_address || maximum_address > 99 || padding_limit < 0 ||
+      (!projected_widths.empty() && projected_widths.size() != ops.size()))
+    return true;
+  std::map<std::string_view, std::pair<std::size_t, int>, std::less<>> labels;
+  std::vector<std::optional<int>> starts(parts.size());
+  starts[0] = 0;
+  int original = 0, cells = 0;
+  for (std::size_t i = 0; i < parts.size(); ++i) {
+    auto& part = parts[i];
+    part.cells = 0;
+    for (std::size_t at = part.begin; at < part.end; ++at) {
+      const auto& op = ops[at];
+      if (op.kind == IrKind::Label && !labels.emplace(op.name, std::pair{i, part.cells}).second)
+        return true;
+      const int width = projected_widths.empty() ? cells_per_op(op) : projected_widths[at];
+      if (width < 0 || width > 8 || (op.kind == IrKind::Label && width != 0)) return true;
+      part.cells += width;
+    }
+    if (std::any_of(ops.begin() + static_cast<std::ptrdiff_t>(part.begin),
+                    ops.begin() + static_cast<std::ptrdiff_t>(part.end),
+                    [](const auto& op) { return op.meta.manual_interaction.has_value(); }))
+      starts[i] = original;
+    for (std::size_t at = part.begin; at < part.end; ++at)
+      original += cells_per_op(ops[at]);
+    cells += part.cells;
+  }
+  if (exclusive_cells) {
+    if (cells >= *exclusive_cells) return false;
+    padding_limit = std::min(padding_limit, *exclusive_cells - cells - 1);
+  }
+  for (const auto& [label, address] : required_targets) {
+    const auto found = labels.find(label);
+    if (found == labels.end()) return false;
+    const auto [part, offset] = found->second;
+    if (address < offset || (starts[part] && *starts[part] != address - offset))
+      return false;
+    starts[part] = address - offset;
+  }
+  const auto found = labels.find(target);
+  if (found == labels.end()) return false;
+  const auto [part, offset] = found->second;
+  const auto range = std::pair{std::max(0, minimum_address - offset), maximum_address - offset};
+  if (range.first > range.second) return false;
+  // Only this literal's encoding range is necessary. Other selectors may
+  // use the wider official fallback; leave them unrestricted here.
+  std::vector<std::pair<int, int>> bounds(parts.size(), {0, 1000000});
+  bounds[part] = range;
+  if (!anchored_gaps_can_fit(parts, starts, bounds, padding_limit)) return false;
+  if (starts[part] || parts[part].cells == 0) return true;
+  for (int start = range.first; start <= range.second; ++start) {
+    bool free = true;
+    for (std::size_t i = 0; i < parts.size(); ++i) {
+      if (!starts[i] || parts[i].cells == 0) continue;
+      const auto end = static_cast<std::int64_t>(*starts[i]) + parts[i].cells;
+      if (start < end && start + parts[part].cells > *starts[i]) {
+        free = false;
+        break;
+      }
+    }
+    if (free) return true;
+  }
+  return false;
+}
+
 std::optional<SymbolicRegionLayout> layout_symbolic_regions(
     const std::vector<IrOp>& ops, const std::map<std::string, int>& required_targets,
     const PassContext& context, std::size_t maximum_work,
@@ -341,47 +693,14 @@ std::optional<SymbolicRegionLayout> layout_symbolic_regions(
       return std::nullopt;
     starts[part] = start;
   }
-  std::size_t work = 0;
-  std::vector<std::size_t> order;
-  std::vector<bool> used(parts.size(), false);
-  std::function<bool(int)> place = [&](int address) {
-    if (work++ >= maximum_work)
-      return false;
-    if (order.size() == parts.size())
-      return true;
-    std::optional<std::size_t> due;
-    int deadline = 1000000;
-    for (std::size_t i = 0; i < parts.size(); ++i) {
-      if (used[i] || !starts[i])
-        continue;
-      if (*starts[i] < address)
-        return false;
-      if (*starts[i] == address) {
-        if (due && parts[i].cells != 0 && parts[*due].cells != 0)
-          return false;
-        due = i;
-      } else {
-        deadline = std::min(deadline, *starts[i]);
-      }
-    }
-    for (std::size_t i = 0; i < parts.size(); ++i) {
-      if (used[i] || (due && i != *due) || (starts[i] && *starts[i] != address) ||
-          address < bounds[i].first || address > bounds[i].second ||
-          address + parts[i].cells > deadline)
-        continue;
-      used[i] = true;
-      order.push_back(i);
-      if (place(address + parts[i].cells))
-        return true;
-      order.pop_back();
-      used[i] = false;
-      if (work >= maximum_work)
-        return false;
-    }
-    return false;
-  };
+  if (!anchored_gaps_can_fit(parts, starts, bounds,
+          projection ? std::max(0, projection->maximum_padding_cells) : 0))
+    return std::nullopt;
+  auto packed = pack_gapless_regions(parts, starts, bounds, maximum_work);
+  auto order = std::move(packed.order);
+  auto work = packed.work;
   std::vector<int> padding_before(parts.size(),0);
-  if (!place(0)) {
+  if (!packed.placed) {
     if (std::getenv("MKPRO_NATIVE_TRACE_REGION_LAYOUT")) {
       std::cerr << "[region-layout] no gapless placement";
       for (std::size_t i=0;i<parts.size();++i)
@@ -411,53 +730,11 @@ std::optional<SymbolicRegionLayout> layout_symbolic_regions(
       }
       if(!found)return std::nullopt;
     }
-    struct State{std::uint32_t mask=0;int address=0,padding=0;
-      std::size_t parent=0;int part=-2;bool closed=true;};
-    std::vector<State> states(1);
-    using Key=std::tuple<std::uint32_t,int,bool>;
-    std::map<Key,std::size_t> visited{{Key{0,0,true},0}};
-    using QueueEntry=std::pair<int,std::size_t>;
-    std::priority_queue<QueueEntry,std::vector<QueueEntry>,std::greater<QueueEntry>> queue;queue.emplace(0,0);
-    const auto all=(std::uint32_t{1}<<parts.size())-1U;
-    std::optional<std::size_t> answer;
-    const auto enqueue=[&](State next){
-      const Key key{next.mask,next.padding,next.closed};
-      if(visited.contains(key))return;
-      const std::size_t index=states.size();visited.emplace(key,index);
-      states.push_back(next);queue.emplace(next.padding,index);
-    };
-    while(!queue.empty() && work<maximum_work){
-      const auto id=queue.top().second;queue.pop();++work;const State current=states[id];
-      if(current.mask==all){answer=id;break;}
-      std::optional<std::size_t> due;int deadline=1000000;bool valid=true;
-      for(std::size_t i=0;i<parts.size();++i){
-        if((current.mask&(std::uint32_t{1}<<i)) || !starts[i])continue;
-        if(*starts[i]<current.address){valid=false;break;}
-        if(*starts[i]==current.address){
-          if(due && parts[i].cells!=0 && parts[*due].cells!=0){valid=false;break;}
-          due=i;
-        }else deadline=std::min(deadline,*starts[i]);
-      }
-      if(!valid)continue;
-      for(std::size_t i=0;i<parts.size();++i){
-        const auto bit=std::uint32_t{1}<<i;
-        if((current.mask&bit) || (due && *due!=i) ||
-            (starts[i] && *starts[i]!=current.address) ||
-            current.address<bounds[i].first || current.address>bounds[i].second ||
-            current.address+parts[i].cells>deadline || (!current.closed && parts[i].cells!=0))continue;
-        const bool closed=parts[i].cells==0?current.closed:ends_chain(ops[parts[i].end-1U]);
-        enqueue({current.mask|bit,current.address+parts[i].cells,current.padding,id,static_cast<int>(i),closed});
-      }
-      if(!due && current.mask!=0U && current.closed && current.padding<padding_limit && current.address<deadline)
-        enqueue({current.mask,current.address+1,current.padding+1,id,-1,true});
-    }
-    if(!answer)return std::nullopt;
-    std::vector<int> actions;for(auto id=*answer;id!=0;id=states[id].parent)actions.push_back(states[id].part);
-    std::reverse(actions.begin(),actions.end());order.clear();int pad=0;
-    for(const int action:actions)if(action<0)++pad;else{
-      const auto part=static_cast<std::size_t>(action);padding_before[part]=pad;pad=0;order.push_back(part);
-    }
-    if(pad!=0 || order.size()!=parts.size())return std::nullopt;
+    auto padded = pack_padded_regions(parts, starts, bounds, ops, work, maximum_work, padding_limit);
+    if (!padded) return std::nullopt;
+    order = std::move(padded->order);
+    padding_before = std::move(padded->padding_before);
+    work += padded->work;
   }
   SymbolicRegionLayout result;
   result.work = work;
@@ -504,21 +781,7 @@ std::vector<PassResult> deferred_stack_producer_erasure_candidates(
     const auto input = nodes[parent].items;
     const auto erased = nodes[parent].erased;
     if (erased >= limits.maximum_erased_cells) continue;
-    const auto flow_owner = shared_post_layout_control_flow(input, control_options);
-    const auto& flow = *flow_owner;
-    if (!flow.proved) continue;
-    auto data_flow = flow;
-    const auto product = build_deferred_selector_consistent_execution_graph(
-        input, flow, encoded_target_origins, control_options.maximum_execution_states);
-    if (product.execution.proved) {
-      data_flow.execution_states.clear();
-      for (const auto state : product.execution.original_states)
-        data_flow.execution_states.push_back(flow.execution_states[state]);
-      data_flow.execution_successors = product.execution.successors;
-      data_flow.execution_edges = product.execution.execution_edges;
-    }
-    // A failed refinement leaves the full conservative graph, never a partial
-    // product. The data proof must not re-prune using stale physical digits.
+    std::shared_ptr<const AuthoritativePostLayoutControlFlow> flow_owner, selected_flow;
     for (std::size_t at = 0; at < input.size(); ++at) {
       const auto& producer = input[at];
       const bool enter = producer.opcode == 0x0e;
@@ -539,9 +802,21 @@ std::vector<PassResult> deferred_stack_producer_erasure_candidates(
             (enter && closer.opcode >= 0x40 && closer.opcode <= 0x4e) ||
             (limits.allow_fresh_literal_replacement && closer.opcode >= 0 && closer.opcode <= 9)))
         continue;
+      if (!flow_owner) {
+        // Only a syntactically eligible pair needs a data-flow proof.
+        flow_owner = shared_post_layout_control_flow(input, control_options);
+        if (!flow_owner->proved) break;
+        const auto product = shared_deferred_selector_consistent_execution_graph(
+            input, flow_owner, encoded_target_origins, control_options.maximum_execution_states);
+        if (product->proved)
+          selected_flow = shared_post_layout_projected_flow(flow_owner, product);
+        // A failed refinement uses the complete conservative graph, not a
+        // partial product or a second refinement with stale selector digits.
+        if (!selected_flow) selected_flow = flow_owner;
+      }
       if (attempts++ >= limits.maximum_proof_attempts) return result;
       if (!prove_post_layout_stack_producer_erasure(
-              input, data_flow, at, {.refine_runtime_selectors = false,
+              input, *selected_flow, at, {.refine_runtime_selectors = false,
                   .transport_closed_entry_through_control=limits.allow_fresh_literal_replacement,
                   .use_indirect_store_entry_facts=limits.allow_fresh_literal_replacement,
                   .allow_fresh_literal_replacement=limits.allow_fresh_literal_replacement}))
@@ -557,7 +832,7 @@ std::vector<PassResult> deferred_stack_producer_erasure_candidates(
       // The labelled CFG walk proves that alias in every caller context.
       relocation[at] = retained - 1U;
       if (!prove_post_layout_execution_relocation(
-              input, next, flow, next_flow, relocation,
+              input, next, *flow_owner, next_flow, relocation,
               {.erased_stack_producer_item = at}).proved)
         continue;
       if (std::any_of(nodes.begin(), nodes.end(), [&](const Node& node) {

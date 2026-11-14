@@ -62,7 +62,7 @@ MonotoneProgressProof prove_post_layout_monotone_progress(
   const auto boundaries = prove_post_layout_input_boundaries(items, flow);
   if (!boundaries.proved)
     return result;
-  std::vector<std::vector<std::size_t>> predecessors(size);
+  PostLayoutSuccessors predecessors(size);
   for (std::size_t state = 0; state < size; ++state)
     for (const auto next : flow.execution_successors[state])
       predecessors[next].push_back(state);
@@ -312,74 +312,90 @@ std::optional<ProgressExpandedControlFlow> expand_post_layout_progress(
     return std::nullopt;
   const auto boundaries = prove_post_layout_input_boundaries(items, flow);
   if (!boundaries.proved) return std::nullopt;
-  ProgressExpandedControlFlow result{flow, {}, {}, {}};
-  auto& out = result.control;
-  out.execution_states.clear(); out.execution_successors.clear(); out.execution_edges.clear();
-  std::vector<std::vector<std::size_t>> copies(size);
+  // Copies of one source context occupy consecutive rows. Keep their
+  // numbering, but do not build and copy two full graphs to prune the first.
+  struct Copies { std::size_t first, count; };
+  std::vector<Copies> copies;
+  copies.reserve(size);
+  std::size_t expanded_count = 0;
   for (std::size_t state = 0; state < size; ++state) {
     const auto count = forward[state] && backward[state] ? witness.maximum_traversals + 1U : 1U;
-    if (count > maximum_states || out.execution_states.size() > maximum_states - count)
+    if (count > maximum_states || expanded_count > maximum_states - count)
       return std::nullopt;
-    for (std::size_t visit = 0; visit < count; ++visit) {
-      copies[state].push_back(out.execution_states.size());
-      out.execution_states.push_back(flow.execution_states[state]);
-      result.original_states.push_back(state);
-      result.automatic_entry_lift.push_back(automatic_entry_lift[state]);
-      result.analysis_order.push_back(forward[state] && backward[state] ? visit + 1U
-          : backward[state] ? 0U : witness.maximum_traversals + 2U);
-      out.execution_successors.emplace_back();
-      out.execution_edges.emplace_back();
-    }
+    copies.push_back({expanded_count, count});
+    expanded_count += count;
   }
+  std::vector<std::size_t> origins;
+  origins.reserve(expanded_count);
   for (std::size_t state = 0; state < size; ++state)
-    for (std::size_t visit = 0; visit < copies[state].size(); ++visit) {
-      const auto mapped = copies[state][visit];
-      for (const auto& edge : flow.execution_edges[state]) {
-        const bool growth = state == witness.source_state && edge.target_state == witness.target_state &&
-                            edge.kind == witness.edge_kind;
-        if (growth && visit == witness.maximum_traversals) continue;
-        const auto next_visit = copies[edge.target_state].size() == 1U ? 0U : visit + (growth ? 1U : 0U);
-        const auto target = copies[edge.target_state].at(next_visit);
-        auto moved = edge; moved.target_state = target;
-        out.execution_edges[mapped].push_back(moved);
-        out.execution_successors[mapped].push_back(target);
-      }
-      auto& next = out.execution_successors[mapped];
-      std::sort(next.begin(), next.end());
-      next.erase(std::unique(next.begin(), next.end()), next.end());
+    origins.insert(origins.end(), copies[state].count, state);
+  const auto visit_edges = [&](std::size_t row, const auto& visit_target) {
+    const auto source = origins[row];
+    const auto visit = row - copies[source].first;
+    for (const auto& edge : flow.execution_edges[source]) {
+      const bool growth = source == witness.source_state && edge.target_state == witness.target_state &&
+                          edge.kind == witness.edge_kind;
+      if (growth && visit == witness.maximum_traversals) continue;
+      const auto& target = copies.at(edge.target_state);
+      const auto next_visit = target.count == 1U ? 0U : visit + (growth ? 1U : 0U);
+      if (next_visit >= target.count) return false;
+      visit_target(edge, target.first + next_visit);
     }
+    return true;
+  };
   // Do not export unreachable counter copies: a bottom fact at such a copy
   // is not an unknown real path and must not poison a joined item query.
-  std::vector<bool> live(out.execution_states.size(), false);
-  std::deque<std::size_t> pending;
-  for (const auto state : boundaries.main_states) pending.push_back(copies[state][0]);
-  while (!pending.empty()) {
-    const auto state = pending.front(); pending.pop_front();
-    if (live[state]) continue;
-    live[state] = true;
-    for (const auto next : out.execution_successors[state]) pending.push_back(next);
+  std::vector<bool> live(expanded_count, false);
+  std::vector<std::size_t> pending;
+  pending.reserve(expanded_count);
+  const auto enqueue = [&](std::size_t row) {
+    if (!live[row]) {
+      live[row] = true;
+      pending.push_back(row);
+    }
+  };
+  for (const auto state : boundaries.main_states) enqueue(copies[state].first);
+  for (std::size_t at = 0; at < pending.size(); ++at) {
+    if (!visit_edges(pending[at], [&](const auto&, auto target) { enqueue(target); }))
+      return std::nullopt;
   }
   std::vector<std::size_t> remap(live.size(), 0);
-  ProgressExpandedControlFlow pruned{flow, {}, {}, {}};
+  ProgressExpandedControlFlow pruned;
   auto& final = pruned.control;
-  final.execution_states.clear(); final.execution_successors.clear(); final.execution_edges.clear();
+  final.proved = flow.proved;
+  final.address_space_model = flow.address_space_model;
+  final.external_entries = flow.external_entries;
+  final.indirect_flow_targets = flow.indirect_flow_targets;
+  final.indirect_memory_targets = flow.indirect_memory_targets;
+  final.empty_return_target = flow.empty_return_target;
+  final.maximum_observed_return_depth = flow.maximum_observed_return_depth;
+  final.reasons = flow.reasons;
+  final.execution_states.reserve(pending.size());
+  final.execution_successors.resize(pending.size());
+  final.execution_edges.resize(pending.size());
+  pruned.automatic_entry_lift.reserve(pending.size());
+  pruned.analysis_order.reserve(pending.size());
+  pruned.original_states.reserve(pending.size());
   for (std::size_t state = 0; state < live.size(); ++state)
     if (live[state]) {
       remap[state] = final.execution_states.size();
-      final.execution_states.push_back(out.execution_states[state]);
-      pruned.automatic_entry_lift.push_back(result.automatic_entry_lift[state]);
-      pruned.analysis_order.push_back(result.analysis_order[state]);
-      pruned.original_states.push_back(result.original_states[state]);
-      final.execution_successors.emplace_back(); final.execution_edges.emplace_back();
+      const auto source = origins[state];
+      final.execution_states.push_back(flow.execution_states[source]);
+      pruned.automatic_entry_lift.push_back(automatic_entry_lift[source]);
+      pruned.analysis_order.push_back(copies[source].count > 1U ? state - copies[source].first + 1U
+          : backward[source] ? 0U : witness.maximum_traversals + 2U);
+      pruned.original_states.push_back(source);
     }
   for (std::size_t state = 0; state < live.size(); ++state)
     if (live[state]) {
-      for (const auto next : out.execution_successors[state])
-        final.execution_successors[remap[state]].push_back(remap[next]);
-      for (auto edge : out.execution_edges[state]) {
-        edge.target_state = remap[edge.target_state];
-        final.execution_edges[remap[state]].push_back(edge);
-      }
+      auto& successors = final.execution_successors[remap[state]];
+      auto& edges = final.execution_edges[remap[state]];
+      if (!visit_edges(state, [&](auto edge, auto target) {
+            edge.target_state = remap[target];
+            edges.push_back(edge);
+            successors.push_back(edge.target_state);
+          })) return std::nullopt;
+      successors.sort_unique();
     }
   final.explored_states = final.execution_states.size();
   return pruned;

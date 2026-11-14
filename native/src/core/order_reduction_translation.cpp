@@ -40,17 +40,23 @@ bool role(const MachineItem& item, const char* value) {
 }
 } // namespace
 
-OrderReductionTranslationProof prove_order_reduction_translation(
+static OrderReductionTranslationProof prove_order_reduction_translation_impl(
     const std::vector<MachineItem>& items, const AuthoritativePostLayoutControlFlow& flow,
-    const std::vector<bool>& automatic_entry_lift, const PostLayoutNumericRangeProof& bounds,
-    std::size_t first_digit, std::size_t last_digit, std::size_t maximum_work) {
+    const std::vector<bool>& automatic_entry_lift, const PostLayoutNumericRangeProof* bounds,
+    std::size_t first_digit, std::size_t last_digit, std::size_t maximum_work,
+    bool& needs_numeric_facts) {
   OrderReductionTranslationProof result;
   const auto reject = [&](const std::string& reason) {
     result.reasons.push_back(reason); return result;
   };
+  const auto defer_to_numeric = [&] {
+    needs_numeric_facts = true;
+    return result;
+  };
   const auto count = flow.execution_states.size();
-  if (!flow.proved || bounds.exhausted || count == 0 || automatic_entry_lift.size() != count ||
-      flow.execution_edges.size() != count || first_digit >= items.size() || last_digit >= items.size() ||
+  if (!flow.proved || (bounds && bounds->exhausted) || count == 0 || automatic_entry_lift.size() != count ||
+      flow.execution_successors.size() != count || flow.execution_edges.size() != count ||
+      first_digit >= items.size() || last_digit >= items.size() ||
       first_digit >= last_digit || items[first_digit].kind != MachineItemKind::Op ||
       items[last_digit].kind != MachineItemKind::Op || items[first_digit].opcode < 1 ||
       items[first_digit].opcode > 9 || items[last_digit].opcode < 0 || items[last_digit].opcode > 9)
@@ -81,15 +87,16 @@ OrderReductionTranslationProof prove_order_reduction_translation(
     return minimum_delta <= maximum_delta;
   };
   const auto value_at = [&](std::size_t state, std::size_t slot) -> OrdinaryStackValue {
-    const auto found = bounds.stack_before_state.find(state);
-    return found == bounds.stack_before_state.end() ? OrdinaryStackValue{} : found->second[slot];
+    if (!bounds) return {};
+    const auto found = bounds->stack_before_state.find(state);
+    return found == bounds->stack_before_state.end() ? OrdinaryStackValue{} : found->second[slot];
   };
   const auto negative_at = [&](std::size_t state, std::size_t slot) {
     const auto value = value_at(state, slot);
     return value.ordinary && ((value.enclosure && value.enclosure->upper < 0) ||
                               (value.range && value.range->upper < 0));
   };
-  std::vector<std::vector<std::size_t>> predecessors(count);
+  PostLayoutSuccessors predecessors(count);
   for (std::size_t state = 0; state < count; ++state)
     for (const auto next : flow.execution_successors[state]) {
       if (next >= count) return reject("invalid successor");
@@ -128,7 +135,8 @@ OrderReductionTranslationProof prove_order_reduction_translation(
   while (!pending.empty()) {
     auto [state, values] = pending.front(); pending.pop_front();
     if (!seen.emplace(state, values).second) continue;
-    if (++result.work > maximum_work) return reject("relational proof exhausted");
+    if (++result.work > maximum_work)
+      return bounds ? reject("relational proof exhausted") : defer_to_numeric();
     const auto at = flow.execution_states[state].item_index;
     const auto& item = items[at];
     const int code = item.opcode, family = code & 0xf0, reg = code & 15;
@@ -172,9 +180,12 @@ OrderReductionTranslationProof prove_order_reduction_translation(
       const auto targets = flow.indirect_memory_targets.find(at);
       if (targets == flow.indirect_memory_targets.end() || targets->second.empty())
         return fail("unknown memory aliases");
+      // A numeric alias can select a different path or make the proof fail.
+      // Never derive a structural rejection from an arbitrarily chosen alias.
+      if (!bounds && targets->second.size() != 1U) return defer_to_numeric();
       auto selected_targets = targets->second;
-      if (const auto known = bounds.memory_selector_before_state.find(state);
-          known != bounds.memory_selector_before_state.end()) {
+      if (bounds) if (const auto known = bounds->memory_selector_before_state.find(state);
+          known != bounds->memory_selector_before_state.end()) {
         const auto& word = known->second;
         std::optional<int> selected;
         if (reg < 4 && word.normalized_or_payload) selected = 7;
@@ -268,33 +279,37 @@ OrderReductionTranslationProof prove_order_reduction_translation(
         if (equal(old[0]) && equal(old[1])) output = Equal;
         else if (code == 0x10 && ((old[0] == Translated && equal(old[1])) ||
                                   (old[1] == Translated && equal(old[0])))) {
-          // Every Translated producer already established the positive band.
-          // A scalar join here may also contain the unrelated negative seed;
-          // it must not erase the relational path's stronger invariant.
-          const auto shifted_slot = old[0] == Translated ? 0U : 1U;
-          const auto term = value_at(state, 1U - shifted_slot);
-          auto increment = term.enclosure;
-          if (!increment && term.range)
-            increment = OrdinaryDecimalEnclosure{term.range->lower * scale, term.range->upper * scale};
-          if (!term.ordinary || !increment) return fail("addition has no independent ordinary increment bound");
-          // Carry the source interval with the relational value, not with a
-          // scalar join that also contains the unrelated negative sentinel.
-          // In this band one ULP is one millionth. Two outward units enclose
-          // normal decimal addition; band preservation is checked afterwards.
-          const OrdinaryDecimalEnclosure sum{
-              old[shifted_slot].source.lower + increment->lower - 2,
-              old[shifted_slot].source.upper + increment->upper + 2};
-          if (!constrain({.ordinary = true, .enclosure = sum}))
-            return fail("sum crosses an exponent boundary");
-          output = Cell{Translated, sum};
+          if (!bounds) {
+            // If the numeric side conditions hold, the result is still
+            // translated. The placeholder interval is never exported or
+            // checked in this negative-only traversal.
+            output = Cell{Translated};
+          } else {
+            // Carry the source interval with the relational value, not with a
+            // scalar join that also contains the unrelated negative sentinel.
+            const auto shifted_slot = old[0] == Translated ? 0U : 1U;
+            const auto term = value_at(state, 1U - shifted_slot);
+            auto increment = term.enclosure;
+            if (!increment && term.range)
+              increment = OrdinaryDecimalEnclosure{term.range->lower * scale, term.range->upper * scale};
+            if (!term.ordinary || !increment) return fail("addition has no independent ordinary increment bound");
+            // Two outward units enclose normal addition in this exponent band.
+            const OrdinaryDecimalEnclosure sum{
+                old[shifted_slot].source.lower + increment->lower - 2,
+                old[shifted_slot].source.upper + increment->upper + 2};
+            if (!constrain({.ordinary = true, .enclosure = sum}))
+              return fail("sum crosses an exponent boundary");
+            output = Cell{Translated, sum};
+          }
         } else if (code == 0x11 && old[0] == Translated && old[1] == Translated) {
           output = Equal;
         } else if (code == 0x36) {
           if (!(old[0] == Translated && old[1] == Translated)) {
             const auto shifted_slot = old[0] == Translated ? 0U : 1U;
             const auto other = 1U - shifted_slot;
-            if ((old[shifted_slot] != Translated) ||
-                !(old[other] == EqualNegative || (equal(old[other]) && negative_at(state, other))))
+            if (old[shifted_slot] != Translated || !equal(old[other]))
+              return fail("maximum crosses an unproved sentinel");
+            if (bounds && old[other] != EqualNegative && !negative_at(state, other))
               return fail("maximum crosses an unproved sentinel");
           }
           if (old[0] == Translated && old[1] == Translated)
@@ -351,14 +366,36 @@ OrderReductionTranslationProof prove_order_reduction_translation(
         if (effect == X2Effect::Restores || effect == X2Effect::Unknown)
           return fail("unsupported conditional hidden effect");
       }
-      for (std::size_t slot = 0; slot < 4; ++slot)
+      // EqualNegative differs from Equal only at Kmax, where the preflight
+      // optimistically allows its numeric side condition.
+      for (std::size_t slot = 0; bounds && slot < 4; ++slot)
         if (equal(next_values[slot]) && negative_at(next, slot)) next_values[slot] = EqualNegative;
       pending.emplace_back(next, next_values);
     }
   }
   if (!used_maximum || (minimum_delta == 0 && maximum_delta == 0)) return reject("no nontrivial order-only family");
+  if (!bounds) return defer_to_numeric();
   result.proved = true;
   result.minimum_seed = seed + minimum_delta; result.maximum_seed = seed + maximum_delta;
   return result;
+}
+
+OrderReductionTranslationProof prove_order_reduction_translation(
+    const std::vector<MachineItem>& items, const AuthoritativePostLayoutControlFlow& flow,
+    const std::vector<bool>& automatic_entry_lift, const PostLayoutNumericRangeProof& bounds,
+    std::size_t first_digit, std::size_t last_digit, std::size_t maximum_work) {
+  bool needs_numeric_facts = false;
+  return prove_order_reduction_translation_impl(items, flow, automatic_entry_lift,
+      &bounds, first_digit, last_digit, maximum_work, needs_numeric_facts);
+}
+
+bool order_reduction_translation_is_structurally_impossible(
+    const std::vector<MachineItem>& items, const AuthoritativePostLayoutControlFlow& flow,
+    const std::vector<bool>& automatic_entry_lift, std::size_t first_digit,
+    std::size_t last_digit) {
+  bool needs_numeric_facts = false;
+  const auto proof = prove_order_reduction_translation_impl(items, flow,
+      automatic_entry_lift, nullptr, first_digit, last_digit, 2048, needs_numeric_facts);
+  return !needs_numeric_facts && !proof.proved;
 }
 } // namespace mkpro::core

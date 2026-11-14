@@ -11,6 +11,15 @@ struct OrderReductionTranslationProof {
   std::vector<std::string> reasons;
 };
 
+// A negative-only preflight over the same relational transfer. Assume
+// numeric side conditions can hold; defer if they can select a different
+// relation or execution path. False includes inconclusive.
+bool order_reduction_translation_is_structurally_impossible(
+    const std::vector<MachineItem>& items,
+    const AuthoritativePostLayoutControlFlow& flow,
+    const std::vector<bool>& automatic_entry_lift,
+    std::size_t first_digit, std::size_t last_digit);
+
 // Prove a family of integer translations of one fresh two-digit literal.
 // Copies, equal-offset subtraction, positive ordinary Kmax and sign tests
 // are relational operations, not a formula recognizer. Every addition must

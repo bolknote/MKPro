@@ -1,6 +1,8 @@
 #include "mkpro/core/opcodes.hpp"
+#include "mkpro/core/detail/layout_jobs.hpp"
 #include "mkpro/core/emit/machine_emitter.hpp"
 #include "mkpro/core/helper_invariant_recall_hoist.hpp"
+#include "mkpro/core/layout_search_artifact.hpp"
 #include "mkpro/core/passes/indirect_selector_seed_reuse.hpp"
 #include "mkpro/core/post_layout_control_flow.hpp"
 #include "mkpro/core/shared_helper_dual_mode_layout.hpp"
@@ -779,6 +781,21 @@ void indirect_selector_seed_reuse_preserves_observations() {
     const auto growing = core::reassign_stable_indirect_selector_families(
         items, preloads, family_control, growing_options);
     require(!growing.empty(), "an explicit one-cell debt must admit the enabling selector order");
+    const auto serial = [&] {
+      core::detail::LayoutExecutor executor(1);
+      const core::detail::LayoutExecutorScope scope(executor);
+      return core::reassign_stable_indirect_selector_families(items, preloads, family_control, growing_options);
+    }();
+    require(serial.size() == growing.size(), "selector proof concurrency cannot change the frontier");
+    for (std::size_t i = 0; i < serial.size(); ++i) {
+      require(core::same_layout_search_items(serial[i].items, growing[i].items) &&
+                  core::same_layout_search_preloads(serial[i].preloads, growing[i].preloads) &&
+                  serial[i].control_flow == growing[i].control_flow &&
+                  std::equal(serial[i].optimizations.begin(), serial[i].optimizations.end(),
+                      growing[i].optimizations.begin(), growing[i].optimizations.end(),
+                      [](const auto& a, const auto& b) { return a.name == b.name && a.detail == b.detail; }),
+              "serial and parallel selector search must publish the same ordered certificates");
+    }
     for (const auto& variant : growing) {
       require(variant.control_flow.proved &&
                   codes(raise_machine_to_ir(variant.items)).size() ==

@@ -198,6 +198,12 @@ void prepared_joint_proof_input_contracts() {
   PostLayoutControlFlowOptions normal;
   normal.empty_return_target = 1;
   detail::PreparedJointProofInput uncached(original_items,original_environment,normal,nullptr,0);
+  detail::PreparedJointProofInput borrowed(
+      detail::BorrowedJointProofInput{original_items, original_environment}, normal);
+  require(&borrowed.items() == &original_items && &borrowed.preloads() == &original_environment &&
+          borrowed.flow() == uncached.flow() &&
+          borrowed.protected_runtime_charge_targets() == uncached.protected_runtime_charge_targets(),
+      "borrowing an immutable proof input keeps the original item and preload identities");
   require(uncached.rebind_selector(original_environment.front(),3,4) == expected &&
               uncached.rebind_selector(original_environment.front(),3,4) == expected &&
               uncached.retained() == 0 && uncached.selector_proofs() == 2,

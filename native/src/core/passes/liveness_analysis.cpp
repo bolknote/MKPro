@@ -135,10 +135,11 @@ struct GuardedLifetimeProof {
   bool exhausted = false;
 };
 
+template <class Successors>
 GuardedLifetimeProof guarded_register_lifetimes(
     const std::vector<IrOp>& ops, const std::vector<RegisterEffects>& effects,
     const std::vector<std::size_t>& instructions,
-    const std::vector<std::vector<std::size_t>>& successors,
+    const Successors& successors,
     const std::vector<std::vector<std::size_t>>& predecessors,
     const std::vector<std::size_t>& roots, const LivenessOptions& options,
     const std::vector<GuardedDefinitionUseQuery>& queries = {},

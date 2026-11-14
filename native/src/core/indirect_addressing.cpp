@@ -9,10 +9,8 @@
 #include <cmath>
 #include <cctype>
 #include <cstdlib>
-#include <iomanip>
 #include <limits>
 #include <regex>
-#include <sstream>
 #include <stdexcept>
 #include <string>
 
@@ -105,9 +103,11 @@ std::string negative_integer_mantissa(long long value) {
 }
 
 std::string pad_left_8(int value) {
-  std::ostringstream out;
-  out << std::setw(8) << std::setfill('0') << value;
-  return out.str();
+  // This helper receives only nonnegative eight-digit mantissas. Their
+  // ROM representation uses ASCII digits, independent of a stream locale.
+  auto digits = std::to_string(value);
+  if (digits.size() < 8U) digits.insert(0, 8U - digits.size(), '0');
+  return digits;
 }
 
 std::optional<std::string> transform_decimal_selector_value(
@@ -258,23 +258,26 @@ struct TailPair {
   bool hex = false;
 };
 
+std::optional<TailPair> integral_tail(std::string_view spelling) {
+  const bool negative = spelling.starts_with('-');
+  if (negative) spelling.remove_prefix(1);
+  if (spelling.empty()) return std::nullopt;
+  const auto hex_digit = [](char ch) {
+    if (ch >= '0' && ch <= '9') return ch - '0';
+    if (ch >= 'a' && ch <= 'f') return ch - 'a' + 10;
+    return -1;
+  };
+  const auto digits = spelling.size();
+  const int tens = digits == 1U ? (negative ? 9 : 0) : hex_digit(spelling[digits - 2U]);
+  const int ones = hex_digit(spelling.back());
+  if (tens < 0 || ones < 0 || std::any_of(spelling.begin(), spelling.end(),
+          [&](char ch) { return hex_digit(ch) < 0; })) return std::nullopt;
+  return TailPair{.tens = tens, .ones = ones, .hex = tens >= 10 || ones >= 10};
+}
+
 std::optional<TailPair> transformed_tail_pair(std::string_view transformed) {
   const std::string normalized = lower_ascii(trim_ascii(std::string(transformed)));
-  static const std::regex pattern(R"(^-?[0-9a-f]+$)", std::regex_constants::icase);
-  if (!std::regex_match(normalized, pattern))
-    return std::nullopt;
-  const bool negative = normalized.starts_with("-");
-  const std::string digits = negative ? normalized.substr(1) : normalized;
-  if (digits.empty())
-    return std::nullopt;
-  const char fill = negative ? '9' : '0';
-  const std::string pair = digits.size() == 1 ? std::string{fill, digits.front()}
-                                              : digits.substr(digits.size() - 2);
-  const int tens = std::stoi(pair.substr(0, 1), nullptr, 16);
-  const int ones = std::stoi(pair.substr(1, 1), nullptr, 16);
-  if (tens < 0 || tens > 0x0f || ones < 0 || ones > 0x0f)
-    return std::nullopt;
-  return TailPair{.tens = tens, .ones = ones, .hex = contains_hex_alpha(pair)};
+  return integral_tail(normalized);
 }
 
 int flow_target_from_transformed(std::string_view transformed) {
@@ -287,8 +290,7 @@ int flow_target_from_transformed(std::string_view transformed) {
 int formal_opcode_for_flow_target(std::string_view transformed, int flow_target,
                                   AddressSpaceModel model) {
   const std::string normalized = lower_ascii(trim_ascii(std::string(transformed)));
-  static const std::regex integer_pattern(R"(^-?[0-9a-f]+$)", std::regex_constants::icase);
-  if (std::regex_match(normalized, integer_pattern) && contains_hex_alpha(normalized))
+  if (contains_hex_alpha(normalized) && integral_tail(normalized))
     return flow_target;
   return official_address_to_opcode(flow_target, model);
 }
@@ -368,6 +370,37 @@ std::optional<IndirectAddressEvaluation> evaluate_indirect_address(
     std::string_view selector, std::string_view value, IndirectOperationKind operation,
     AddressSpaceModel model) {
   const IndirectSelectorMutation mutation = indirect_selector_mutation(selector);
+  const auto ordinary_integer = [](std::string_view spelling) {
+    return !spelling.empty() && spelling.size() <= 8U &&
+        std::all_of(spelling.begin(), spelling.end(), [](char ch) { return ch >= '0' && ch <= '9'; });
+  };
+  // Exactly representable without a host float, no scientific/order or
+  // negative sign-fill ambiguity. Preserve the former decimal spelling and
+  // mutation result; every other word keeps its established parser.
+  if (ordinary_integer(value)) {
+    int integer = 0;
+    for (const char digit : value) integer = integer * 10 + digit - '0';
+    int next = integer + mutation_delta(mutation);
+    const bool underflow = next < 0;
+    if (underflow) next = 99999999;
+    const int tail = next % 100;
+    IndirectAddressEvaluation result;
+    result.selector = std::string(selector);
+    result.mutation = mutation;
+    result.operation = operation;
+    result.transformed = underflow ? "-99999999" : std::to_string(next);
+    result.result_value = result.transformed;
+    if (operation == IndirectOperationKind::Flow) {
+      result.formal_address = formal_address_info(official_address_to_opcode(tail, model), model);
+      result.flow_target = tail;
+      result.actual_flow_target = tail;
+    } else {
+      const auto ones = static_cast<std::size_t>(tail % 10);
+      result.memory_target = tail < 10 ? k_memory_target_with_zero_tens[ones]
+                                       : k_memory_target_with_nonzero_tens[ones];
+    }
+    return result;
+  }
   const auto projection = transform_selector_value(value, mutation);
   if (!projection.has_value())
     return std::nullopt;
@@ -390,7 +423,9 @@ std::optional<IndirectAddressEvaluation> evaluate_indirect_address(
     result.formal_address = info;
     result.flow_target = flow_target;
     result.actual_flow_target = info.actual;
-    result.super_dark = super_dark_target(info.opcode, model);
+    if (info.kind == FormalAddressKind::SuperDark && info.extra)
+      result.super_dark = SuperDarkIndirectTarget{
+          .formal = info.opcode, .entry_address = info.actual, .continuation_address = *info.extra};
     return result;
   }
 

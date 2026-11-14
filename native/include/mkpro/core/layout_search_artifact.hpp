@@ -56,11 +56,8 @@ inline bool same_layout_search_items(const std::vector<MachineItem>& a,
                     });
 }
 
-inline bool same_layout_search_artifact(const LayoutSearchArtifact& a,
-                                        const LayoutSearchArtifact& b) {
-  if (a.preloads.size() != b.preloads.size() ||
-      !same_layout_search_items(a.items, b.items))
-    return false;
+inline bool same_layout_search_preloads(const std::vector<PreloadReport>& a,
+                                        const std::vector<PreloadReport>& b) {
   const auto preload_fields = [](const PreloadReport& preload) {
     return std::tie(preload.register_name, preload.value,
                     preload.counts_against_program,
@@ -69,10 +66,17 @@ inline bool same_layout_search_artifact(const LayoutSearchArtifact& a,
                     preload.setup_expression_text, preload.setup_source_line,
                     preload.lowered_data_value);
   };
-  return std::equal(a.preloads.begin(), a.preloads.end(), b.preloads.begin(),
+  return std::equal(a.begin(), a.end(), b.begin(), b.end(),
                     [&](const auto& left, const auto& right) {
                       return preload_fields(left) == preload_fields(right);
                     });
+}
+
+inline bool same_layout_search_artifact(const LayoutSearchArtifact& a,
+                                        const LayoutSearchArtifact& b) {
+  return a.preloads.size() == b.preloads.size() &&
+      same_layout_search_items(a.items, b.items) &&
+      same_layout_search_preloads(a.preloads, b.preloads);
 }
 
 } // namespace mkpro::core

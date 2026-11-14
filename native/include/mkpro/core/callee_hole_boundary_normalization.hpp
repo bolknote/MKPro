@@ -12,6 +12,7 @@
 namespace mkpro::core {
 
 struct AuthoritativePostLayoutControlFlow;
+struct PostLayoutExecutionView;
 
 struct StackEntryProofNode {
   int opcode = -1;
@@ -72,6 +73,13 @@ bool prove_post_layout_stack_state_equality(
     const std::vector<std::size_t>& entry_states,
     StackValueEqualityState initial,
     const PostLayoutStackEntryProofOptions& options = {});
+
+// Roots are row indices of this already selected execution view, not the
+// physical CFG. Do not run a second selector refinement on that view.
+bool prove_post_layout_stack_state_equality_on_view(
+    const std::vector<MachineItem>& items, const PostLayoutExecutionView& view,
+    const std::vector<std::size_t>& entry_states, StackValueEqualityState initial,
+    const PostLayoutStackEntryProofOptions& options);
 
 bool prove_ir_stack_entry_equality(const std::vector<IrOp>& ops,
                                    std::size_t entry, StackValueEqualityState state);

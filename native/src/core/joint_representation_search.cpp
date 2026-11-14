@@ -31,12 +31,18 @@
 #include "mkpro/core/shared_helper_dual_mode_layout.hpp"
 
 #include <algorithm>
+#include <array>
+#include <atomic>
 #include <cstdlib>
+#include <deque>
+#include <exception>
 #include <iostream>
 #include <map>
+#include <mutex>
 #include <numeric>
 #include <set>
 #include <string_view>
+#include <unordered_map>
 #include <utility>
 
 namespace mkpro::core {
@@ -477,7 +483,264 @@ struct OrderReductionLiteralDomain {
   int original_seed = -1;
   int minimum_seed = -1;
   int maximum_seed = -1;
+  bool operator==(const OrderReductionLiteralDomain&) const = default;
 };
+
+using LiteralLayout = passes::DeferredSelectorDataLiteralLayout;
+
+auto joint_preload_fields(const PreloadReport& p) {
+  return std::tie(p.register_name, p.value, p.counts_against_program,
+      p.retunable_natural_fractional_prefix, p.setup_target_name, p.setup_expression,
+      p.setup_expression_text, p.setup_source_line, p.lowered_data_value);
+}
+
+bool same_joint_preloads(const std::vector<PreloadReport>& a, const std::vector<PreloadReport>& b) {
+  return std::equal(a.begin(), a.end(), b.begin(), b.end(), [](const auto& left, const auto& right) {
+    return joint_preload_fields(left) == joint_preload_fields(right);
+  });
+}
+
+std::size_t mix_joint_key(std::size_t seed, std::size_t value) {
+  return (seed ^ value) * 1099511628211ULL;
+}
+
+// Only a bucket index: every hit below compares the owned semantic input.
+std::size_t joint_item_key(const std::vector<MachineItem>& items) {
+  std::size_t key = items.size();
+  for (const auto& item : items) {
+    key = mix_joint_key(key, static_cast<std::size_t>(item.kind));
+    key = mix_joint_key(key, static_cast<std::size_t>(item.opcode));
+    key = mix_joint_key(key, std::hash<IrTarget>{}(item.target));
+    if (item.kind == MachineItemKind::Label)
+      key = mix_joint_key(key, std::hash<std::string>{}(item.name));
+  }
+  return key;
+}
+
+bool same_joint_limits(const TransactionSearchLimits& a, const TransactionSearchLimits& b) {
+  return a.maximum_expansions == b.maximum_expansions &&
+      a.maximum_candidates == b.maximum_candidates && a.maximum_depth == b.maximum_depth &&
+      a.maximum_growth_cells == b.maximum_growth_cells &&
+      a.prioritize_composition_depth == b.prioritize_composition_depth;
+}
+
+bool same_joint_equations(const ConstrainedRepresentation& a, const ConstrainedRepresentation& b) {
+  return a.targets == b.targets && a.encoded_selectors == b.encoded_selectors &&
+      a.numeric_layout_certificate == b.numeric_layout_certificate;
+}
+
+// Fix candidate order at the caller. Neither a cache hit, a racing miss nor
+// eviction may consume a search slot. Only independent nonrecursive
+// subproofs can wait on an identical in-flight proof.
+template <class Key, class Value>
+class JointWorkMemo {
+  struct Entry {
+    std::size_t hash;
+    Key key;
+    std::shared_ptr<const Value> value;
+    std::exception_ptr error;
+    std::atomic<bool> ready{false};
+
+    Entry(std::size_t signature, Key input)
+        : hash(signature), key(std::move(input)) {}
+  };
+  struct Shard {
+    std::mutex mutex;
+    std::unordered_multimap<std::size_t, std::shared_ptr<Entry>> entries;
+    std::deque<std::shared_ptr<Entry>> completed;
+
+    void erase(const Entry& entry) {
+      const auto [begin, end] = entries.equal_range(entry.hash);
+      for (auto it = begin; it != end; ++it) {
+        if (it->second.get() == &entry) {
+          entries.erase(it);
+          break;
+        }
+      }
+    }
+  };
+
+ public:
+  explicit JointWorkMemo(std::size_t per_shard) : per_shard_(per_shard) {}
+
+  template <class Match, class Capture, class Compute>
+  std::shared_ptr<const Value> get(std::size_t hash, Match match, Capture capture, Compute compute) {
+    auto& shard = shards_[hash % shards_.size()];
+    std::shared_ptr<Entry> entry;
+    {
+      std::unique_lock lock(shard.mutex);
+      const auto [begin, end] = shard.entries.equal_range(hash);
+      for (auto it = begin; it != end; ++it) {
+        if (!match(it->second->key)) continue;
+        auto found = it->second; // the build may finish and be evicted while we wait
+        lock.unlock();
+        if (!found->ready.load(std::memory_order_acquire)) {
+          waits_.fetch_add(1, std::memory_order_relaxed);
+          found->ready.wait(false, std::memory_order_acquire);
+        }
+        if (found->error) std::rethrow_exception(found->error);
+        hits_.fetch_add(1, std::memory_order_relaxed);
+        return found->value;
+      }
+      entry = std::make_shared<Entry>(hash, capture());
+      shard.entries.emplace(hash, entry);
+    }
+    builds_.fetch_add(1, std::memory_order_relaxed);
+    try {
+      auto value = std::make_shared<const Value>(compute());
+      std::shared_ptr<Entry> retired;
+      {
+        const std::lock_guard lock(shard.mutex);
+        shard.completed.push_back(entry);
+        entry->value = value;
+        if (shard.completed.size() > per_shard_) {
+          retired = std::move(shard.completed.front());
+          shard.erase(*retired);
+          shard.completed.pop_front();
+        }
+      }
+      entry->ready.store(true, std::memory_order_release);
+      entry->ready.notify_all();
+      return value;
+    } catch (...) {
+      {
+        const std::lock_guard lock(shard.mutex);
+        entry->error = std::current_exception();
+        shard.erase(*entry);
+      }
+      entry->ready.store(true, std::memory_order_release);
+      entry->ready.notify_all();
+      throw;
+    }
+  }
+
+  detail::JointLayoutWorkCounts counts() const {
+    return {builds_.load(), hits_.load(), waits_.load()};
+  }
+
+ private:
+  std::array<Shard, 8> shards_;
+  const std::size_t per_shard_;
+  std::atomic<std::size_t> builds_{0}, hits_{0}, waits_{0};
+};
+
+struct JointVariantsKey {
+  ConstrainedRepresentation node;
+  std::string options;
+  TransactionSearchLimits limits;
+  bool coupled_geometry;
+};
+
+struct JointLiteralKey {
+  std::vector<MachineItem> items;
+  PostLayoutControlFlowOptions control;
+  std::size_t limit;
+};
+
+struct JointClosureKey {
+  ConstrainedRepresentation proof;
+  PostLayoutControlFlowOptions control;
+  FeatureProfile profile;
+  bool decimal_input, complete_preloads, projected, precise_entry;
+  std::optional<LiteralLayout> literal;
+  std::optional<OrderReductionLiteralDomain> domain;
+  // A negative proof below this bound also excludes any tighter request.
+  // The bound never changes the chosen geometry or the successful artifact.
+  std::optional<int> result_limit;
+};
+
+struct JointClosureProof {
+  std::optional<LayoutSearchArtifact> artifact;
+  int layout_width = 0;
+};
+
+struct JointOrderProofKey {
+  std::vector<MachineItem> items;
+  std::vector<PreloadReport> preloads;
+  std::shared_ptr<const AuthoritativePostLayoutControlFlow> flow;
+  NumericRangeInputPolicy policy;
+  std::size_t first, last;
+};
+
+bool same_order_proof_items(const std::vector<MachineItem>& a,
+                            const std::vector<MachineItem>& b) {
+  // This cache returns only a numeric interval or a rejection. Neither
+  // that proof nor its transitive dependencies read source presentation
+  // or pure cell-origin annotations. Keep every semantic role and target.
+  const auto fields = [](const MachineItem& item) {
+    return std::tie(item.kind, item.name, item.procedure_boundary,
+        item.procedure_name, item.opcode, item.raw, item.stop_disposition,
+        item.manual_interaction, item.indirect_flow_targets,
+        item.indirect_flow_formal_targets, item.indirect_memory_targets,
+        item.logical_register_name, item.logical_indirect_memory_targets,
+        item.discarded_indirect_recall_value, item.borrowed_entry_phase_selector,
+        item.semantic_call_origins, item.target, item.formal_opcode);
+  };
+  return std::equal(a.begin(), a.end(), b.begin(), b.end(), [&](const auto& x, const auto& y) {
+    if (fields(x) != fields(y)) return false;
+    auto left = x.roles.begin(), right = y.roles.begin();
+    for (;;) {
+      while (left != x.roles.end() && detail::is_cell_origin_provenance(*left)) ++left;
+      while (right != y.roles.end() && detail::is_cell_origin_provenance(*right)) ++right;
+      if (left == x.roles.end() || right == y.roles.end())
+        return left == x.roles.end() && right == y.roles.end();
+      if (*left++ != *right++) return false;
+    }
+  });
+}
+
+} // namespace
+
+namespace detail {
+
+struct JointLayoutWork {
+  JointWorkMemo<JointVariantsKey, std::vector<ConstrainedRepresentation>> variants{96};
+  JointWorkMemo<JointLiteralKey, std::vector<LiteralLayout>> literals{128};
+  JointWorkMemo<JointClosureKey, JointClosureProof> closures{96};
+  JointWorkMemo<JointOrderProofKey, std::optional<OrderReductionTranslationProof>> order_proofs{16};
+};
+
+std::shared_ptr<JointLayoutWork> make_joint_layout_work() {
+  return std::make_shared<JointLayoutWork>();
+}
+
+JointLayoutWorkStats joint_layout_work_stats(const JointLayoutWork& work) {
+  return {work.variants.counts(), work.literals.counts(), work.closures.counts(),
+          work.order_proofs.counts()};
+}
+
+} // namespace detail
+
+namespace {
+
+struct JointLiteralLayouts {
+  std::shared_ptr<const std::vector<LiteralLayout>> layouts;
+  auto begin() const { return layouts->begin(); }
+  auto end() const { return layouts->end(); }
+};
+
+JointLiteralLayouts cached_literal_layouts(const std::vector<MachineItem>& items,
+    const PostLayoutControlFlowOptions& control, std::size_t limit) {
+  auto* work = detail::active_joint_layout_work.get();
+  const auto compute = [&] {
+    return passes::prepare_deferred_selector_data_literal_layouts(items, control, limit);
+  };
+  if (!limit || std::none_of(items.begin(), items.end(), [](const auto& item) {
+        return std::any_of(item.roles.begin(), item.roles.end(), [](const auto& role) {
+          return role.starts_with("selector-sunk-literal-id:");
+        });
+      })) {
+    static const auto empty = std::make_shared<const std::vector<LiteralLayout>>();
+    return {empty};
+  }
+  if (!work || items.size() > 512U)
+    return {std::make_shared<const std::vector<LiteralLayout>>(compute())};
+  auto& memo = work->literals;
+  return {memo.get(mix_joint_key(joint_item_key(items), limit),
+      [&](const JointLiteralKey& key) {
+        return key.limit == limit && key.control == control && same_layout_search_items(key.items, items);
+      }, [&] { return JointLiteralKey{items, control, limit}; }, compute)};
+}
 
 // A newly normalized identity root is not permission to replay every older
 // portfolio. Admit it for this compound family's actual producers/resources.
@@ -1090,6 +1353,7 @@ std::vector<ConstrainedRepresentation> literal_selector_equations(
 }
 
 using detail::PreparedJointProofInput;
+using detail::BorrowedJointProofInput;
 using detail::JointProofPreparationCounts;
 
 bool literal_family_owns_charges(
@@ -1097,26 +1361,24 @@ bool literal_family_owns_charges(
     const std::vector<MachineItem>& input) {
   const auto carrier=detail::joint_origin_register(preparation.selector_register);
   if (!carrier || *carrier<7 || *carrier>14) return false;
-  const std::set<std::string> certified_targets(preparation.charge_targets.begin(),
-                                                preparation.charge_targets.end());
+  const std::set<std::string, std::less<>> certified_targets(
+      preparation.charge_targets.begin(), preparation.charge_targets.end());
   if (!certified_targets.contains(preparation.target_label)) return false;
-  const std::string owner_role="late-decimal-selector-register:"+
-                              preparation.selector_register;
+  constexpr std::string_view owner_prefix = "late-decimal-selector-register:";
+  constexpr std::array<std::string_view, 3> charge_prefixes{
+      "late-decimal-selector-high:", "late-decimal-selector-low:", "late-decimal-selector-single:"};
   for (const auto& item:input) {
-    bool names_target=false;
-    for (const auto& certified_target:certified_targets)
-    for (const auto part:{LateBoundDecimalSelectorPart::High,
-                          LateBoundDecimalSelectorPart::Low,
-                          LateBoundDecimalSelectorPart::Single})
-      names_target=names_target ||
-          std::find(item.roles.begin(),item.roles.end(),
-              make_late_bound_decimal_selector_role(part,certified_target))
-              !=item.roles.end();
+    const bool names_target = std::any_of(item.roles.begin(), item.roles.end(), [&](std::string_view role) {
+      for (const auto prefix : charge_prefixes)
+        if (role.starts_with(prefix) &&
+            certified_targets.contains(role.substr(prefix.size()))) return true;
+      return false;
+    });
     if (!names_target) continue;
     int owners=0;
-    for (const auto& role:item.roles)
-      if (role.starts_with("late-decimal-selector-register:")) {
-        if (role!=owner_role) return false;
+    for (const std::string_view role : item.roles)
+      if (role.starts_with(owner_prefix)) {
+        if (role.substr(owner_prefix.size()) != preparation.selector_register) return false;
         ++owners;
       }
     if (owners!=1) return false;
@@ -1124,71 +1386,51 @@ bool literal_family_owns_charges(
   return true;
 }
 
-std::optional<LayoutSearchArtifact> close_representation_constraints(
-    const ConstrainedRepresentation& node, const passes::PassContext& context,
-    const PostLayoutControlFlowOptions& control_options, bool complete_preloads,
-    bool project_shared_tail,
-    const passes::DeferredSelectorDataLiteralLayout* pending_literal,
-    PreparedJointProofInput& proof_input, bool precise_entry_facts = false,
-    const OrderReductionLiteralDomain* literal_domain = nullptr,
-    std::optional<int> exclusive_result_limit = std::nullopt) {
-  if (literal_domain && (!pending_literal ||
-      literal_domain->family_id != pending_literal->family_id ||
-      literal_domain->original_seed != pending_literal->literal_value ||
-      literal_domain->minimum_seed < 10 || literal_domain->maximum_seed > 99 ||
-      literal_domain->minimum_seed > literal_domain->maximum_seed))
-    return std::nullopt;
-  const auto& input = proof_input.items();
-  // Ordinary placement only permutes cells and optionally adds padding. A
-  // caller that cannot use a neutral result need not prove such a placement.
-  if (exclusive_result_limit && !project_shared_tail &&
-      machine_cell_count(input) >= *exclusive_result_limit)
-    return std::nullopt;
-  const auto& flow = proof_input.flow();
-  if (!flow.proved)
-    return std::nullopt;
-  const auto positions = constraint_positions(input);
-  if (!positions)
-    return std::nullopt;
-  std::optional<SharedHelperDualModePreparation> preparation;
-  std::optional<std::vector<int>> projected_widths;
-  if (project_shared_tail) {
-    if (!complete_preloads) return std::nullopt;
-    preparation = prepare_shared_helper_dual_mode_layout(
-        input, flow, control_options.address_space_model);
-    if (preparation->applied <= 0) return std::nullopt;
-    projected_widths = shared_helper_dual_mode_projected_widths(*preparation);
-    if (!projected_widths || (exclusive_result_limit &&
-        std::accumulate(projected_widths->begin(), projected_widths->end(), 0) >=
-            *exclusive_result_limit))
-      return std::nullopt;
-  }
-  std::map<std::string, std::size_t> preload_by_register;
-  for (std::size_t i = 0; i < node.artifact.preloads.size(); ++i)
-    if (!preload_by_register.emplace(node.artifact.preloads[i].register_name, i).second)
-      return std::nullopt;
+// Projecting both ordinary tails removes at most six cells and replaces one
+// return by at least three (four in the six-cell case). A divergent operand
+// or padding can only increase the size. See shared_helper_dual_mode_projected_widths.
+constexpr int kSharedTailMaximumSaving = 3;
 
+constexpr int kJointMaximumRegionPadding = 16;
+
+struct JointSelectorConstraints {
   struct Selector {
-    std::string reg;
     int old_target = -1;
     std::set<std::string> labels;
     bool flexible = true;
   };
+  std::map<std::string, std::size_t> preload_by_register;
   std::map<std::string, Selector> selectors;
+  std::map<std::string, int> fixed;
+};
+
+std::optional<JointSelectorConstraints> prepare_joint_selector_constraints(
+    const ConstrainedRepresentation& node, PreparedJointProofInput& proof_input,
+    bool complete_preloads, bool precise_entry_facts, const LiteralLayout* pending_literal,
+    bool parametric_literal) {
+  const auto& input = proof_input.items();
+  const auto& flow = proof_input.flow();
+  if (!flow.proved) return std::nullopt;
+  JointSelectorConstraints result;
+  auto& preload_by_register = result.preload_by_register;
+  auto& selectors = result.selectors;
+  for (std::size_t i = 0; i < node.artifact.preloads.size(); ++i)
+    if (!preload_by_register.emplace(node.artifact.preloads[i].register_name, i).second)
+      return std::nullopt;
+
   const auto pending_origins = precise_entry_facts
       ? detail::joint_target_origins(input,node.targets,node.encoded_selectors)
       : std::optional<detail::JointOriginMap>{};
   if (precise_entry_facts && !pending_origins) return std::nullopt;
-  const auto precise_charges = precise_entry_facts
-      ? detail::protected_joint_runtime_charge_targets(input, &flow, &node.artifact.preloads, true, &*pending_origins)
-      : std::optional<detail::JointOriginMap>{};
   const auto& protected_charges = precise_entry_facts
-      ? precise_charges : proof_input.protected_runtime_charge_targets();
+      ? proof_input.precise_runtime_charge_targets(*pending_origins)
+      : proof_input.protected_runtime_charge_targets();
   if (!protected_charges) {
     if(std::getenv("MKPRO_NATIVE_TRACE_COPY_TRANSPORT"))std::cerr<<"[copy-transport-layout] protected charge preparation rejected\n";
     return std::nullopt;
   }
-  std::map<std::string, int> fixed = *protected_charges;
+  auto& fixed = result.fixed;
+  fixed = *protected_charges;
   if (pending_literal) {
     // This target is intentionally data, not an arbitrary private word.
     // Discharge only the owned family through its per-mode entry theorem;
@@ -1196,7 +1438,7 @@ std::optional<LayoutSearchArtifact> close_representation_constraints(
     if (!literal_family_owns_charges(*pending_literal,input)) return std::nullopt;
     for (const auto& certified_target:pending_literal->charge_targets) fixed.erase(certified_target);
 
-    if (!literal_domain) {
+    if (!parametric_literal) {
       const auto [binding,inserted] = fixed.emplace(
           pending_literal->target_label,pending_literal->literal_value);
       if (!inserted && binding->second != pending_literal->literal_value) return std::nullopt;
@@ -1213,7 +1455,6 @@ std::optional<LayoutSearchArtifact> close_representation_constraints(
       return std::nullopt;
     const std::string name(1, names[static_cast<std::size_t>(reg)]);
     auto& selector = selectors[name];
-    selector.reg = name;
     for (const auto& target : *item.indirect_flow_targets) {
       const auto* label = std::get_if<std::string>(&target);
       if (!label || !node.targets.contains(*label))
@@ -1256,11 +1497,102 @@ std::optional<LayoutSearchArtifact> close_representation_constraints(
           return std::nullopt;
       }
   }
+  return result;
+}
+
+std::optional<std::vector<int>> region_widths_for_machine_projection(
+    const std::vector<IrOp>& ops, const std::vector<int>& widths) {
+  std::vector<int> result;
+  result.reserve(ops.size());
+  std::size_t item = 0;
+  for (const auto& op : ops) {
+    const auto length = op.kind == IrKind::Label
+        ? 1U : static_cast<std::size_t>(passes::cells_per_op(op));
+    if (item + length > widths.size()) return std::nullopt;
+    int width = 0;
+    for (std::size_t cell = 0; cell < length; ++cell) width += widths[item++];
+    result.push_back(width);
+  }
+  if (item != widths.size()) return std::nullopt;
+  return result;
+}
+
+std::optional<LayoutSearchArtifact> close_representation_constraints_uncached(
+    const ConstrainedRepresentation& node, const passes::PassContext& context,
+    const PostLayoutControlFlowOptions& control_options, bool complete_preloads,
+    bool project_shared_tail,
+    const passes::DeferredSelectorDataLiteralLayout* pending_literal,
+    PreparedJointProofInput& proof_input, bool precise_entry_facts,
+    const OrderReductionLiteralDomain* literal_domain,
+    std::optional<int> exclusive_result_limit, int* proved_layout_width = nullptr,
+    std::optional<SharedHelperDualModePreparation>* prepared_tail = nullptr,
+    const JointSelectorConstraints* prepared_bindings = nullptr) {
+  if (literal_domain && (!pending_literal ||
+      literal_domain->family_id != pending_literal->family_id ||
+      literal_domain->original_seed != pending_literal->literal_value ||
+      literal_domain->minimum_seed < 10 || literal_domain->maximum_seed > 99 ||
+      literal_domain->minimum_seed > literal_domain->maximum_seed))
+    return std::nullopt;
+  const auto& input = proof_input.items();
+  // Ordinary placement only permutes cells and optionally adds padding. A
+  // caller that cannot use a neutral result need not prove such a placement.
+  if (exclusive_result_limit && !project_shared_tail &&
+      machine_cell_count(input) >= *exclusive_result_limit)
+    return std::nullopt;
+  const auto profile = effective_optimizer_feature_profile(context.options);
+  const bool conditional_underflow = std::any_of(input.begin(),input.end(),[](const auto& item) {
+    return std::find(item.roles.begin(),item.roles.end(),"zero-underflow-conditional-return")!=item.roles.end();
+  });
+  const bool complete_formal = complete_preloads && std::any_of(input.begin(), input.end(),
+      [](const auto& item) { return item.formal_opcode.has_value(); });
+  const int maximum_padding = precise_entry_facts || conditional_underflow || complete_formal
+      ? kJointMaximumRegionPadding : 0;
+  std::optional<std::vector<IrOp>> ordinary_ir;
+  if (pending_literal && !project_shared_tail) {
+    ordinary_ir = raise_machine_to_ir(input, profile);
+    const int first = literal_domain ? literal_domain->minimum_seed : pending_literal->literal_value;
+    const int last = literal_domain ? literal_domain->maximum_seed : pending_literal->literal_value;
+    if (!passes::unprojected_symbolic_region_target_may_fit(
+            *ordinary_ir, pending_literal->target_label, first, last, maximum_padding))
+      return std::nullopt;
+  }
+  const auto& flow = proof_input.flow();
+  if (!flow.proved)
+    return std::nullopt;
+  const auto positions = constraint_positions(input);
+  if (!positions)
+    return std::nullopt;
+  std::optional<SharedHelperDualModePreparation> preparation;
+  std::optional<std::vector<int>> projected_widths;
+  if (project_shared_tail) {
+    if (!complete_preloads) return std::nullopt;
+    if (prepared_tail && *prepared_tail)
+      preparation = std::move(*prepared_tail);
+    else
+      preparation = prepare_shared_helper_dual_mode_layout(
+          input, flow, control_options.address_space_model);
+    if (preparation->applied <= 0) return std::nullopt;
+    projected_widths = shared_helper_dual_mode_projected_widths(*preparation);
+    if (!projected_widths || (exclusive_result_limit &&
+        std::accumulate(projected_widths->begin(), projected_widths->end(), 0) >=
+            *exclusive_result_limit))
+      return std::nullopt;
+  }
+  std::optional<JointSelectorConstraints> owned;
+  if (!prepared_bindings) {
+    owned = prepare_joint_selector_constraints(node, proof_input, complete_preloads,
+        precise_entry_facts, pending_literal, literal_domain != nullptr);
+    if (!owned) return std::nullopt;
+    prepared_bindings = &*owned;
+  }
+  const auto& preload_by_register = prepared_bindings->preload_by_register;
+  const auto& selectors = prepared_bindings->selectors;
+  auto fixed = owned ? std::move(owned->fixed) : prepared_bindings->fixed;
   // A single constraint solution sees every codec's bounds and every remaining
   // immutable selector. No individual transformation chooses the block order.
   const auto& neutral_items = preparation ? preparation->items : input;
-  const auto neutral_ops = raise_machine_to_ir(
-      neutral_items, effective_optimizer_feature_profile(context.options));
+  const auto neutral_ops = ordinary_ir ? std::move(*ordinary_ir)
+                                      : raise_machine_to_ir(neutral_items, profile);
   std::optional<passes::SymbolicRegionProjection> projection;
   if (node.numeric_layout_certificate) {
     if (!node.numeric_layout_certificate->matches(neutral_items, node.artifact.preloads,
@@ -1301,36 +1633,24 @@ std::optional<LayoutSearchArtifact> close_representation_constraints(
       if (bound->second.first > bound->second.second) return std::nullopt;
     }
   }
-  const bool conditional_underflow = std::any_of(input.begin(),input.end(),[](const auto& item) {
-    return std::find(item.roles.begin(),item.roles.end(),"zero-underflow-conditional-return")!=item.roles.end();
-  });
   if (precise_entry_facts || conditional_underflow) {
     if (!projection) projection.emplace();
     projection->defer_indirect_entries = true;
-    projection->maximum_padding_cells = 16;
+    projection->maximum_padding_cells = maximum_padding;
     projection->preserve_formal_execution_frames = true;
     projection->relocate_canonical_formal_frames = complete_preloads;
   }
-  if (complete_preloads && std::any_of(input.begin(), input.end(),
-      [](const auto& item) { return item.formal_opcode.has_value(); })) {
+  if (complete_formal) {
     if (!projection) projection.emplace();
     projection->preserve_formal_execution_frames = true;
     projection->relocate_canonical_formal_frames = true;
-    projection->maximum_padding_cells = 16;
+    projection->maximum_padding_cells = maximum_padding;
   }
   if (preparation) {
-    const auto& widths = *projected_widths;
     if (!projection) projection.emplace();
-    std::size_t item = 0;
-    for (const auto& op : neutral_ops) {
-      const auto length = op.kind == IrKind::Label
-          ? 1U : static_cast<std::size_t>(passes::cells_per_op(op));
-      if (item + length > widths.size()) return std::nullopt;
-      int width = 0;
-      for (std::size_t cell = 0; cell < length; ++cell) width += widths[item++];
-      projection->cell_widths.push_back(width);
-    }
-    if (item != widths.size()) return std::nullopt;
+    auto widths = region_widths_for_machine_projection(neutral_ops, *projected_widths);
+    if (!widths) return std::nullopt;
+    projection->cell_widths = std::move(*widths);
     const auto [entry, inserted] = fixed.emplace(
         preparation->continuation.helper_label, preparation->required_final_start_address);
     if (!inserted && entry->second != preparation->required_final_start_address)
@@ -1409,6 +1729,7 @@ std::optional<LayoutSearchArtifact> close_representation_constraints(
   // Do not cap the geometry solver itself: a valid padded placement stops
   // the old solver before its widened-domain retry. Reject only that chosen
   // result, in lanes that would already reject it before any continuation.
+  if (proved_layout_width) *proved_layout_width = placed->projected_cells;
   if (exclusive_result_limit && placed->projected_cells >= *exclusive_result_limit)
     return std::nullopt;
   LayoutSearchArtifact output = node.artifact;
@@ -1457,7 +1778,7 @@ std::optional<LayoutSearchArtifact> close_representation_constraints(
       encoded_targets.emplace(name, selector.old_target);
     const auto merged = finalize_shared_helper_dual_mode_layout(
         *preparation, output.items, output.preloads,
-        build_post_layout_control_flow(output.items, control_options),
+        *shared_post_layout_control_flow(output.items, control_options),
         control_options.address_space_model, &encoded_targets);
     if (!merged.proof.proved || merged.applied <= 0) return std::nullopt;
     output.items = merged.items;
@@ -1505,10 +1826,10 @@ std::optional<LayoutSearchArtifact> close_representation_constraints(
   // legacy symbolic walk, which rejects every empty return even under that
   // independently established contract.
   if (!rebound) return std::nullopt;
-  const auto final_flow = build_post_layout_control_flow(rebound->items, control_options);
-  if (!final_flow.proved || (pending_literal &&
+  const auto final_flow = shared_post_layout_control_flow(rebound->items, control_options);
+  if (!final_flow->proved || (pending_literal &&
       !passes::prove_deferred_selector_data_literal_layout(
-          *pending_literal, rebound->items, final_flow)))
+          *pending_literal, rebound->items, *final_flow)))
     return std::nullopt;
   if (preparation && (cells(*rebound) != placed->projected_cells ||
       constraint_positions(rebound->items) != std::optional{placed->projected_targets}))
@@ -1520,6 +1841,79 @@ std::optional<LayoutSearchArtifact> close_representation_constraints(
         " literal cells and re-proved every final charge, entry, alias and stack/X1/X2 "
         "continuation. The independent historical search retains its complete budget."});
   return rebound;
+}
+
+std::optional<LayoutSearchArtifact> close_representation_constraints(
+    const ConstrainedRepresentation& node, const passes::PassContext& context,
+    const PostLayoutControlFlowOptions& control, bool complete_preloads,
+    bool projected, const LiteralLayout* literal, PreparedJointProofInput& proof,
+    bool precise_entry = false, const OrderReductionLiteralDomain* domain = nullptr,
+    std::optional<int> result_limit = std::nullopt,
+    std::optional<SharedHelperDualModePreparation>* prepared_tail = nullptr,
+    const JointSelectorConstraints* prepared_bindings = nullptr) {
+  const auto compute = [&](const ConstrainedRepresentation& source,
+                           int* proved_layout_width = nullptr) {
+    return close_representation_constraints_uncached(source, context, control,
+        complete_preloads, projected, literal, proof, precise_entry, domain, result_limit,
+        proved_layout_width, prepared_tail, prepared_bindings);
+  };
+  auto* work = detail::active_joint_layout_work.get();
+  const auto& items = proof.items();
+  if (!work || items.size() > 512U || proof.options() != control)
+    return compute(node);
+  // A cheap structural rejection is not worth owning a full proof key.
+  if ((result_limit && machine_cell_count(items) -
+          (projected ? kSharedTailMaximumSaving : 0) >= *result_limit) ||
+      (projected && (!complete_preloads || !has_shared_helper_continuation_shape(items))))
+    return std::nullopt;
+  const auto profile = effective_optimizer_feature_profile(context.options);
+  const auto decimal = context.options.ordinary_decimal_keyboard_input;
+  // The input carried by PreparedJointProofInput must describe the same
+  // preload environment as the equations being solved. If a caller carries
+  // a different proof environment, run it without sharing.
+  if (&proof.preloads() != &node.artifact.preloads &&
+      !same_joint_preloads(proof.preloads(), node.artifact.preloads))
+    return compute(node);
+  const auto same_literal = [&](const std::optional<LiteralLayout>& other) {
+    return other.has_value() == (literal != nullptr) && (!literal ||
+        std::tie(other->family_id, other->selector_register, other->target_label,
+                 other->literal_value, other->removed_cells, other->charge_targets) ==
+        std::tie(literal->family_id, literal->selector_register, literal->target_label,
+                 literal->literal_value, literal->removed_cells, literal->charge_targets));
+  };
+  const auto hash = mix_joint_key(joint_item_key(items), projected ? 1U : 0U);
+  const auto result = work->closures.get(hash,
+      [&](const JointClosureKey& key) {
+        return key.control == control && key.profile == profile && key.decimal_input == decimal &&
+            key.complete_preloads == complete_preloads && key.projected == projected &&
+            key.precise_entry == precise_entry &&
+            (!key.result_limit || (result_limit && *result_limit <= *key.result_limit)) &&
+            key.domain.has_value() == (domain != nullptr) && (!domain || *key.domain == *domain) &&
+            same_literal(key.literal) && same_joint_equations(key.proof, node) &&
+            same_joint_preloads(key.proof.artifact.preloads, node.artifact.preloads) &&
+            same_layout_search_items(key.proof.artifact.items, items);
+      }, [&] {
+        auto certificate = literal ? std::optional{*literal} : std::nullopt;
+        if (certificate) certificate->items.clear(); // the owned proof items are the actual image
+        return JointClosureKey{{{items, node.artifact.preloads, {}}, node.targets,
+                    node.encoded_selectors, node.numeric_layout_certificate}, control, profile,
+                decimal, complete_preloads, projected, precise_entry, std::move(certificate),
+                domain ? std::optional{*domain} : std::nullopt, result_limit};
+      }, [&] {
+        // No report is read inside this proof. Keep only its newly proved
+        // suffix; the caller's report path is added before its finalizer.
+        ConstrainedRepresentation source{{{}, node.artifact.preloads, {}},
+            node.targets, node.encoded_selectors, node.numeric_layout_certificate};
+        JointClosureProof proved;
+        proved.artifact = compute(source, &proved.layout_width);
+        return proved;
+      });
+  if (!result->artifact || (result_limit && result->layout_width >= *result_limit))
+    return std::nullopt;
+  auto owned = *result->artifact;
+  owned.optimizations.insert(owned.optimizations.begin(),
+      node.artifact.optimizations.begin(), node.artifact.optimizations.end());
+  return owned;
 }
 
 } // namespace
@@ -1539,14 +1933,14 @@ std::optional<ConstrainedRepresentation> zero_underflow_conditional_return(
       }))return std::nullopt;
   const auto ops=raise_machine_to_ir(parent.artifact.items,effective_optimizer_feature_profile(context.options));
   const auto input=lower_ir_to_machine(ops);
-  const auto full=build_post_layout_control_flow(input,control);
+  const auto full_owner=shared_post_layout_control_flow(input,control);
+  const auto& full=*full_owner;
   const auto origins=detail::joint_target_origins(input,parent.targets,parent.encoded_selectors);
   if(!full.proved || !origins)return std::nullopt;
-  const auto selected=build_deferred_selector_consistent_execution_graph(input,full,*origins,20000,true).execution;
-  if(!selected.proved)return std::nullopt;
-  auto data=full;data.execution_states.clear();
-  for(const auto s:selected.original_states)data.execution_states.push_back(full.execution_states[s]);
-  data.execution_successors=selected.successors;data.execution_edges=selected.execution_edges;
+  const auto selected=shared_deferred_selector_consistent_execution_graph(input,full_owner,*origins,20000,true);
+  const auto data_owner=shared_post_layout_projected_flow(full_owner,selected);
+  if(!data_owner)return std::nullopt;
+  const auto& data=*data_owner;
   const auto entries=resolve_post_layout_external_entry_contexts(full);
   if(!entries)return std::nullopt;
   std::vector<std::size_t> machine;std::map<std::size_t,std::size_t> ir_at;
@@ -1679,7 +2073,7 @@ std::optional<ConstrainedRepresentation> reopen_order_reduction_input(
   const auto flow=build_post_layout_control_flow(coalesced,control);
   if(!flow.proved)return std::nullopt;
   bool inverse=false;
-  for(const auto& pending:passes::prepare_deferred_selector_data_literal_layouts(
+  for(const auto& pending:cached_literal_layouts(
           opened.artifact.items,control,4))
     if(pending.family_id==family && passes::prove_deferred_selector_data_literal_layout(
           pending,coalesced,flow))inverse=true;
@@ -1691,16 +2085,58 @@ std::optional<ConstrainedRepresentation> reopen_order_reduction_input(
   return opened;
 }
 
-struct ProvedOrderReductionFamily {
+struct OrderReductionInput {
   ConstrainedRepresentation source;
   std::size_t store = 0, first = 0, last = 0;
-  OrderReductionLiteralDomain domain;
+  std::string family_id;
+  int seed = 0;
 };
 
-std::vector<ProvedOrderReductionFamily> prove_order_reduction_families(
+std::shared_ptr<const std::optional<OrderReductionTranslationProof>> prove_order_reduction_shape(
+    const std::vector<MachineItem>& input, const std::vector<PreloadReport>& preloads,
+    const std::shared_ptr<const AuthoritativePostLayoutControlFlow>& projection,
+    NumericRangeInputPolicy policy, std::size_t first, std::size_t last) {
+  using Proof = std::optional<OrderReductionTranslationProof>;
+  const auto& flow = *projection;
+  const auto compute = [&]() -> Proof {
+    const auto lift = analyze_post_layout_automatic_entry_lift_with_indirect_store_facts(input, flow, 200000);
+    if (!lift) return std::nullopt;
+    if (order_reduction_translation_is_structurally_impossible(input, flow, *lift, first, last))
+      return std::nullopt;
+    std::vector<std::size_t> queries;
+    for (std::size_t at = 0; at < input.size(); ++at)
+      if (input[at].kind == MachineItemKind::Op) queries.push_back(at);
+    const auto bounds = prove_post_layout_bounded_stack_numeric_values(
+        input, flow, *lift, queries, preloads, 2000000, policy);
+    return prove_order_reduction_translation(input, flow, *lift, bounds, first, last);
+  };
+  auto* work = detail::active_joint_layout_work.get();
+  const char* numeric_cache = std::getenv("MKPRO_NATIVE_NUMERIC_PROOF_CACHE");
+  // Retain only the compact relational answer, not the bounded-product graph
+  // or its numeric facts. Own the immutable input as long as it is cached.
+  if (!work || input.size() > 512U || flow.execution_states.size() > 2048U ||
+      (numeric_cache && std::string_view(numeric_cache) == "0"))
+    return std::make_shared<const Proof>(compute());
+  auto key = mix_joint_key(joint_item_key(input), first);
+  key = mix_joint_key(key, last);
+  key = mix_joint_key(key, static_cast<std::size_t>(policy));
+  key = mix_joint_key(key, flow.execution_states.size());
+  for (const auto& word : preloads) {
+    key = mix_joint_key(key, std::hash<std::string>{}(word.register_name));
+    key = mix_joint_key(key, std::hash<std::string>{}(word.value));
+  }
+  return work->order_proofs.get(key, [&](const JointOrderProofKey& entry) {
+    return entry.first == first && entry.last == last && entry.policy == policy &&
+        same_joint_preloads(entry.preloads, preloads) &&
+        same_order_proof_items(entry.items, input) &&
+        (entry.flow == projection || *entry.flow == flow);
+  }, [&] { return JointOrderProofKey{input, preloads, projection, policy, first, last}; }, compute);
+}
+
+std::vector<OrderReductionInput> order_reduction_inputs(
     const ConstrainedRepresentation& node, const CompileOptions& options,
     const PostLayoutControlFlowOptions& control, bool reconsider_rebased = false) {
-  std::vector<ProvedOrderReductionFamily> result;
+  std::vector<OrderReductionInput> result;
   if (!options.ordinary_decimal_keyboard_input && std::any_of(node.artifact.items.begin(),
       node.artifact.items.end(), [](const auto& item) { return item.manual_interaction.has_value(); }))
     return result;
@@ -1720,7 +2156,7 @@ std::vector<ProvedOrderReductionFamily> prove_order_reduction_families(
     if (marker == owner.roles.end()) continue;
     const auto literal = marker->substr(prefix.size());
     if (literal.size() != 2 || literal[0] < '1' || literal[0] > '9' || literal[1] < '0' || literal[1] > '9') continue;
-    const auto opened=reopen_order_reduction_input(node,store,literal,control);
+    auto opened=reopen_order_reduction_input(node,store,literal,control);
     if(!opened)continue;
     const auto& input=opened->artifact.items;
     const auto next_command = [&](std::size_t at) {
@@ -1730,41 +2166,41 @@ std::vector<ProvedOrderReductionFamily> prove_order_reduction_families(
     const auto first = next_command(store), last = next_command(first);
     if (last >= input.size() || input[first].opcode != literal[0] - '0' ||
         input[last].opcode != literal[1] - '0') continue;
-    auto flow = build_post_layout_control_flow(input, control);
-    const auto origins = detail::joint_target_origins(input, opened->targets, opened->encoded_selectors);
-    if (!flow.proved || !origins) continue;
-    const auto selected = build_deferred_selector_consistent_execution_graph(
-        input, flow, *origins, 20000, true).execution;
-    if (!selected.proved) continue;
-    const auto original = flow.execution_states;
-    flow.execution_states.clear();
-    for (const auto state : selected.original_states) flow.execution_states.push_back(original[state]);
-    flow.execution_successors = selected.successors; flow.execution_edges = selected.execution_edges;
-    const auto lift = analyze_post_layout_automatic_entry_lift_with_indirect_store_facts(input, flow, 200000);
-    if (!lift) continue;
-    std::vector<std::size_t> queries;
-    for (std::size_t at = 0; at < input.size(); ++at)
-      if (input[at].kind == MachineItemKind::Op) queries.push_back(at);
-    const auto policy = options.ordinary_decimal_keyboard_input
-        ? NumericRangeInputPolicy::ValidatedOrdinaryDecimalInput
-        : NumericRangeInputPolicy::ValidatedRegisterTransport;
-    const auto bounds = prove_post_layout_bounded_stack_numeric_values(
-        input, flow, *lift, queries, opened->artifact.preloads, 2000000, policy);
-    const auto proof = prove_order_reduction_translation(input, flow, *lift, bounds, first, last);
-    if (!proof.proved) {
-      if (std::getenv("MKPRO_NATIVE_TRACE_ORDER_REDUCTION"))
-        for (const auto& reason : proof.reasons) std::cerr << "[order-reduction] " << reason << '\n';
-      continue;
-    }
     std::string identity;
     constexpr std::string_view identity_prefix = "selector-sunk-literal-id:";
     for (const auto& role : owner.roles)
       if (role.starts_with(identity_prefix)) identity = role.substr(identity_prefix.size());
     const int original_seed = (literal[0] - '0') * 10 + literal[1] - '0';
-    result.push_back({*opened, store, first, last,
-        {identity, original_seed, std::max(10, proof.minimum_seed), std::min(99, proof.maximum_seed)}});
+    result.push_back({std::move(*opened), store, first, last, std::move(identity), original_seed});
   }
   return result;
+}
+
+std::optional<OrderReductionLiteralDomain> prove_order_reduction_domain(
+    const OrderReductionInput& family, const CompileOptions& options,
+    const PostLayoutControlFlowOptions& control) {
+  const auto& source = family.source;
+  const auto& input = source.artifact.items;
+  const auto cfg = shared_post_layout_control_flow(input, control);
+  const auto origins = detail::joint_target_origins(input, source.targets, source.encoded_selectors);
+  if (!cfg->proved || !origins) return std::nullopt;
+  const auto selected = shared_deferred_selector_consistent_execution_graph(input, cfg, *origins, 20000, true);
+  const auto projection = shared_post_layout_projected_flow(cfg, selected);
+  if (!projection) return std::nullopt;
+  const auto policy = options.ordinary_decimal_keyboard_input
+      ? NumericRangeInputPolicy::ValidatedOrdinaryDecimalInput
+      : NumericRangeInputPolicy::ValidatedRegisterTransport;
+  const auto proved = prove_order_reduction_shape(
+      input, source.artifact.preloads, projection, policy, family.first, family.last);
+  if (!*proved) return std::nullopt;
+  const auto& proof = **proved;
+  if (!proof.proved) {
+    if (std::getenv("MKPRO_NATIVE_TRACE_ORDER_REDUCTION"))
+      for (const auto& reason : proof.reasons) std::cerr << "[order-reduction] " << reason << '\n';
+    return std::nullopt;
+  }
+  return OrderReductionLiteralDomain{family.family_id, family.seed,
+      std::max(10, proof.minimum_seed), std::min(99, proof.maximum_seed)};
 }
 
 std::vector<ConstrainedRepresentation> order_reduction_translation_roots(
@@ -1772,8 +2208,10 @@ std::vector<ConstrainedRepresentation> order_reduction_translation_roots(
     const PostLayoutControlFlowOptions& control, bool reconsider_rebased = false,
     const std::set<int>* demanded_seeds = nullptr) {
   std::vector<ConstrainedRepresentation> result;
-  for (const auto& family : prove_order_reduction_families(node, options, control, reconsider_rebased)) {
-    const auto& domain = family.domain;
+  for (const auto& family : order_reduction_inputs(node, options, control, reconsider_rebased)) {
+    const auto proved = prove_order_reduction_domain(family, options, control);
+    if (!proved) continue;
+    const auto& domain = *proved;
     for (int seed = domain.minimum_seed; seed <= domain.maximum_seed; ++seed) {
       if (seed == domain.original_seed || (demanded_seeds && !demanded_seeds->contains(seed))) continue;
       auto candidate = family.source;
@@ -1811,8 +2249,8 @@ parametric_order_reduction_layout_transactions(const ConstrainedRepresentation& 
   auto configured = options;
   configured.defer_return_suffix_until_callee_hole = true;
   const passes::PassContext context{configured};
-  for (const auto& family : prove_order_reduction_families(root, options, control, true)) {
-    if (family.domain.family_id.empty()) continue;
+  for (const auto& family : order_reduction_inputs(root, options, control, true)) {
+    if (family.family_id.empty()) continue;
     // The literal inverse is proved before moving any callback. A previous
     // translation is not a frozen choice: prove its full domain again.
     std::vector<ConstrainedRepresentation> sources{family.source};
@@ -1858,16 +2296,65 @@ parametric_order_reduction_layout_transactions(const ConstrainedRepresentation& 
         sources.push_back(std::move(*folded));
       }
     }
-    for (const auto& source : sources)
-      for (const auto& pending : passes::prepare_deferred_selector_data_literal_layouts(
+    std::optional<OrderReductionLiteralDomain> domain;
+    bool rejected = false;
+    for (const auto& source : sources) {
+      for (const auto& pending : cached_literal_layouts(
           source.artifact.items, control, 4)) {
-        if (pending.family_id != family.domain.family_id ||
-            pending.literal_value != family.domain.original_seed) continue;
-        PreparedJointProofInput proof(pending.items, source.artifact.preloads, control);
+        if (pending.family_id != family.family_id || pending.literal_value != family.seed)
+          continue;
+        const auto width = machine_cell_count(pending.items);
+        const auto limit = finalize ? std::nullopt : std::optional{origin_cells};
+        const auto profile = effective_optimizer_feature_profile(options);
+        std::optional<std::vector<IrOp>> ordinary;
+        bool fits_without_tail = finalize || width < origin_cells;
+        if (fits_without_tail) {
+          ordinary = raise_machine_to_ir(pending.items, profile);
+          fits_without_tail = passes::unprojected_symbolic_region_target_may_fit(
+              *ordinary, pending.target_label, 10, 99, kJointMaximumRegionPadding);
+        }
+        bool fits_with_tail = (finalize || width - kSharedTailMaximumSaving < origin_cells) &&
+            has_shared_helper_continuation_shape(pending.items);
+        if (!fits_without_tail && !fits_with_tail) continue;
+        PreparedJointProofInput proof(BorrowedJointProofInput{pending.items, source.artifact.preloads}, control);
+        const auto bindings = prepare_joint_selector_constraints(source, proof, true, true, &pending, true);
+        if (!bindings) continue;
+        if (fits_without_tail)
+          fits_without_tail = passes::symbolic_region_constraints_may_fit(
+              *ordinary, {}, bindings->fixed, pending.target_label, 10, 99,
+              kJointMaximumRegionPadding, limit);
+
+        std::optional<SharedHelperDualModePreparation> prepared_tail;
+        // When only the projected lane remains, test its actual widths
+        // and helper anchor. Keep its preparation for the exact closure.
+        if (!fits_without_tail && fits_with_tail) {
+          prepared_tail = prepare_shared_helper_dual_mode_layout(
+              pending.items, proof.flow(), control.address_space_model);
+          const auto widths = shared_helper_dual_mode_projected_widths(*prepared_tail);
+          if (!widths) continue;
+          const auto ops = raise_machine_to_ir(prepared_tail->items, profile);
+          const auto ir_widths = region_widths_for_machine_projection(ops, *widths);
+          if (!ir_widths) continue;
+          auto fixed = bindings->fixed;
+          const int address = prepared_tail->required_final_start_address;
+          const auto [anchor, added] = fixed.emplace(prepared_tail->continuation.helper_label, address);
+          fits_with_tail = (added || anchor->second == address) &&
+              passes::symbolic_region_constraints_may_fit(ops, *ir_widths, fixed,
+                  pending.target_label, 10, 99, kJointMaximumRegionPadding, limit);
+        }
+        if (!fits_without_tail && !fits_with_tail) continue;
+        // These are only necessary conditions on the layout. Prove the
+        // actual domain on the original, untransformed literal input and
+        // never replace the full placement with the optimistic 10..99 check.
+        if (!domain) {
+          domain = prove_order_reduction_domain(family, options, control);
+          if (!domain) { rejected = true; break; }
+        }
         for (const bool projected : {false, true}) {
+           if (projected ? !fits_with_tail : !fits_without_tail) continue;
            auto closed = close_representation_constraints(source, context, control,
-               true, projected, &pending, proof, true, &family.domain,
-               finalize ? std::nullopt : std::optional{origin_cells});
+               true, projected, &pending, proof, true, &*domain,
+               limit, projected ? &prepared_tail : nullptr, &*bindings);
           if (!closed) continue;
           // The parameter has become a concrete data/address equality. Retain
           // that witness across the caller's finalizer, not the old seed from
@@ -1891,8 +2378,8 @@ parametric_order_reduction_layout_transactions(const ConstrainedRepresentation& 
             }
             if (!closed) break;
           }
-          if (!closed || !selected_seed || *selected_seed < family.domain.minimum_seed ||
-              *selected_seed > family.domain.maximum_seed) continue;
+          if (!closed || !selected_seed || *selected_seed < domain->minimum_seed ||
+              *selected_seed > domain->maximum_seed) continue;
           delivered.literal_value = *selected_seed;
           if (finalize) closed = finalize(*closed);
           if (!closed || cells(*closed) >= origin_cells) continue;
@@ -1905,6 +2392,8 @@ parametric_order_reduction_layout_transactions(const ConstrainedRepresentation& 
               })) result.push_back({std::move(*closed), "parametric-order-reduction-layout", true});
         }
       }
+      if (rejected) break;
+    }
   }
   return result;
 }
@@ -2004,21 +2493,15 @@ TransactionSearchResult<LayoutSearchArtifact> search_joint_representation_constr
       // every address/preload equation is still closed by the same finalizer.
       if (std::any_of(parent.artifact.preloads.begin(), parent.artifact.preloads.end(),
           [](const auto& word) { return detail::joint_literal_word(word) && word.value == "-99999999"; })) {
-        auto flow = build_post_layout_control_flow(parent.artifact.items, control_options);
-        const auto selected = build_deferred_selector_consistent_execution_graph(
-            parent.artifact.items, flow, *data_origins, 20000, true).execution;
-        if (selected.proved) {
-          const auto original = flow.execution_states;
-          flow.execution_states.clear();
-          for (const auto state : selected.original_states)
-            flow.execution_states.push_back(original[state]);
-          flow.execution_successors = selected.successors;
-          flow.execution_edges = selected.execution_edges;
+        const auto cfg = shared_post_layout_control_flow(parent.artifact.items, control_options);
+        const auto selected = shared_deferred_selector_consistent_execution_graph(
+            parent.artifact.items, cfg, *data_origins, 20000, true);
+        if (const auto flow = shared_post_layout_projected_flow(cfg, selected)) {
           std::map<std::string, std::string> words;
           for (const auto& word : parent.artifact.preloads)
             if (detail::joint_literal_word(word)) words.emplace(word.register_name, word.value);
           add(passes::rematerialize_zero_underflow_constant(ops, words,
-                  control_options.address_space_model, &flow),
+                  control_options.address_space_model, flow.get()),
               "pooled-constant-materialization-equations");
           add(passes::permuted_zero_underflow_constant(ops, parent.artifact.preloads,
                   control_options), "direct-home-materialization-equations");
@@ -2349,7 +2832,7 @@ TransactionSearchResult<LayoutSearchArtifact> search_joint_representation_constr
   // neutral variant whose geometry wins only after shared-tail projection.
   // Selector digits still belong to their encoded carrier, not its provisional
   // destination. Conflicting origins cannot certify a pruned execution graph.
-  const auto coalesced_variants = [&](const ConstrainedRepresentation& node) {
+  const auto build_coalesced_variants = [&](const ConstrainedRepresentation& node) {
     std::vector<ConstrainedRepresentation> variants{node};
     if (!preload_environment_complete) return variants;
     const auto origins = detail::joint_target_origins(
@@ -2436,13 +2919,41 @@ TransactionSearchResult<LayoutSearchArtifact> search_joint_representation_constr
     }
     return variants;
   };
+  auto* joint_work = detail::active_joint_layout_work.get();
+  const auto variant_options = joint_work ? representation_context_key(configured) : std::string{};
+  const auto coalesced_variants = [&](const ConstrainedRepresentation& node) {
+    if (!joint_work || !preload_environment_complete || node.artifact.items.size() > 512U)
+      return build_coalesced_variants(node);
+    const auto hash = mix_joint_key(joint_item_key(node.artifact.items),
+        std::hash<std::string>{}(variant_options));
+    const auto alternatives = joint_work->variants.get(hash, [&](const JointVariantsKey& key) {
+      return key.options == variant_options && key.coupled_geometry == coupled_geometry &&
+          same_joint_limits(key.limits, limits) && same_joint_equations(key.node, node) &&
+          same_layout_search_artifact(key.node.artifact, node.artifact);
+    }, [&] {
+      auto key = node;
+      key.artifact.optimizations.clear();
+      return JointVariantsKey{std::move(key), variant_options, limits, coupled_geometry};
+    }, [&] {
+      // These transforms inspect IR and address/data facts, not the incoming
+      // history. Store relative reports and never substitute another path.
+      auto input = node;
+      input.artifact.optimizations.clear();
+      return build_coalesced_variants(input);
+    });
+    auto owned = *alternatives;
+    for (auto& variant : owned)
+      variant.artifact.optimizations.insert(variant.artifact.optimizations.begin(),
+          node.artifact.optimizations.begin(), node.artifact.optimizations.end());
+    return owned;
+  };
 
   // Conditional data/control rewrites must not alter the historical beam,
   // pruning incumbent or equal-size winner. Evaluate them in a separate
   // closure lane, borrowing exactly the already-admitted representation and
   // allocation states. No larger search limits or source-specific seeds.
   std::optional<LayoutSearchArtifact> data_control_incumbent;
-  std::vector<ConstrainedRepresentation> closed_parametric_roots;
+  std::unordered_map<std::size_t, std::vector<ConstrainedRepresentation>> closed_parametric_roots;
   const auto needs_literal_closure = [&](const ConstrainedRepresentation& node) {
     if (!preload_environment_complete || limits.maximum_expansions == 0 ||
         limits.maximum_candidates == 0 || limits.maximum_depth == 0)
@@ -2457,29 +2968,37 @@ TransactionSearchResult<LayoutSearchArtifact> search_joint_representation_constr
                 return a.name == b.name && a.detail == b.detail;
               });
     };
-    if (std::any_of(closed_parametric_roots.begin(), closed_parametric_roots.end(), same_pending)) {
+    auto& bucket = closed_parametric_roots[joint_item_key(node.artifact.items)];
+    if (std::any_of(bucket.begin(), bucket.end(), same_pending)) {
       ++joint_literal_closure_reuses;
       return false;
     }
     // Both the discrete and parametric closures are pure in this invocation.
     // In particular the final initial-root visit must not replay all discrete
     // placements merely because only the parametric half used to be memoized.
-    closed_parametric_roots.push_back(node);
+    bucket.push_back(node);
     return true;
   };
   const auto prove_literal_closures = [&](const ConstrainedRepresentation& literal_root,
-      JointProofPreparationCounts& counts) -> std::optional<LayoutSearchArtifact> {
+      JointProofPreparationCounts& counts, const LayoutSearchArtifact* prior = nullptr)
+          -> std::optional<LayoutSearchArtifact> {
     std::optional<LayoutSearchArtifact> best;
-    for (const auto& pending : passes::prepare_deferred_selector_data_literal_layouts(
+    const int incumbent_cells = prior ? std::min(origin_cells, cells(*prior)) : origin_cells;
+    // The discrete family removes a private one/two-digit literal. No
+    // rejected size can be returned as a continuation from this lane.
+    const bool possibly_smaller = finalize ||
+        cells(literal_root.artifact) - 2 - kSharedTailMaximumSaving < incumbent_cells;
+    const auto layouts = possibly_smaller ? cached_literal_layouts(
              literal_root.artifact.items, control_options,
-             std::min<std::size_t>(4, limits.maximum_candidates))) {
-      PreparedJointProofInput proof_input(pending.items,literal_root.artifact.preloads,
+             std::min<std::size_t>(4, limits.maximum_candidates)) : JointLiteralLayouts{};
+    if (layouts.layouts) for (const auto& pending : layouts) {
+      PreparedJointProofInput proof_input(BorrowedJointProofInput{pending.items, literal_root.artifact.preloads},
                                           control_options,&counts);
       for (const bool projected : {false, true}) {
         auto closed = close_representation_constraints(
              literal_root, context, control_options, true, projected, &pending, proof_input,
              pending_root != nullptr, nullptr,
-             finalize ? std::nullopt : std::optional{origin_cells});
+             finalize ? std::nullopt : std::optional{best ? cells(*best) : incumbent_cells});
         if (!closed) continue;
         // A temporarily larger placement can still repay its bounded debt in
         // finalization. Only the complete artifact competes with incumbents.
@@ -2492,14 +3011,14 @@ TransactionSearchResult<LayoutSearchArtifact> search_joint_representation_constr
           if (!delivered_flow.proved || !passes::prove_deferred_selector_data_literal_layout(
                   pending,closed->items,delivered_flow)) closed.reset();
         }
-        if (closed && cells(*closed) < origin_cells &&
+        if (closed && cells(*closed) < incumbent_cells &&
             (!best || cells(*closed) < cells(*best)))
           best = std::move(closed);
       }
     }
     for (auto& edge : parametric_order_reduction_layout_transactions(
              literal_root, options, control_options, origin_cells, finalize))
-      if (!best || cells(edge.node) < cells(*best))
+      if (cells(edge.node) < incumbent_cells && (!best || cells(edge.node) < cells(*best)))
         best = std::move(edge.node);
     return best;
   };
@@ -2515,7 +3034,8 @@ TransactionSearchResult<LayoutSearchArtifact> search_joint_representation_constr
   };
   const auto close_data_control_literals = [&](const ConstrainedRepresentation& node) {
     if (needs_literal_closure(node))
-      offer_literal_closure(prove_literal_closures(node, proof_counts));
+      offer_literal_closure(prove_literal_closures(node, proof_counts,
+          data_control_incumbent ? &*data_control_incumbent : nullptr));
   };
   // This independent closure is useful even when the old discrete frontier
   // has no profitable first edge. Do not demand a sacrificial rewrite before
@@ -2558,11 +3078,12 @@ TransactionSearchResult<LayoutSearchArtifact> search_joint_representation_constr
         // must not hide a different placement that wins only after composition.
         const auto variants = coalesced_variants(node);
         for (const auto& variant : variants) {
-          PreparedJointProofInput proof_input(variant.artifact.items,variant.artifact.preloads,
+          PreparedJointProofInput proof_input(BorrowedJointProofInput{variant.artifact.items, variant.artifact.preloads},
                                              control_options,&proof_counts);
           for (const bool projected : {false, true}) {
           auto closed = close_representation_constraints(
-              variant, context, control_options, preload_environment_complete, projected, nullptr, proof_input, pending_root != nullptr);
+              variant, context, control_options, preload_environment_complete, projected, nullptr,
+              proof_input, pending_root != nullptr);
           if (!closed) continue;
           std::string chain;
           for (const auto& rule : path) {
@@ -2710,6 +3231,7 @@ TransactionSearchResult<LayoutSearchArtifact> search_joint_representation_constr
     const auto prove_allocation = [&](const ConstrainedRepresentation& source,
                                        const auto& allocation,
                                        const std::map<std::string, int>& encoded,
+                                       int exclusive_limit,
                                        AllocationProofs& proof) {
         ConstrainedRepresentation allocated = source;
         allocated.artifact.items = allocation.items;
@@ -2790,15 +3312,15 @@ TransactionSearchResult<LayoutSearchArtifact> search_joint_representation_constr
         }
         }
         for (const auto& variant : variants) {
-          PreparedJointProofInput proof_input(variant.artifact.items,variant.artifact.preloads,
+          PreparedJointProofInput proof_input(BorrowedJointProofInput{variant.artifact.items, variant.artifact.preloads},
                                              control_options,&proof.counts);
           for (bool projected : {false, true}) {
             auto closed = close_representation_constraints(
                  variant, context, control_options, true, projected, nullptr, proof_input,
-                 pending_root != nullptr, nullptr, origin_cells);
+                 pending_root != nullptr, nullptr, exclusive_limit);
             // Geometry alone is not a saving. Avoid running the full compiler
             // finalizer on an unpaid release/bridge, even if its CFG is valid.
-            if (!closed || cells(*closed) >= origin_cells) continue;
+            if (!closed || cells(*closed) >= exclusive_limit) continue;
             closed->optimizations.push_back({"joint-selector-allocation-layout",
                 "Closed complete-family allocation, region geometry and pending continuation "
                 "sharing atomically; independently checked delivered selectors and callbacks."});
@@ -2817,9 +3339,11 @@ TransactionSearchResult<LayoutSearchArtifact> search_joint_representation_constr
       const auto batch_size = static_cast<std::size_t>(detail::layout_worker_count()) * 2U;
       for (std::size_t first = 0; first < allocations.size();) {
         const auto count = std::min(batch_size, allocations.size() - first);
+        const int exclusive_limit = !finalize && output.incumbent
+            ? std::min(origin_cells, cells(*output.incumbent)) : origin_cells;
         std::vector<AllocationProofs> batch(count);
         detail::evaluate_layout_jobs(count, [&](std::size_t at) {
-          prove_allocation(*source, allocations[first + at], encoded, batch[at]);
+          prove_allocation(*source, allocations[first + at], encoded, exclusive_limit, batch[at]);
         });
         if (!finalize) {
           // The deduplication ledger belongs to the search thread. Workers
@@ -2832,7 +3356,9 @@ TransactionSearchResult<LayoutSearchArtifact> search_joint_representation_constr
           detail::evaluate_layout_jobs(count, [&](std::size_t at) {
             auto& proof = batch[at];
             for (const auto* pending_variant : proof.literal_roots) {
-              auto closed = prove_literal_closures(*pending_variant, proof.literal_counts);
+              const auto* prior = proof.literal_winner ? &*proof.literal_winner :
+                  (data_control_incumbent ? &*data_control_incumbent : nullptr);
+              auto closed = prove_literal_closures(*pending_variant, proof.literal_counts, prior);
               if (closed && (!proof.literal_winner ||
                   cells(*closed) < cells(*proof.literal_winner)))
                 proof.literal_winner = std::move(closed);
@@ -3089,7 +3615,7 @@ addressed_return_pooling_layout_transactions(
   if (!refresh_constraint_targets(root)) return {};
   std::vector<ProvedSearchTransition<LayoutSearchArtifact>> result;
   for (const auto& candidate : pool_addressed_return_targets(root, control)) {
-    PreparedJointProofInput proof(candidate.artifact.items, candidate.artifact.preloads, control);
+    PreparedJointProofInput proof(BorrowedJointProofInput{candidate.artifact.items, candidate.artifact.preloads}, control);
     auto closed = close_representation_constraints(
         candidate, {configured}, control, true, false, nullptr, proof, true, nullptr, cells(artifact));
     if (closed && cells(*closed) < cells(artifact))
@@ -3153,7 +3679,7 @@ zero_underflow_conditional_return_layout_transactions(
   }
   std::vector<ProvedSearchTransition<LayoutSearchArtifact>> result;
   for (const auto& [candidate,refold] : candidates) {
-    PreparedJointProofInput proof(candidate.artifact.items,candidate.artifact.preloads,control);
+    PreparedJointProofInput proof(BorrowedJointProofInput{candidate.artifact.items, candidate.artifact.preloads}, control);
     auto closed=close_representation_constraints(candidate,context,control,true,refold,
         nullptr,proof,true,nullptr,cells(artifact));
     if(!closed || cells(*closed)>=cells(artifact))continue;
@@ -3200,9 +3726,9 @@ zero_underflow_conditional_return_layout_transactions(
     if(demanded_seed_values.empty())continue;
     for(const auto& translated:order_reduction_translation_roots(
         candidate,configured,control,true,&demanded_seed_values))
-      for(const auto& pending:passes::prepare_deferred_selector_data_literal_layouts(
+      for(const auto& pending:cached_literal_layouts(
           translated.artifact.items,control,4)) {
-        PreparedJointProofInput proof(pending.items,translated.artifact.preloads,control);
+        PreparedJointProofInput proof(BorrowedJointProofInput{pending.items, translated.artifact.preloads}, control);
         auto closed=close_representation_constraints(translated,context,control,
              true,refold,&pending,proof,true,nullptr,cells(artifact));
         if(!closed || cells(*closed)>=cells(artifact))continue;
@@ -3279,7 +3805,7 @@ preloaded_finite_state_layout_transactions(const LayoutSearchArtifact& artifact,
     if (!valid) continue;
     ConstrainedRepresentation node{std::move(*child), proposal.required_target_addresses,
         {},proposal.numeric_layout_certificate};
-    detail::PreparedJointProofInput proof_input(node.artifact.items, node.artifact.preloads, control);
+    PreparedJointProofInput proof_input(BorrowedJointProofInput{node.artifact.items, node.artifact.preloads}, control);
     auto closed = close_representation_constraints(
         node, context, control, true, false, nullptr, proof_input, true, nullptr, cells(artifact));
     if (!closed || cells(*closed) >= cells(artifact)) continue;
@@ -3300,14 +3826,15 @@ std::vector<ConstrainedRepresentation> deferred_recolored_copy_stores(
     const PostLayoutControlFlowOptions& control) {
   std::vector<ConstrainedRepresentation> result;
   const auto code=raise_machine_to_ir(root.artifact.items,effective_optimizer_feature_profile(context.options));
-  const auto input=lower_ir_to_machine(code);const auto flow=build_post_layout_control_flow(input,control);
+  const auto input=lower_ir_to_machine(code);
+  const auto cfg=shared_post_layout_control_flow(input,control);
+  const auto& flow=*cfg;
   const auto origins=detail::joint_target_origins(input,root.targets,root.encoded_selectors);
   if(!flow.proved || !origins)return result;
-  const auto selected=build_deferred_selector_consistent_execution_graph(input,flow,*origins).execution;
-  if(!selected.proved)return result;
-  auto data=flow;data.execution_states.clear();
-  for(auto s:selected.original_states)data.execution_states.push_back(flow.execution_states[s]);
-  data.execution_successors=selected.successors;data.execution_edges=selected.execution_edges;
+  const auto selected=shared_deferred_selector_consistent_execution_graph(input,cfg,*origins);
+  const auto data_owner=shared_post_layout_projected_flow(cfg,selected);
+  if(!data_owner)return result;
+  const auto& data=*data_owner;
   std::vector<std::size_t> machine;std::size_t item=0;
   for(const auto& op:code){machine.push_back(item);item+=lower_ir_to_machine({op}).size();}
   std::size_t attempts=0;
@@ -3434,7 +3961,7 @@ TransactionSearchResult<LayoutSearchArtifact> close_quantized_return_composition
         if(attempted++>=candidate_limit)return result;
         if(!transaction_growth_fits(cells(root),cells(candidate.artifact),limits.maximum_growth_cells))continue;
         ++result.admitted;
-        PreparedJointProofInput proof(candidate.artifact.items,candidate.artifact.preloads,control);
+        PreparedJointProofInput proof(BorrowedJointProofInput{candidate.artifact.items, candidate.artifact.preloads}, control);
         for(bool shared:{false,true}){
            auto closed=close_representation_constraints(candidate,context,control,true,shared,
                nullptr,proof,true,nullptr,cells(root));
@@ -4071,15 +4598,13 @@ contextual_copy_transport_layout_transactions_impl(const LayoutSearchArtifact& a
       if(materialized>=8U)break;
       const auto root=allocations[n];
       const auto code=raise_machine_to_ir(root.artifact.items,effective_optimizer_feature_profile(options));
-      auto flow=build_post_layout_control_flow(root.artifact.items,control);
+      const auto cfg=shared_post_layout_control_flow(root.artifact.items,control);
       const auto origins=detail::joint_target_origins(root.artifact.items,root.targets,root.encoded_selectors);
       if(!origins)continue;
-      const auto selected=build_deferred_selector_consistent_execution_graph(root.artifact.items,flow,*origins).execution;
-      if(!selected.proved)continue;
-      const auto states=flow.execution_states;flow.execution_states.clear();
-      for(auto s:selected.original_states)flow.execution_states.push_back(states[s]);
-      flow.execution_successors=selected.successors;flow.execution_edges=selected.execution_edges;
-      if(auto materialized_child=apply(root.artifact,passes::deferred_zero_underflow_literal(code,flow,root.artifact.preloads))){
+      const auto selected=shared_deferred_selector_consistent_execution_graph(root.artifact.items,cfg,*origins);
+      const auto flow=shared_post_layout_projected_flow(cfg, selected);
+      if(!flow)continue;
+      if(auto materialized_child=apply(root.artifact,passes::deferred_zero_underflow_literal(code,*flow,root.artifact.preloads))){
         ConstrainedRepresentation next{std::move(*materialized_child),root.targets,root.encoded_selectors};
         if(refresh_constraint_targets(next)){allocations.push_back(std::move(next));++materialized;}
       }
@@ -4576,7 +5101,7 @@ contextual_copy_transport_layout_transactions_impl(const LayoutSearchArtifact& a
                  <<" pool="<<has("allocation-exposed-literal-pool")<<" remat="<<has("deferred-zero-underflow-literal")
                  <<" abi="<<has("deferred-helper-operand-abi")<<"\n";
       }
-      detail::PreparedJointProofInput input(node.artifact.items,node.artifact.preloads,control);
+      PreparedJointProofInput input(BorrowedJointProofInput{node.artifact.items, node.artifact.preloads}, control);
       // Pending tail widths and selector equations must meet in the very
       // first placement attempt, not only after a gapless layout has won.
       for(const bool projected:{false,true}) {
@@ -4886,9 +5411,9 @@ order_reduction_selector_layout_transactions(const LayoutSearchArtifact& root,
   }
   for (const auto& source : sources)
     for (const auto& candidate : order_reduction_translation_roots(source, configured, control))
-      for (const auto& pending : passes::prepare_deferred_selector_data_literal_layouts(
+      for (const auto& pending : cached_literal_layouts(
                candidate.artifact.items, control, 4)) {
-        PreparedJointProofInput proof_input(pending.items, candidate.artifact.preloads, control);
+        PreparedJointProofInput proof_input(BorrowedJointProofInput{pending.items, candidate.artifact.preloads}, control);
         for (const bool projected : {false, true}) {
           auto closed = close_representation_constraints(candidate, context, control,
                true, projected, &pending, proof_input, true, nullptr, cells(root));
@@ -5005,8 +5530,8 @@ nullable_callback_projection_layout_transactions(const LayoutSearchArtifact& roo
     ConstrainedRepresentation next{std::move(*image),folded->targets,folded->encoded_selectors};
     for(const auto& [label,origin]:proposal.target_origins)next.targets[label]=origin;
     if(!refresh_constraint_targets(next) || !transaction_growth_fits(cells(root),cells(next.artifact),4))continue;
-    for(const auto& pending:passes::prepare_deferred_selector_data_literal_layouts(next.artifact.items,control,2)){
-      PreparedJointProofInput proof(pending.items,next.artifact.preloads,control);
+    for(const auto& pending:cached_literal_layouts(next.artifact.items,control,2)){
+      PreparedJointProofInput proof(BorrowedJointProofInput{pending.items, next.artifact.preloads}, control);
        auto closed=close_representation_constraints(next,context,control,true,true,
            &pending,proof,true,nullptr,cells(root));
       if(trace)std::cerr<<"[nullable-root] closed="<<bool(closed)
@@ -5049,10 +5574,7 @@ TransactionSearchResult<LayoutSearchArtifact> search_joint_representation_constr
   if (cacheable)
     for (auto at = completed.begin(); at != completed.end(); ++at)
       if (at->options == cache_key && at->complete_preloads == preload_environment_complete &&
-          at->limits.maximum_expansions == limits.maximum_expansions &&
-          at->limits.maximum_candidates == limits.maximum_candidates &&
-          at->limits.maximum_depth == limits.maximum_depth &&
-          at->limits.maximum_growth_cells == limits.maximum_growth_cells &&
+          same_joint_limits(at->limits, limits) &&
           same_layout_search_artifact(at->root, root)) {
         ++joint_completed_cache_hits;
         std::rotate(completed.begin(), at, std::next(at));

@@ -78,6 +78,10 @@ struct SharedHelperContinuationProof {
   bool operator==(const SharedHelperContinuationProof&) const = default;
 };
 
+// Structural necessary condition only. It never certifies an entry or
+// permits a rewrite; the full proof still checks targets and observations.
+bool has_shared_helper_continuation_shape(const std::vector<MachineItem>& items);
+
 // Prove a purely structural candidate.  The helper must be straight-line with
 // one explicit return and a complete set of exactly three direct or proved
 // single-target indirect calls. Two calls must continue with the same

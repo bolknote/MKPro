@@ -449,7 +449,7 @@ bool repeated_literal_lift_converges_through_cfg(const std::vector<IrOp>& ops,
         continue;
     }
 
-    const std::vector<std::size_t>& successors = flow.execution_successors.at(state_index);
+    const auto& successors = flow.execution_successors.at(state_index);
     if (successors.empty())
       return reject("unequal stack reaches terminal CFG state at " +
                     std::to_string(execution.address));
@@ -604,7 +604,7 @@ bool x2_only_difference_converges_after_address(
         continue;
     }
 
-    const std::vector<std::size_t>& successors = flow.execution_successors.at(state_index);
+    const auto& successors = flow.execution_successors.at(state_index);
     if (successors.empty())
       return reject("unequal X2 reaches terminal CFG state");
     for (const std::size_t successor : successors) {

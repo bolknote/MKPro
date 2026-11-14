@@ -171,9 +171,9 @@ late_bound_decimal_selector_target_labels(const std::vector<MachineItem>& items)
 static LateBoundDecimalSelectorResult
 process_decimal_selector_charges(const std::vector<MachineItem>& items,
                                 const LateBoundDecimalSelectorOptions& options,
-                                bool inspect_encoded) {
+                                bool inspect_encoded, bool rebind_encoded = false) {
   LateBoundDecimalSelectorResult result;
-  result.items = items;
+  if (!inspect_encoded) result.items = items;
 
   if (options.minimum_target_address < 0 || options.maximum_target_address > 99 ||
       options.minimum_target_address > options.maximum_target_address ||
@@ -224,7 +224,7 @@ process_decimal_selector_charges(const std::vector<MachineItem>& items,
                        " must carry exactly one high or low marker role.");
       continue;
     }
-    if (!(inspect_encoded ? is_non_raw_decimal_digit(item)
+    if (!((inspect_encoded || rebind_encoded) ? is_non_raw_decimal_digit(item)
                           : is_strict_placeholder(item, options))) {
       append_error(result.diagnostics, "late-decimal-selector-not-placeholder",
                    "Late-bound decimal selector item " + std::to_string(index) +
@@ -354,12 +354,14 @@ process_decimal_selector_charges(const std::vector<MachineItem>& items,
   for (const Pair& pair : pairs) {
     const int high_digit = pair.target_address / 10;
     const int low_digit = pair.target_address % 10;
-    MachineItem& high = result.items.at(pair.high.item_index);
-    MachineItem& low = result.items.at(pair.low.item_index);
-    high.opcode = high_digit;
-    high.mnemonic = std::to_string(high_digit);
-    low.opcode = low_digit;
-    low.mnemonic = std::to_string(low_digit);
+    if (!inspect_encoded) {
+      MachineItem& high = result.items.at(pair.high.item_index);
+      MachineItem& low = result.items.at(pair.low.item_index);
+      high.opcode = high_digit;
+      high.mnemonic = std::to_string(high_digit);
+      low.opcode = low_digit;
+      low.mnemonic = std::to_string(low_digit);
+    }
     result.proofs.push_back(LateBoundDecimalSelectorProof{
         .target_label = pair.high.target_label,
         .target_address = pair.target_address,
@@ -375,9 +377,11 @@ process_decimal_selector_charges(const std::vector<MachineItem>& items,
   for (const Marker& single : singles) {
     const int target_address = inspect_encoded ? items[single.item_index].opcode
                                                : label_addresses.at(single.target_label).front();
-    MachineItem& item = result.items.at(single.item_index);
-    item.opcode = target_address;
-    item.mnemonic = std::to_string(target_address);
+    if (!inspect_encoded) {
+      MachineItem& item = result.items.at(single.item_index);
+      item.opcode = target_address;
+      item.mnemonic = std::to_string(target_address);
+    }
     result.proofs.push_back(LateBoundDecimalSelectorProof{
         .target_label = single.target_label,
         .target_address = target_address,
@@ -423,17 +427,14 @@ inspect_deferred_decimal_selector_charges(const std::vector<MachineItem>& items)
 LateBoundDecimalSelectorResult
 rebind_late_bound_decimal_selectors(const std::vector<MachineItem>& items,
                                     const LateBoundDecimalSelectorOptions& options) {
-  std::vector<MachineItem> placeholders = items;
   LateBoundDecimalSelectorResult rejected;
-  rejected.items = items;
 
-  for (std::size_t index = 0; index < placeholders.size(); ++index) {
-    MachineItem& item = placeholders.at(index);
+  for (std::size_t index = 0; index < items.size(); ++index) {
+    const auto& item = items[index];
     bool marked = false;
     for (const std::string& role : item.roles) {
-      bool recognized = false;
-      (void)parse_marker_role(role, recognized);
-      marked = marked || recognized;
+      marked = marked || starts_with(role, kHighRolePrefix) ||
+          starts_with(role, kLowRolePrefix) || starts_with(role, kSingleRolePrefix);
     }
     if (!marked)
       continue;
@@ -441,22 +442,19 @@ rebind_late_bound_decimal_selectors(const std::vector<MachineItem>& items,
       append_error(rejected.diagnostics, "late-decimal-selector-not-bound-digit",
                    "Late-bound decimal selector item " + std::to_string(index) +
                        " is not a non-raw decimal digit command eligible for rebinding.");
-      continue;
     }
-    item.opcode = options.placeholder_opcode;
-    item.mnemonic = options.placeholder_mnemonic;
   }
 
-  if (!rejected.diagnostics.empty())
+  if (!rejected.diagnostics.empty()) {
+    rejected.items = items;
     return rejected;
+  }
 
+  // An encoded image is already validated as decimal digits. Feed it
+  // directly to the same binder; it only changes its owned output on success.
   LateBoundDecimalSelectorResult result =
-      bind_late_bound_decimal_selectors(placeholders, options);
-  if (!result.diagnostics.empty()) {
-    result.items = items;
-    result.applied = 0;
-    result.proofs.clear();
-  } else {
+      process_decimal_selector_charges(items, options, false, true);
+  if (result.diagnostics.empty()) {
     // Rebinding is one transaction: executable digits and the proof-facing
     // annotations must describe the same delivered label addresses.
     refresh_bound_protocol_annotations(result);

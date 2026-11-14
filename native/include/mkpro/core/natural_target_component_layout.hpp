@@ -54,13 +54,14 @@ struct NaturalTargetDeferredSelectorReconciliation {
       const NaturalTargetDeferredSelectorReconciliation&) const = default;
 };
 
-// Completed must-analysis only, scoped to one compiler layout transaction.
+// Shared immutable inputs and completed proofs, scoped to a compilation.
 // It is not a search cache: eviction or disabling it cannot change candidates.
 struct NaturalTargetFlowProofCache;
 struct NaturalTargetFlowProofCacheStats {
   std::size_t hits = 0;
   std::size_t misses = 0;
   std::size_t insertions = 0;
+  std::size_t symbolic_evaluations = 0;
   std::size_t effect_hits = 0;
   std::size_t effect_evaluations = 0;
   std::size_t resident_entries = 0;

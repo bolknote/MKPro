@@ -68,7 +68,11 @@ OrderReductionTranslationProof prove(const Fixture& f, std::size_t budget = 1000
   const auto bounds = prove_post_layout_bounded_stack_numeric_values(
       f.items, flow, *lift, queries, f.preloads);
   require(!bounds.exhausted, "fixture bounds must converge");
-  return prove_order_reduction_translation(f.items, flow, *lift, bounds, f.first, f.last, budget);
+  const auto proof = prove_order_reduction_translation(f.items, flow, *lift, bounds, f.first, f.last, budget);
+  require(!proof.proved || !order_reduction_translation_is_structurally_impossible(
+              f.items, flow, *lift, f.first, f.last),
+          "structural preflight must never reject an eligible translation");
+  return proof;
 }
 std::vector<std::string> observe(const Fixture& fixture, int seed) {
   auto items = fixture.items;
@@ -207,6 +211,21 @@ void translation_contracts() {
   for (auto& item : without_maximum.items) if (item.opcode == 0x6b) item.opcode = 0x68;
   std::erase_if(without_maximum.items, [](const auto& item) { return item.opcode == 0x36; });
   require(!prove(without_maximum).proved, "a program without Kmax cannot enter the order-only maximum lane");
+
+  const auto unsupported = fixture("0.5", 0, true);
+  const auto flow = build_post_layout_control_flow(unsupported.items);
+  const auto lift = analyze_post_layout_automatic_entry_lift_with_indirect_store_facts(
+      unsupported.items, flow, 100000);
+  require(lift && order_reduction_translation_is_structurally_impossible(
+              unsupported.items, flow, *lift, unsupported.first, unsupported.last),
+          "multiplication of a translated word needs no numeric proof to reject");
+  const auto visible = fixture("0.5", 1);
+  const auto visible_flow = build_post_layout_control_flow(visible.items);
+  const auto visible_lift = analyze_post_layout_automatic_entry_lift_with_indirect_store_facts(
+      visible.items, visible_flow, 100000);
+  require(visible_lift && order_reduction_translation_is_structurally_impossible(
+              visible.items, visible_flow, *visible_lift, visible.first, visible.last),
+          "visible translated sum remains inadmissible even if its numeric bounds hold");
 }
 Fixture tied_choice(const std::string& first_increment, const std::string& second_increment) {
   MachineEmitter e;

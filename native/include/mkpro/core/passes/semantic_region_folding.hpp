@@ -53,6 +53,22 @@ struct SymbolicRegionProjection {
   const std::vector<PreloadReport>* numeric_layout_preloads = nullptr;
 };
 
+// Cheap necessary geometry only. Drop other equations and allow padding
+// before any eligible component; false means even that relaxed layout cannot
+// put this label in the requested interval. True authorizes no rewrite.
+bool unprojected_symbolic_region_target_may_fit(
+    const std::vector<IrOp>& ops, const std::string& label,
+    int minimum_address, int maximum_address, int maximum_padding_cells);
+
+// Relaxed geometry over exact hard anchors and a single required target
+// range. Other selector constraints are dropped, so a rejection also rules
+// out the wider official-encoding fallback. Empty widths mean ordinary IR.
+bool symbolic_region_constraints_may_fit(
+    const std::vector<IrOp>& ops, const std::vector<int>& projected_widths,
+    const std::map<std::string, int>& required_targets, const std::string& target,
+    int minimum_address, int maximum_address, int padding_limit,
+    std::optional<int> exclusive_cells = std::nullopt);
+
 struct DeferredStackProducerLimits {
   std::size_t maximum_candidates = 6;
   std::size_t maximum_erased_cells = 2;

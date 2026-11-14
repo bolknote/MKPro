@@ -135,8 +135,9 @@ bool frozen_formal_execution(const std::vector<MachineItem>& before_items,
   }catch(...){}
   for(std::size_t i=0;i<before_items.size();++i)
     if(before_items[i].kind!=MachineItemKind::Label)old_cells.emplace(old_index.addresses[i],i);
-  using Key=std::tuple<std::size_t,int,std::vector<int>,std::optional<int>,
-      std::vector<std::optional<int>>,std::optional<std::size_t>>;
+  using Key=std::tuple<std::size_t,int,decltype(PostLayoutExecutionState::return_stack),
+      std::optional<int>,decltype(PostLayoutExecutionState::formal_return_stack),
+      std::optional<std::size_t>>;
   const auto key=[](const PostLayoutExecutionState& s){return Key{s.item_index,s.address,
       s.return_stack,s.formal_opcode,s.formal_return_stack,s.operand_item_index};};
   std::map<Key,std::size_t> after_states;
@@ -1234,12 +1235,21 @@ prepare_deferred_selector_data_literal_layouts(
     return result;
   // The owner supplies symbolic command identities and the encoded origins
   // of its preloads. Do not invent new labels or reinterpret formal aliases.
-  const auto named = symbolize(items, true);
-  if (!named || named->size() != items.size()) return result;
+  // This path rejected every result that added a label. Check the exact
+  // no-new-label case directly, instead of copying and rebuilding the image.
+  if (std::any_of(items.begin(), items.end(), [](const auto& item) {
+        return item.raw || item.indirect_flow_formal_targets ||
+            (item.formal_opcode && item.kind != MachineItemKind::Address) ||
+            (item.kind == MachineItemKind::Address && !std::holds_alternative<std::string>(item.target)) ||
+            (item.indirect_flow_targets &&
+             std::any_of(item.indirect_flow_targets->begin(), item.indirect_flow_targets->end(),
+                 [](const auto& target) { return !std::holds_alternative<std::string>(target); }));
+      }) || has_executable_address_words(items)) return result;
   const auto bound = rebind_late_bound_decimal_selectors(
-      *named, {.minimum_target_address = 0, .maximum_target_address = 99});
+      items, {.minimum_target_address = 0, .maximum_target_address = 99});
   if (!bound.diagnostics.empty()) return result;
-  const auto before = build_post_layout_control_flow(bound.items, options);
+  const auto before_owner = shared_post_layout_control_flow(bound.items, options);
+  const auto& before = *before_owner;
   if (!before.proved) return result;
   for (std::size_t store = 0; store < bound.items.size(); ++store) {
     const auto family = family_at(bound.items, before, store, true, false, true);
@@ -1264,7 +1274,8 @@ prepare_deferred_selector_data_literal_layouts(
       if (i == store)
         candidate.items.back().roles.push_back("selector-sunk-literal-coalesced");
     }
-    const auto after = build_post_layout_control_flow(candidate.items, options);
+    const auto after_owner = shared_post_layout_control_flow(candidate.items, options);
+    const auto& after = *after_owner;
     std::set<std::size_t> deferred_companions;
     for (const auto& [source, targets] : before.indirect_flow_targets) {
       (void)targets;

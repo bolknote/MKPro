@@ -2,6 +2,7 @@
 #include "mkpro/core/shared_helper_dual_mode_layout.hpp"
 #include "mkpro/core/post_layout_indirect_flow.hpp"
 
+#include "mkpro/core/detail/layout_jobs.hpp"
 #include "mkpro/core/indirect_addressing.hpp"
 #include "mkpro/core/opcodes.hpp"
 
@@ -738,14 +739,22 @@ reassign_stable_indirect_selector_families(
       families.push_back(std::move(family));
   }
 
+  struct Placement {
+    const Family* fixed;
+    const Family* flexible;
+    std::string rebound;
+    bool release;
+    std::vector<SharedHelperDualModeSelectorExchangeResult> alternatives;
+  };
+  std::vector<Placement> placements;
   std::size_t attempted = 0;
   std::vector<std::optional<PostLayoutIndirectFlowResult>> release_cache(15);
   for (const Family& fixed : families) {
     for (const Family& flexible : families) {
       if (fixed.reg == flexible.reg || fixed.target.item_index == flexible.target.item_index)
         continue;
-      // Do not permute two already-flexible addresses. The missing degree of
-      // freedom is specifically the target served by an unchangeable data value.
+      // The missing degree of freedom is a data-bearing address, not an
+      // arbitrary permutation of two already flexible selectors.
       if (rebind_stable_preloaded_indirect_flow_selector(
               items, preloads.at(fixed.preload), control_flow, fixed.target.address,
               flexible.target.address, options.address_space_model).has_value())
@@ -753,136 +762,129 @@ reassign_stable_indirect_selector_families(
       const auto rebound = rebind_stable_preloaded_indirect_flow_selector(
           items, preloads.at(flexible.preload), control_flow, flexible.target.address,
           fixed.target.address, options.address_space_model);
-      if (!rebound.has_value())
+      if (!rebound)
         continue;
       if (++attempted > 8U)
-        return result;
+        break;
       if (trace)
         std::cerr << "[selector-families] R" << fixed.reg << "/R" << flexible.reg
                   << " fixed=" << fixed.target.address << " flexible=" << flexible.target.address << '\n';
       auto& released = release_cache.at(static_cast<std::size_t>(flexible.reg));
-      if (!released.has_value())
+      if (!released)
         released = optimize_post_layout_empty_return_selector_release(
             items, flexible.reg, options.address_space_model);
-      const bool complete_release = released->applied > 0 &&
-          static_cast<std::size_t>(released->applied) == flexible.uses.size();
+      placements.push_back({&fixed, &flexible, *rebound, false, {}});
+      if (released->applied > 0 && static_cast<std::size_t>(released->applied) == flexible.uses.size())
+        placements.push_back({&fixed, &flexible, *rebound, true, {}});
+    }
+    if (attempted > 8U) break;
+  }
 
-      // Keep the old exchange candidate. A release is an additional bounded
-      // alternative, never a replacement for a previously profitable swap.
-      // There are at most eight pairs and two layout attempts per pair; the
-      // same-width empty-return proof is cached once per selector register.
-      for (const bool release : {false, true}) {
-        if (release && !complete_release)
-          continue;
-        auto seed_items = release ? released->items : items;
-        auto seed_preloads = preloads;
-        seed_preloads.at(flexible.preload).value = *rebound;
-        for (std::size_t index : fixed.uses) {
-          auto& item = seed_items.at(index);
-          item.opcode = (item.opcode & 0xf0) | flexible.reg;
-          item.mnemonic = opcode_by_code(item.opcode).name;
-        }
-        if (!release) {
-          for (std::size_t index : flexible.uses) {
-            auto& item = seed_items.at(index);
-            item.opcode = (item.opcode & 0xf0) | fixed.reg;
-            item.mnemonic = opcode_by_code(item.opcode).name;
-          }
-        }
-        // A swap defers the fixed selector's exact address until placement. A
-        // release already has matching targets: the eliminated family no
-        // longer observes the selector, while the data projection was proved
-        // by the same stable-preload rebinder used for ordinary exchanges.
-        PostLayoutControlFlowOptions flow_options;
-        flow_options.address_space_model = options.address_space_model;
-        if (release)
-          flow_options.empty_return_target = 1;
-        else if (control_flow.empty_return_target.has_value())
-          flow_options.empty_return_target = control_flow.empty_return_target->address;
-        const auto seed_control = build_post_layout_control_flow(seed_items, flow_options);
-        if (!seed_control.proved ||
-            seed_control.external_entries != control_flow.external_entries ||
-            seed_control.execution_successors != control_flow.execution_successors ||
-            seed_control.execution_states != control_flow.execution_states ||
-            seed_control.indirect_memory_targets != control_flow.indirect_memory_targets)
-          continue;
-        // Keep the original non-growing frontier independently. A wider
-        // geometric allowance may choose a different order at the same cost;
-        // it must not replace an enabling order already proved at zero debt.
-        const int attempts = options.maximum_transactional_growth_cells > 0 ? 2 : 1;
-        for (int attempt = 0; attempt < attempts; ++attempt) {
-        const int growth_limit = attempt == 0 ? 0 : options.maximum_transactional_growth_cells;
-        auto layout_options = options;
-        if (!release) {
-          layout_options.required_absolute_targets.push_back({
-              .target_item = flexible.target.item_index,
-              .target_address = fixed.target.address,
-          });
-          for (std::size_t index : flexible.uses)
-            layout_options.deferred_selector_reconciliations.push_back({
-                .source_item = index,
-                .target_item = flexible.target.item_index,
-                .final_target_address = fixed.target.address,
-            });
-        }
-        layout_options.allow_size_neutral_absolute_layout = true;
-        layout_options.allow_size_neutral_flow_rebind = true;
-        layout_options.maximum_transactional_growth_cells = growth_limit;
-        const auto placed = optimize_natural_target_component_layout(
-            seed_items, seed_preloads, seed_control, layout_options);
-        if (trace)
-          std::cerr << "[selector-families] release=" << release
-                    << " placed=" << placed.applied << " proved=" << placed.plan.proved
-                    << " final=" << placed.plan.final_artifact_proved
-                    << " deferred=" << placed.plan.deferred_selector_reconciliations_proved
-                    << " cells=" << cell_count(placed.items) << '\n';
-        if (placed.applied <= 0 || !placed.plan.proved || !placed.plan.final_artifact_proved ||
-            (!layout_options.deferred_selector_reconciliations.empty() &&
-             !placed.plan.deferred_selector_reconciliations_proved) ||
-            !placed.plan.final_control_flow.proved ||
-            cell_count(placed.items) - input_cells > growth_limit) {
-          if (trace)
-            for (const auto& reason : placed.plan.reasons)
-              std::cerr << "[selector-families] " << reason << '\n';
-          continue;
-        }
-        const bool duplicate = std::any_of(result.begin(), result.end(), [&](const auto& earlier) {
-          return earlier.items.size() == placed.items.size() &&
-              std::equal(earlier.items.begin(), earlier.items.end(), placed.items.begin(),
-                         machine_items_equal) &&
-              earlier.preloads.size() == placed.preloads.size() &&
-              std::equal(earlier.preloads.begin(), earlier.preloads.end(), placed.preloads.begin(),
-                         [](const auto& left, const auto& right) {
-                // Reassignment changes only these fields of the original
-                // preload reports; data/setup provenance is retained intact.
-                return left.register_name == right.register_name && left.value == right.value;
-              });
-        });
-        if (duplicate)
-          continue;
-        SharedHelperDualModeSelectorExchangeResult alternative;
-        alternative.items = placed.items;
-        alternative.preloads = placed.preloads;
-        alternative.control_flow = placed.plan.final_control_flow;
-        alternative.applied = 1;
-        if (release)
-          alternative.optimizations = released->optimizations;
-        alternative.optimizations.push_back({
-            .name = "stable-indirect-selector-family-reassignment",
-            .detail = "Reassigned complete stable flow families R" +
-                      preloads.at(fixed.preload).register_name + " and R" +
-                      preloads.at(flexible.preload).register_name +
-                      (release ? " after eliminating the latter's empty-stack loop jumps" : " by exchange") +
-                      "; preserved data projections and re-proved final runtime selector "
-                      "decoding, CFG, call/return and stack/X2 identities after exact placement. "
-                      "Intermediate cell delta: " +
-                      std::to_string(cell_count(placed.items) - input_cells) +
-                      "; caller-authorized growth allowance: " + std::to_string(growth_limit) +
-                      ". Only a smaller fully proved downstream artifact may be published.",
-        });
-        result.push_back(std::move(alternative));
-        }
+  // Every seed owns its complete proof. The ordinary and growth layouts of
+  // one seed share its CFG; separate seeds can use the existing compile pool.
+  detail::evaluate_layout_jobs(placements.size(), [&](std::size_t index) {
+    auto& job = placements[index];
+    const auto& fixed = *job.fixed;
+    const auto& flexible = *job.flexible;
+    const auto& released = *release_cache.at(static_cast<std::size_t>(flexible.reg));
+    auto seed_items = job.release ? released.items : items;
+    auto seed_preloads = preloads;
+    seed_preloads.at(flexible.preload).value = job.rebound;
+    const auto reassign = [&](const Family& family, int reg) {
+      for (const auto at : family.uses) {
+        auto& item = seed_items.at(at);
+        item.opcode = (item.opcode & 0xf0) | reg;
+        item.mnemonic = opcode_by_code(item.opcode).name;
       }
+    };
+    reassign(fixed, flexible.reg);
+    if (!job.release) reassign(flexible, fixed.reg);
+
+    PostLayoutControlFlowOptions flow_options;
+    flow_options.address_space_model = options.address_space_model;
+    if (job.release)
+      flow_options.empty_return_target = 1;
+    else if (control_flow.empty_return_target)
+      flow_options.empty_return_target = control_flow.empty_return_target->address;
+    const auto seed_owner = shared_post_layout_control_flow(seed_items, flow_options);
+    const auto& seed_control = *seed_owner;
+    if (!seed_control.proved ||
+        seed_control.external_entries != control_flow.external_entries ||
+        seed_control.execution_successors != control_flow.execution_successors ||
+        seed_control.execution_states != control_flow.execution_states ||
+        seed_control.indirect_memory_targets != control_flow.indirect_memory_targets)
+      return;
+
+    auto layout_options = options;
+    if (!job.release) {
+      layout_options.required_absolute_targets.push_back({
+          .target_item = flexible.target.item_index,
+          .target_address = fixed.target.address,
+      });
+      for (const auto at : flexible.uses)
+        layout_options.deferred_selector_reconciliations.push_back({
+            .source_item = at,
+            .target_item = flexible.target.item_index,
+            .final_target_address = fixed.target.address,
+        });
+    }
+    layout_options.allow_size_neutral_absolute_layout = true;
+    layout_options.allow_size_neutral_flow_rebind = true;
+    // A wider allowance may select a different order at the same size.
+    // Always keep the original non-growing frontier independently.
+    const int attempts = options.maximum_transactional_growth_cells > 0 ? 2 : 1;
+    for (int attempt = 0; attempt < attempts; ++attempt) {
+      const int growth_limit = attempt == 0 ? 0 : options.maximum_transactional_growth_cells;
+      layout_options.maximum_transactional_growth_cells = growth_limit;
+      auto placed = optimize_natural_target_component_layout(
+          seed_items, seed_preloads, seed_control, layout_options);
+      const int delta = cell_count(placed.items) - input_cells;
+      if (trace)
+        std::cerr << "[selector-families] release=" << job.release
+                  << " placed=" << placed.applied << " proved=" << placed.plan.proved
+                  << " final=" << placed.plan.final_artifact_proved
+                  << " deferred=" << placed.plan.deferred_selector_reconciliations_proved
+                  << " cells=" << delta + input_cells << '\n';
+      if (placed.applied <= 0 || !placed.plan.proved || !placed.plan.final_artifact_proved ||
+          (!layout_options.deferred_selector_reconciliations.empty() &&
+           !placed.plan.deferred_selector_reconciliations_proved) ||
+          !placed.plan.final_control_flow.proved || delta > growth_limit) {
+        if (trace)
+          for (const auto& reason : placed.plan.reasons)
+            std::cerr << "[selector-families] " << reason << '\n';
+        continue;
+      }
+      SharedHelperDualModeSelectorExchangeResult alternative{
+          .items = std::move(placed.items), .preloads = std::move(placed.preloads),
+          .control_flow = std::move(placed.plan.final_control_flow), .applied = 1};
+      if (job.release)
+        alternative.optimizations = released.optimizations;
+      alternative.optimizations.push_back({
+          .name = "stable-indirect-selector-family-reassignment",
+          .detail = "Reassigned complete stable flow families R" +
+                    preloads.at(fixed.preload).register_name + " and R" +
+                    preloads.at(flexible.preload).register_name +
+                    (job.release ? " after eliminating the latter's empty-stack loop jumps" : " by exchange") +
+                    "; preserved data projections and re-proved final runtime selector "
+                    "decoding, CFG, call/return and stack/X2 identities after exact placement. "
+                    "Intermediate cell delta: " + std::to_string(delta) +
+                    "; caller-authorized growth allowance: " + std::to_string(growth_limit) +
+                    ". Only a smaller fully proved downstream artifact may be published.",
+      });
+      job.alternatives.push_back(std::move(alternative));
+    }
+  });
+  for (auto& job : placements) {
+    for (auto& candidate : job.alternatives) {
+      const bool duplicate = std::any_of(result.begin(), result.end(), [&](const auto& earlier) {
+        return std::equal(earlier.items.begin(), earlier.items.end(),
+                          candidate.items.begin(), candidate.items.end(), machine_items_equal) &&
+            std::equal(earlier.preloads.begin(), earlier.preloads.end(),
+                       candidate.preloads.begin(), candidate.preloads.end(), [](const auto& a, const auto& b) {
+                         return a.register_name == b.register_name && a.value == b.value;
+                       });
+      });
+      if (!duplicate) result.push_back(std::move(candidate));
     }
   }
   return result;

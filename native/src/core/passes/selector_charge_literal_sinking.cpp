@@ -2,6 +2,7 @@
 #include "mkpro/core/passes/selector_charge_literal_sinking.hpp"
 
 #include "mkpro/core/callee_hole_boundary_normalization.hpp"
+#include "mkpro/core/detail/stack_entry_restriction.hpp"
 #include "mkpro/core/formal_address.hpp"
 #include "mkpro/core/late_bound_decimal_selector.hpp"
 #include "mkpro/core/register_allocator.hpp"
@@ -173,10 +174,11 @@ bool entry_converges(const std::vector<MachineItem>& original,
                       const AuthoritativePostLayoutControlFlow& flow,
                       int entry, int reg, int leaf, bool x_equal,
                       std::optional<std::size_t> charge_start = std::nullopt) {
-  auto items = original;
-  auto restricted = flow;
-  for (std::size_t index = 0; index < items.size(); ++index) {
-    auto& item = items[index];
+  detail::StackEntryRestriction restriction{
+      std::vector<bool>(original.size()), 0x80 + reg, 0xa0 + reg, leaf};
+  const bool trace = std::getenv("MKPRO_NATIVE_TRACE_SUNK_DISPATCH") != nullptr;
+  for (std::size_t index = 0; index < original.size(); ++index) {
+    const auto& item = original[index];
     if (item.kind != MachineItemKind::Op)
       continue;
     const int opcode = item.opcode;
@@ -191,21 +193,18 @@ bool entry_converges(const std::vector<MachineItem>& original,
                  std::find(targets->second.begin(), targets->second.end(), reg) !=
                      targets->second.end());
     }
-    const auto indirect = restricted.indirect_flow_targets.find(index);
-    if (indirect != restricted.indirect_flow_targets.end() && (opcode & 15) == reg) {
+    const auto indirect = flow.indirect_flow_targets.find(index);
+    if (indirect != flow.indirect_flow_targets.end() && (opcode & 15) == reg) {
       if (opcode != 0xa0 + reg && opcode != 0x80 + reg)
         barrier = true;
       else {
-        auto& targets = indirect->second;
-        targets.erase(std::remove_if(targets.begin(), targets.end(),
-                                     [leaf](const auto& target) {
-                                       return target.address != leaf;
-                                     }), targets.end());
-        if (targets.empty())
+        const auto& targets = indirect->second;
+        if (std::none_of(targets.begin(), targets.end(),
+                [leaf](const auto& target) { return target.address == leaf; }))
           barrier = true;
       }
     }
-    if ((barrier || item.raw) && std::getenv("MKPRO_NATIVE_TRACE_SUNK_DISPATCH")) {
+    if ((barrier || item.raw) && trace) {
       std::cerr<<"[sunk-dispatch] item="<<index<<" opcode="<<opcode
                <<" leaf="<<leaf<<" raw="<<item.raw<<" barrier="<<barrier<<" targets:";
       const auto known=flow.indirect_flow_targets.find(index);
@@ -213,22 +212,7 @@ bool entry_converges(const std::vector<MachineItem>& original,
         std::cerr<<' '<<target.address;
       std::cerr<<'\n';
     }
-    if (barrier)
-      item.raw = true;
-  }
-  for (std::size_t state = 0; state < restricted.execution_states.size(); ++state) {
-    const auto& item = items[restricted.execution_states[state].item_index];
-    if (item.raw || (item.opcode != 0xa0 + reg && item.opcode != 0x80 + reg))
-      continue;
-    auto& successors = restricted.execution_successors[state];
-    successors.erase(std::remove_if(successors.begin(), successors.end(),
-                                    [&](std::size_t next) {
-                                      return restricted.execution_states[next].address != leaf;
-                                    }), successors.end());
-    auto& edges = restricted.execution_edges[state];
-    edges.erase(std::remove_if(edges.begin(), edges.end(), [&](const auto& edge) {
-                  return restricted.execution_states[edge.target_state].address != leaf;
-                }), edges.end());
+    restriction.barriers[index] = barrier;
   }
   // Before the first recall, entry modes differ: the original rotation
   // closes decimal entry whereas the sunk literal leaves it open. A direct
@@ -236,8 +220,32 @@ bool entry_converges(const std::vector<MachineItem>& original,
   // Transfer that boundary explicitly before entering the equal-mode proof.
   StackValueEqualityState equality{{x_equal, false, false, false}, false, false};
   transfer_stack_value_equality(equality, 0x60, StackValueEqualityStepKind::Recall);
-  if (!charge_start)
-    return prove_post_layout_stack_entry_equality(items, restricted, entry + 1, equality);
+  if (!charge_start) {
+    // For this legacy all-caller entry, selector refinement must read the
+    // restricted image and target declarations. Keep its established path.
+    auto image = original;
+    auto restricted = flow;
+    for (std::size_t index = 0; index < image.size(); ++index) {
+      if (restriction.barriers[index]) image[index].raw = true;
+      const int opcode = image[index].opcode;
+      if (image[index].kind == MachineItemKind::Op &&
+          (opcode == restriction.jump_opcode || opcode == restriction.call_opcode))
+        if (auto targets = restricted.indirect_flow_targets.find(index);
+            targets != restricted.indirect_flow_targets.end())
+          std::erase_if(targets->second, [leaf](const auto& target) { return target.address != leaf; });
+    }
+    for (std::size_t s = 0; s < restricted.execution_states.size(); ++s) {
+      const auto& item = image[restricted.execution_states[s].item_index];
+      if (item.raw || (item.opcode != restriction.jump_opcode && item.opcode != restriction.call_opcode)) continue;
+      restricted.execution_successors[s].erase_if([&](std::size_t target) {
+        return restricted.execution_states[target].address != leaf;
+      });
+      restricted.execution_edges[s].erase_if([&](const auto& edge) {
+        return restricted.execution_states[edge.target_state].address != leaf;
+      });
+    }
+    return prove_post_layout_stack_entry_equality(image, restricted, entry + 1, equality);
+  }
   // A shared entry can have different return continuations for different
   // literal producers. Prove this literal's actual matched contexts, not a
   // Cartesian product with unrelated callers. Every path from the complete
@@ -245,13 +253,16 @@ bool entry_converges(const std::vector<MachineItem>& original,
   std::vector<std::size_t> pending, roots;
   for (std::size_t s = 0; s < flow.execution_states.size(); ++s)
     if (flow.execution_states[s].item_index == *charge_start) pending.push_back(s);
-  std::set<std::size_t> visited;
+  std::vector<bool> visited(flow.execution_states.size());
+  std::size_t visited_count = 0;
   while (!pending.empty()) {
     const auto s = pending.back(); pending.pop_back();
-    if (s >= flow.execution_states.size() || visited.size() >= 100000U) return false;
-    if (!visited.insert(s).second) continue;
+    if (s >= flow.execution_states.size() || visited_count >= 100000U) return false;
+    if (visited[s]) continue;
+    visited[s] = true;
+    ++visited_count;
     const auto& state = flow.execution_states[s];
-    if (state.item_index >= items.size()) return false;
+    if (state.item_index >= original.size()) return false;
     const auto& command = original[state.item_index];
     if (command.kind != MachineItemKind::Op || command.raw || command.manual_interaction)
       return false;
@@ -281,30 +292,26 @@ bool entry_converges(const std::vector<MachineItem>& original,
       .refine_runtime_selectors = false, .numeric_entry_closed = true,
       .transport_closed_entry_through_control = true,
       .use_indirect_store_entry_facts = true};
-  if (prove_post_layout_stack_state_equality(items, restricted, roots, equality,
-                                             proof_options)) return true;
+  if (detail::prove_restricted_post_layout_stack_equality(
+          original, {flow}, restriction, -1, &roots, equality, proof_options)) return true;
   // Reassigning the selector ends the uniform-leaf assumption above, not the
   // underlying memory equality. Independently track the actual selector word
   // through every definition and caller context. A store must still have
   // equal X; all subsequent branches, returns and observations remain checked.
-  const auto selected = build_selector_consistent_execution_graph(original, flow);
-  if (!selected.proved) return false;
-  auto exact = flow;
-  exact.execution_states.clear();
+  const auto selected = shared_selector_consistent_execution_graph(original, flow);
+  if (!selected->proved) return false;
+  const PostLayoutExecutionView exact{flow, selected.get()};
   std::vector<std::size_t> selected_roots;
-  for (std::size_t s = 0; s < selected.original_states.size(); ++s) {
-    const auto original_state = selected.original_states[s];
-    exact.execution_states.push_back(flow.execution_states.at(original_state));
+  for (std::size_t s = 0; s < exact.size(); ++s) {
+    const auto original_state = exact.original_index(s);
     if (std::binary_search(roots.begin(), roots.end(), original_state))
       selected_roots.push_back(s);
   }
   // Only contexts excluded by a separately proved selector certificate can
   // disappear here. Do not publish a partial/unproved refinement or empty root.
   if (selected_roots.empty()) return false;
-  exact.execution_successors = selected.successors;
-  exact.execution_edges = selected.execution_edges;
-  return prove_post_layout_stack_state_equality(original, exact, selected_roots,
-                                                equality, proof_options);
+  return prove_post_layout_stack_state_equality_on_view(
+      original, exact, selected_roots, equality, proof_options);
 }
 
 PassResult sink_literal(const std::vector<IrOp>& ops,

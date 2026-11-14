@@ -60,7 +60,8 @@ void contract(bool known, int entry_closer = 0x0d, bool raw_digit = false) {
   std::set<std::vector<int>> return_contexts;
   for (const auto original : product.original_states) {
     const auto& state = flow.execution_states[original];
-    if (state.address == 33) return_contexts.insert(state.return_stack);
+    if (state.address == 33)
+      return_contexts.emplace(state.return_stack.begin(), state.return_stack.end());
   }
   require(return_contexts.size() == (exact ? 1U : 2U),
           "only an independently known selector may discard a caller alternative");
@@ -134,7 +135,8 @@ void transported_prefix_contract(bool marked, bool raw_digit, bool open_entry) {
     std::set<std::vector<int>> callers;
     for (const auto original : product->original_states) {
       const auto& state = flow.execution_states.at(original);
-      if (state.address == 33) callers.insert(state.return_stack);
+      if (state.address == 33)
+        callers.emplace(state.return_stack.begin(), state.return_stack.end());
     }
     require(callers.size() == (exact ? 1U : 2U),
             "closed geometry must retain the same caller precision as deferred geometry");

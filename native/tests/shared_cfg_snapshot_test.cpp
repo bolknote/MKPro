@@ -1,4 +1,5 @@
 #include "mkpro/core/post_layout_control_flow.hpp"
+#include "mkpro/core/detail/layout_jobs.hpp"
 #include "test_support.hpp"
 
 #include <algorithm>
@@ -61,6 +62,28 @@ std::vector<MachineItem> nested_calls(int depth) {
     items.push_back(MachineItem::op(0x52, "return"));
   }
   return items;
+}
+
+void compact_row_contracts() {
+  using Kind = PostLayoutExecutionEdgeKind;
+  const PostLayoutExecutionEdge fallthrough{2, Kind::Fallthrough, std::nullopt};
+  const PostLayoutExecutionEdge target{2, Kind::IndirectTarget, 0xfb};
+  const PostLayoutExecutionEdge alias{2, Kind::IndirectTarget, 0xeb};
+  PostLayoutEdges original{{fallthrough, target, alias}};
+  auto copy = original;
+  copy.front().erase_if([&](const auto& edge) { return edge == target; });
+  require(copy.front() == std::vector{fallthrough, alias} &&
+          original.front() == std::vector{fallthrough, target, alias},
+          "overflow edges retain distinct formal aliases and independent value copies");
+  copy.front().clear();
+  copy.front().push_back(alias);
+  copy.front().push_back(target);
+  copy.front().erase_if([&](const auto& edge) { return edge == alias; });
+  require(copy.front() == std::vector{target},
+          "inline and overflow rows preserve the order of surviving edges");
+  detail::InlineProofRow<int, 5> frames{6, 7, 8, 9, 10, 11};
+  auto moved = std::move(frames);
+  require(moved == std::vector{6, 7, 8, 9, 10, 11}, "deep supplied frame rows never truncate");
 }
 
 void snapshot_contracts(AddressSpaceModel model) {
@@ -131,12 +154,189 @@ void snapshot_contracts(AddressSpaceModel model) {
   require(renewed != snapshot && same_facts(*renewed, *snapshot),
           "an owning snapshot survives bounded cache eviction unchanged");
 }
+
+void compilation_scope_contracts() {
+  CacheMode enabled("1");
+  const auto cache = detail::make_post_layout_proof_cache();
+  const detail::PostLayoutProofCacheScope scope(cache);
+  auto items = nested_calls(5);
+  std::vector<std::shared_ptr<const AuthoritativePostLayoutControlFlow>> graphs(4);
+  detail::evaluate_layout_jobs(graphs.size(), [&](std::size_t index) {
+    auto variant = items;
+    variant[0].comment = std::to_string(index);
+    variant[0].source_line = static_cast<int>(index);
+    graphs[index] = shared_post_layout_control_flow(variant);
+  }, 4);
+  auto stats = detail::post_layout_proof_cache_stats(*cache);
+  require(graphs.front()->proved && std::all_of(graphs.begin(), graphs.end(), [&](const auto& graph) {
+            return graph == graphs.front();
+          }) && stats.cfg_builds == 1 && stats.cfg_hits == 3,
+          "one exact CFG is published to all workers, independent of comments and source lines");
+
+  auto changed_opcode = items;
+  auto digit = std::find_if(changed_opcode.begin(), changed_opcode.end(), [](const auto& item) {
+    return item.kind == MachineItemKind::Op && item.opcode == 7;
+  });
+  digit->opcode = 8;
+  require(shared_post_layout_control_flow(changed_opcode) == graphs.front(),
+          "ordinary hardware digits share the control-only snapshot");
+  auto changed_data = changed_opcode;
+  changed_data[static_cast<std::size_t>(digit - changed_opcode.begin())].opcode = 0x34;
+  require(shared_post_layout_control_flow(changed_data) == graphs.front(),
+          "ordinary data operators cannot change the control-only snapshot");
+  std::vector<MachineItem> encoded{MachineItem::op(0x53, "call"),
+      MachineItem::op(4, "operand"), MachineItem::op(0x50, "stop"),
+      MachineItem::op(0x52, "return"), MachineItem::op(0x52, "return")};
+  encoded[2].stop_disposition = StopDisposition::Terminal;
+  PostLayoutControlFlowOptions encoded_control;
+  encoded_control.opcode_address_words = {1};
+  const auto original_operand = shared_post_layout_control_flow(encoded, encoded_control);
+  encoded[1].opcode = 3;
+  const auto changed_operand_byte = shared_post_layout_control_flow(encoded, encoded_control);
+  require(original_operand->proved && changed_operand_byte->proved &&
+          original_operand != changed_operand_byte &&
+          original_operand->execution_states[1].address == 4 &&
+          changed_operand_byte->execution_states[1].address == 3,
+          "a command fetched as an address operand must retain its exact byte");
+  for (const auto model : {AddressSpaceModel::Standard, AddressSpaceModel::Mk61SMiniExpanded}) {
+    const auto last = official_program_last_address(model);
+    std::vector<MachineItem> wrapped(static_cast<std::size_t>(last + 1), MachineItem::op(0x54, "nop"));
+    wrapped.front() = MachineItem::op(4, "wrapped operand");
+    wrapped[1] = encoded[2];
+    wrapped[3] = wrapped[4] = MachineItem::op(0x52, "return");
+    wrapped.back() = encoded.front();
+    PostLayoutControlFlowOptions wrap_control;
+    wrap_control.address_space_model = model;
+    wrap_control.main_entry = last;
+    const auto before = shared_post_layout_control_flow(wrapped, wrap_control);
+    wrapped.front().opcode = 3;
+    const auto after = shared_post_layout_control_flow(wrapped, wrap_control);
+    require(before->proved && after->proved && before != after &&
+            before->execution_states[1].address == 4 && after->execution_states[1].address == 3,
+            "a wrapped fetch must not alias different address bytes in either memory profile");
+  }
+  auto changed_mode = items;
+  changed_mode[2].stop_disposition = StopDisposition::Unknown;
+  require(!shared_post_layout_control_flow(changed_mode)->proved,
+          "removing a typed stop disposition cannot use an unrelated CFG");
+  auto changed_operand = items;
+  changed_operand[1].target = std::string("missing");
+  require(!shared_post_layout_control_flow(changed_operand)->proved,
+          "an unresolved call operand cannot use a successful CFG");
+
+  auto oversized = items;
+  const auto ordinary_item = static_cast<std::size_t>(digit - changed_opcode.begin());
+  for (int i = 0; i < 120; ++i) oversized.push_back(MachineItem::op(0x54, "nop"));
+  const auto linear = shared_post_layout_control_flow(oversized);
+  oversized[ordinary_item].opcode = 0x6e;
+  require(linear->proved && shared_post_layout_control_flow(oversized) == linear,
+          "non-control one-cell operations share the logical linear CFG");
+  {
+    CacheMode disabled("0");
+    require(same_facts(*linear, build_post_layout_control_flow(oversized)),
+            "linear opcode projection preserves every control fact");
+  }
+
+  auto terminal = MachineItem::op(0x50, "stop");
+  terminal.stop_disposition = StopDisposition::Terminal;
+  std::vector selector_items{MachineItem::op(1, "digit"), MachineItem::op(0x47, "store"),
+      MachineItem::op(0x87, "jump"), MachineItem::label("a"), terminal,
+      MachineItem::label("b"), terminal};
+  selector_items[2].indirect_flow_targets = std::vector<IrTarget>{std::string("a"), std::string("b")};
+  const auto cfg = shared_post_layout_control_flow(selector_items);
+  require(cfg->proved, "synthetic selector CFG has authoritative alternatives");
+  const std::map<std::string, int> bindings{{"a", 1}, {"b", 2}};
+  const auto before = detail::post_layout_proof_cache_stats(*cache);
+  std::vector<std::shared_ptr<const SelectorConsistentExecutionGraph>> selections(4);
+  detail::evaluate_layout_jobs(selections.size(), [&](std::size_t index) {
+    selections[index] = shared_deferred_selector_consistent_execution_graph(
+        selector_items, cfg, bindings);
+  }, 4);
+  stats = detail::post_layout_proof_cache_stats(*cache);
+  require(selections.front()->proved &&
+          std::all_of(selections.begin(), selections.end(), [&](const auto& graph) {
+            return graph == selections.front();
+          }) && stats.selector_builds == before.selector_builds + 1 &&
+              stats.selector_hits == before.selector_hits + 3,
+          "one fully checked selector product graph is published to all workers");
+  auto unrelated = bindings;
+  unrelated.emplace("not-a-selector-target", -1);
+  require(shared_deferred_selector_consistent_execution_graph(selector_items, cfg, unrelated) ==
+              selections.front(),
+          "unused layout bindings do not create another selector proof");
+  auto annotations = selector_items;
+  annotations.front().source_line = 42;
+  annotations.front().comment = "changed display annotation";
+  require(shared_deferred_selector_consistent_execution_graph(annotations, cfg, bindings) ==
+              selections.front(),
+          "annotation changes do not introduce a different selector machine");
+  {
+    auto changed = selector_items;
+    changed.front().opcode = 0x60;
+    const auto recall = shared_deferred_selector_consistent_execution_graph(changed, cfg, bindings);
+    changed.front().opcode = 0x10;
+    require(recall->proved &&
+            shared_deferred_selector_consistent_execution_graph(changed, cfg, bindings) == recall,
+            "identical selector entry and transfer effects reuse the checked product graph");
+    changed.front().opcode = 2;
+    const auto changed_digit = shared_deferred_selector_consistent_execution_graph(changed, cfg, bindings);
+    require(changed_digit->proved && changed_digit != recall && changed_digit != selections.front(),
+            "selector keys must retain exact digits");
+    CacheMode disabled("0");
+    changed.front().opcode = 0x10;
+    require(*recall == build_deferred_selector_consistent_execution_graph(changed, *cfg, bindings).execution,
+            "selector opcode projection matches uncached proof");
+  }
+  const auto projection = shared_post_layout_projected_flow(cfg, selections.front());
+  const PostLayoutExecutionView view{*cfg, selections.front().get()};
+  require(projection && shared_post_layout_projected_flow(cfg, selections.front()) == projection &&
+              view.size() == projection->execution_states.size() &&
+              view.successors() == projection->execution_successors &&
+              view.edges() == projection->execution_edges,
+          "consumers share the exact selected flow rather than copying it again");
+  const auto trivial = shared_selector_consistent_execution_graph(items, graphs.front());
+  require(trivial->proved && trivial->identity_projection && trivial->original_states.empty() &&
+              trivial->successors.empty() && trivial->execution_edges.empty() &&
+              shared_post_layout_projected_flow(graphs.front(), trivial) == graphs.front(),
+          "an identity proof borrows the original flow and never allocates rows");
+  const auto value = build_selector_consistent_execution_graph(items, *graphs.front());
+  require(value.original_states.size() == graphs.front()->execution_states.size() &&
+              value.successors == graphs.front()->execution_successors &&
+              value.execution_edges == graphs.front()->execution_edges,
+          "the value API still materializes all rows in original order");
+  auto removed = bindings;
+  removed.erase("b");
+  require(!shared_deferred_selector_consistent_execution_graph(selector_items, cfg, removed)->proved,
+          "missing a used selector binding still fails closed");
+  const std::map<std::string, int> swapped{{"a", 2}, {"b", 1}};
+  const auto other = shared_deferred_selector_consistent_execution_graph(selector_items, *cfg, swapped);
+  require(other->proved && other != selections.front(),
+          "different selector equations do not share product graphs");
+  auto modified_cfg = *cfg;
+  modified_cfg.execution_edges[2].clear();
+  require(!shared_deferred_selector_consistent_execution_graph(
+              selector_items, modified_cfg, bindings)->proved,
+          "a caller's changed labelled edges cannot reuse a valid product graph");
+  require(!shared_deferred_selector_consistent_execution_graph(
+              selector_items, *cfg, bindings, 1)->proved,
+          "a cached selector result cannot bypass the state cap");
+  {
+    CacheMode disabled("0");
+    require(*selections.front() == build_deferred_selector_consistent_execution_graph(
+                selector_items, *cfg, bindings).execution &&
+            *other == build_deferred_selector_consistent_execution_graph(
+                selector_items, *cfg, swapped).execution,
+            "cached and uncached selector effects and labelled edges match exactly");
+  }
+}
 }
 
 int main() {
   try {
+    compact_row_contracts();
     snapshot_contracts(AddressSpaceModel::Standard);
     snapshot_contracts(AddressSpaceModel::Mk61SMiniExpanded);
+    compilation_scope_contracts();
     std::cout << "shared CFG snapshots and exact return-stack contracts passed\n";
     return 0;
   } catch (const std::exception& error) {

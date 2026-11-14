@@ -2,6 +2,7 @@
 #include "mkpro/core/post_layout_numeric_ranges.hpp"
 #include "mkpro/core/post_layout_progress_bounds.hpp"
 
+#include "mkpro/core/detail/dense_ordered_worklist.hpp"
 #include "mkpro/core/opcodes.hpp"
 #include "mkpro/core/int128.hpp"
 #include "mkpro/core/indirect_addressing.hpp"
@@ -18,6 +19,7 @@
 #include <map>
 #include <numeric>
 #include <set>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <tuple>
@@ -778,6 +780,55 @@ GuardedRecallRanges guarded_recall_ranges(
 }
 } // namespace
 
+// A progress-expanded proof exports only its original contexts. Aggregate
+// the state rows directly instead of building maps for every private copy.
+struct NumericProgressProjection {
+  std::vector<std::optional<std::array<OrdinaryStackValue, 4>>> stack;
+  std::vector<std::optional<PostLayoutMemorySelectorFact>> selectors;
+  const std::vector<std::size_t>& origins;
+
+  NumericProgressProjection(std::size_t size, const std::vector<std::size_t>& original_states)
+      : stack(size), selectors(size), origins(original_states) {}
+
+  void add_stack(std::size_t state, const std::array<OrdinaryStackValue, 4>& slots) {
+    auto& row = stack[origins[state]];
+    if (!row) {
+      row = slots;
+      return;
+    }
+    for (std::size_t slot = 0; slot < slots.size(); ++slot) {
+      auto& target = (*row)[slot];
+      target.range = join(target.range, slots[slot].range);
+      target.ordinary = target.ordinary && slots[slot].ordinary;
+      target.enclosure = join_enclosure(target.enclosure, slots[slot].enclosure);
+    }
+  }
+
+  void add_selector(std::size_t state, const PostLayoutMemorySelectorFact& fact) {
+    auto& row = selectors[origins[state]];
+    if (!row) {
+      row = fact;
+      return;
+    }
+    row->range = join(row->range, fact.range);
+    row->integer_selector_word = row->integer_selector_word && fact.integer_selector_word;
+    row->normalized_or_payload = row->normalized_or_payload && fact.normalized_or_payload;
+  }
+
+  void publish(PostLayoutNumericRangeProof& result) const {
+    for (std::size_t state = 0; state < stack.size(); ++state) {
+      if (stack[state]) {
+        result.stack_before_state.emplace_hint(result.stack_before_state.end(), state, *stack[state]);
+        if ((*stack[state])[0].range)
+          result.x_before_state.emplace_hint(result.x_before_state.end(), state, *(*stack[state])[0].range);
+      }
+      if (selectors[state])
+        result.memory_selector_before_state.emplace_hint(
+            result.memory_selector_before_state.end(), state, *selectors[state]);
+    }
+  }
+};
+
 static PostLayoutNumericRangeProof prove_numeric_ranges_on_graph(
     const std::vector<MachineItem>& items,
     const AuthoritativePostLayoutControlFlow& flow,
@@ -793,14 +844,15 @@ static PostLayoutNumericRangeProof prove_numeric_ranges_on_graph(
     const std::map<std::size_t, int>* imported_signs = nullptr,
     bool precise_memory_values = false,
     const std::map<std::size_t, std::vector<int>>* register_queries = nullptr,
-    std::map<std::size_t, std::map<int, OrdinaryStackValue>>* register_results = nullptr) {
+    std::map<std::size_t, std::map<int, OrdinaryStackValue>>* register_results = nullptr,
+    NumericProgressProjection* projection = nullptr) {
   PostLayoutNumericRangeProof result;
   const auto count = flow.execution_states.size();
   if (!flow.proved || automatic_entry_lift.size() != count ||
       flow.execution_successors.size() != count)
     return result;
-  std::vector<std::vector<std::size_t>> predecessors(count);
-  std::map<std::size_t, std::vector<std::size_t>> contexts;
+  PostLayoutSuccessors predecessors(count);
+  std::map<std::size_t, detail::InlineProofRow<std::size_t, 2>> contexts;
   for (std::size_t i = 0; i < count; ++i) {
     if (guarded && !guarded->reachable.at(i))
       continue;
@@ -914,7 +966,8 @@ static PostLayoutNumericRangeProof prove_numeric_ranges_on_graph(
   const auto ordinary_item = [&](std::size_t at) {
     return command_item(at) && !items[at].manual_interaction;
   };
-  std::map<std::size_t, Literal> literals;
+  std::vector<std::size_t> literal_at(items.size(), items.size());
+  std::vector<Literal> literals;
   for (std::size_t i = 0; i < items.size();) {
     if (!ordinary_item(i) || items[i].opcode < 0 || items[i].opcode > 9) {
       ++i;
@@ -939,9 +992,11 @@ static PostLayoutNumericRangeProof prove_numeric_ranges_on_graph(
       value.insert(value.begin(), '-');
       ++i;
     }
-    if (const auto range = bound_ordinary_decimal(value))
-      literals.emplace(i - 1U, Literal{begin, *range, quantized_literal(value), literal_mantissa(value),
+    if (const auto range = bound_ordinary_decimal(value)) {
+      literal_at[i - 1U] = literals.size();
+      literals.push_back(Literal{begin, *range, quantized_literal(value), literal_mantissa(value),
           value.size()==1U && value[0]>='1' && value[0]<='9'});
+    }
   }
   // A direct recall certifies the next fresh literal's lift independently
   // of its numeric value. Direct BP chains preserve that certificate, but
@@ -950,7 +1005,7 @@ static PostLayoutNumericRangeProof prove_numeric_ranges_on_graph(
   // path must end in a recall, and a jump-only cycle cannot justify itself.
   std::vector<bool> recall_entry_lift(count, false), recall_possible(count, true);
   std::vector<std::size_t> recall_pending(count, 0);
-  std::vector<std::vector<std::size_t>> recall_users(count);
+  PostLayoutSuccessors recall_users(count);
   std::deque<std::size_t> recall_ready;
   const auto spend_recall_work = [&] {
     if (result.work >= maximum_work) {
@@ -1094,6 +1149,36 @@ static PostLayoutNumericRangeProof prove_numeric_ranges_on_graph(
         fact.range->lower>=1 && fact.range->upper<=9;
     return fact;
   };
+  // Stable words can be requested at every visit to a fact, not merely once
+  // per command. Lazily remember pointers to their immutable exact decode.
+  // std::map keeps those values stable even as other words are added.
+  std::vector<const Fact*> stable_before_x, stable_after_x;
+  std::vector<std::array<const Fact*, 8>> stable_before_registers;
+  std::array<std::optional<Fact>, 8> invariant_register_facts;
+  std::array<const PreloadReport*, 15> initial_words{};
+  if (stable.proved) {
+    stable_before_x.resize(count);
+    stable_after_x.resize(count);
+    stable_before_registers.resize(items.size());
+  }
+  if (preloads) {
+    constexpr std::string_view names = "0123456789abcde";
+    for (const auto& word : *preloads) {
+      if (word.setup_expression || word.setup_target_name || word.register_name.size() != 1U)
+        continue;
+      const auto reg = names.find(word.register_name.front());
+      if (reg != std::string_view::npos) initial_words[reg] = &word;
+    }
+  }
+  const auto stable_numeric_fact = [&](const std::string& word, const Fact*& cached) {
+    if (cached) return *cached;
+    auto fact = decimal(word);
+    // The existing bounded decoder deliberately stops retaining new words at
+    // its cap. Those inputs still work; they are just not pointer-cached.
+    if (const auto found = decoded_literals.find(word); found != decoded_literals.end())
+      cached = &found->second;
+    return fact;
+  };
   const auto is_top = [&](const Fact& fact) {
     return fact.grounded && !fact.range && !fact.normalized_or_payload && !fact.nonnegative_word &&
         !fact.ordinary_value &&
@@ -1107,6 +1192,24 @@ static PostLayoutNumericRangeProof prove_numeric_ranges_on_graph(
     fact.normalized_or_payload = code==0x38;
     return fact;
   };
+  std::vector<Fact> literal_facts;
+  literal_facts.reserve(literals.size());
+  for (const auto& literal : literals) {
+    auto fact = constant(Range{literal.value}, literal.quantum);
+    fact.mantissa = literal.mantissa;
+    fact.canonical_small_integer = literal.canonical_small_integer;
+    fact.nonnegative_word = literal.value.lower >= 0;
+    literal_facts.push_back(std::move(fact));
+  }
+  std::vector<std::optional<std::span<const int>>> declared_memory_targets(items.size());
+  for (const auto& [item, aliases] : flow.indirect_memory_targets)
+    if (item < items.size()) declared_memory_targets[item] = aliases;
+  struct LiteralEntry {
+    bool checked = false;
+    bool entered = false;
+    std::optional<std::size_t> start;
+  };
+  std::vector<LiteralEntry> literal_entries(count);
   std::optional<std::map<std::size_t,int>> packed_signs;
   const auto packed_sign = [&](std::size_t state) -> std::optional<int> {
     if (imported_signs) {
@@ -1133,12 +1236,38 @@ static PostLayoutNumericRangeProof prove_numeric_ranges_on_graph(
   const bool dense = !force_sparse_numeric_for_testing && complete_stack &&
       count <= 20000U && requested_items.size() >= items.size() / 2U;
   const std::size_t dense_slots = dense ? count * 19U : 0U;
+  const bool ordered_dense = dense && analysis_order != nullptr;
+  detail::DenseOrderedWorklist dense_work(ordered_dense ? dense_slots : 0U);
+  std::vector<std::size_t> state_by_rank, rank_by_state;
+  if (ordered_dense) {
+    state_by_rank.resize(count);
+    std::iota(state_by_rank.begin(), state_by_rank.end(), std::size_t{0});
+    const auto max_at = std::max_element(analysis_order->begin(), analysis_order->end());
+    const auto maximum_rank = max_at == analysis_order->end() ? count : *max_at;
+    if (maximum_rank < count && analysis_order->size() == count) {
+      // The progress product uses a small bounded visit rank. A stable
+      // counting pass preserves exactly the original (rank, state) order.
+      std::vector<std::size_t> next(maximum_rank + 1U, 0U);
+      for (const auto rank : *analysis_order) ++next[rank];
+      std::exclusive_scan(next.begin(), next.end(), next.begin(), std::size_t{0});
+      for (std::size_t state = 0; state < count; ++state)
+        state_by_rank[next[(*analysis_order)[state]]++] = state;
+    } else {
+      std::sort(state_by_rank.begin(), state_by_rank.end(), [&](auto left, auto right) {
+        return std::pair{analysis_order->at(left), left} <
+            std::pair{analysis_order->at(right), right};
+      });
+    }
+    rank_by_state.resize(count);
+    for (std::size_t rank = 0; rank < count; ++rank)
+      rank_by_state[state_by_rank[rank]] = rank;
+  }
   std::vector<Fact> dense_cache(dense_slots);
   std::vector<bool> dense_present(dense_slots, false), dense_queued(dense_slots, false);
-  std::vector<std::set<Key>> dense_dependents(dense_slots);
+  std::vector<detail::InlineProofRow<std::uint32_t, 2>> dense_dependents(dense_slots);
   std::vector<std::size_t> dense_changes(dense_slots, 0U);
   std::unordered_map<Key, Fact, KeyHash> cache;
-  std::map<std::size_t,bool> canonical_memory_loads;
+  std::vector<bool> canonical_memory_loads(count, false);
   std::unordered_map<Key, std::set<Key>, KeyHash> dependents;
   std::unordered_map<Key, std::size_t, KeyHash> changes;
   std::set<Key> widened;
@@ -1158,15 +1287,20 @@ static PostLayoutNumericRangeProof prove_numeric_ranges_on_graph(
   const auto change_counter = [&](const Key& key) -> std::size_t& {
     return dense ? dense_changes.at(dense_index(key)) : changes[key];
   };
-  const auto lookup_dependents = [&](const Key& key) -> const std::set<Key>* {
+  const auto visit_dependents = [&](const Key& key, const auto& visit) {
     if (dense) {
-      const auto& value = dense_dependents.at(dense_index(key));
-      return value.empty() ? nullptr : &value;
+      for (const auto user : dense_dependents.at(dense_index(key)))
+        visit(Key{user / 19U, static_cast<int>(user % 19U)});
+    } else if (const auto found = dependents.find(key); found != dependents.end()) {
+      for (const auto& user : found->second) visit(user);
     }
-    const auto found = dependents.find(key);
-    return found == dependents.end() ? nullptr : &found->second;
   };
   const auto enqueue = [&](const Key& key) {
+    if (ordered_dense) {
+      const auto rank = rank_by_state[key.first];
+      dense_work.insert(rank * 19U + static_cast<std::size_t>(key.second));
+      return;
+    }
     bool inserted = false;
     if (dense) {
       const auto index = dense_index(key);
@@ -1196,7 +1330,8 @@ static PostLayoutNumericRangeProof prove_numeric_ranges_on_graph(
     if (inserted)
       enqueue(key);
     if (evaluating) {
-      if (dense) dense_dependents.at(dense_index(key)).insert(*evaluating);
+      if (dense) dense_dependents.at(dense_index(key)).insert_sorted_unique(
+          static_cast<std::uint32_t>(dense_index(*evaluating)));
       else dependents[key].insert(*evaluating);
     }
     return *value;
@@ -1208,11 +1343,10 @@ static PostLayoutNumericRangeProof prove_numeric_ranges_on_graph(
     const int code = items[at].opcode;
     const int family = code & 0xf0, reg = code & 15;
     const auto input = [&](int index) { return before(state, index); };
-    std::optional<std::vector<int>> memory_targets;
-    if ((family == 0xb0 || family == 0xd0) && reg < 15) {
-      if (const auto declared = flow.indirect_memory_targets.find(at);
-          declared != flow.indirect_memory_targets.end()) memory_targets = declared->second;
-    }
+    std::optional<std::span<const int>> memory_targets;
+    int proved_memory_target = 0;
+    if ((family == 0xb0 || family == 0xd0) && reg < 15)
+      memory_targets = declared_memory_targets[at];
     if (precise_memory_values && (family == 0xb0 || family == 0xd0) && reg < 15) {
       const auto counter = input(4 + reg);
       if (!counter.grounded) return {};
@@ -1227,7 +1361,8 @@ static PostLayoutNumericRangeProof prove_numeric_ranges_on_graph(
       if (selected) {
         if (!memory_targets || std::find(memory_targets->begin(), memory_targets->end(), *selected) == memory_targets->end())
           return unknown;
-        memory_targets = std::vector<int>{*selected};
+        proved_memory_target = *selected;
+        memory_targets = std::span<const int>(&proved_memory_target, 1);
       }
     }
     if (code == 0x50 || code == 0x29)
@@ -1259,7 +1394,7 @@ static PostLayoutNumericRangeProof prove_numeric_ranges_on_graph(
     // Keep exact entry results on their incoming edge, before different
     // literal results meet at one successor and lose exact-word equality.
     if (stable.proved && slot == 0 && stable.x_after_state.at(state)) {
-      auto fact=decimal(*stable.x_after_state[state]);
+      auto fact=stable_numeric_fact(*stable.x_after_state[state], stable_after_x[state]);
       if(code==0x38){fact.normalized_or_payload=true;fact.mantissa.normalized_eight=true;}
       return family==0x60 || family==0xd0 ? recalled_word(fact) : fact;
     }
@@ -1340,47 +1475,44 @@ static PostLayoutNumericRangeProof prove_numeric_ranges_on_graph(
         return input(slot);
       return unknown;
     }
-    if (const auto literal = literals.find(at); literal != literals.end()) {
-      auto start = state;
-      bool valid = true;
-      for (std::size_t i = at; i > literal->second.begin; --i) {
-        if (external.contains(i) || predecessors[start].size() != 1U) {
-          valid = false;
-          break;
+    if (const auto index = literal_at[at]; index != items.size()) {
+      auto& entry = literal_entries[state];
+      if (!entry.checked) {
+        entry.checked = true;
+        const auto begin = literals[index].begin;
+        auto start = state;
+        bool valid = true;
+        for (std::size_t i = at; i > begin; --i) {
+          if (external.contains(i) || predecessors[start].size() != 1U) {
+            valid = false;
+            break;
+          }
+          start = predecessors[start].front();
+          if (flow.execution_states[start].item_index != i - 1U) {
+            valid = false;
+            break;
+          }
         }
-        start = predecessors[start].front();
-        if (flow.execution_states[start].item_index != i - 1U) {
-          valid = false;
-          break;
-        }
+        // Enter overwrites X without lifting Y/Z/T. The separate recall/lift
+        // fact may cross BP chains but not an ungrounded cycle or input edge.
+        const bool unsigned_integer_entry = at - begin < 8U &&
+            std::all_of(items.begin() + static_cast<std::ptrdiff_t>(begin),
+                        items.begin() + static_cast<std::ptrdiff_t>(at + 1U),
+                [](const auto& item) {
+                  return item.kind == MachineItemKind::Op && item.opcode >= 0 && item.opcode <= 9;
+                });
+        entry.entered = valid && unsigned_integer_entry && !predecessors[start].empty() &&
+            std::all_of(predecessors[start].begin(), predecessors[start].end(),
+                [&](std::size_t previous) {
+                  const auto item = flow.execution_states[previous].item_index;
+                  return ordinary_item(item) && items[item].opcode == 0x0e;
+                });
+        if (valid && (automatic_entry_lift[start] || recall_entry_lift[start] || entry.entered) &&
+            !external.contains(begin))
+          entry.start = start;
       }
-      // The recall/lift certificate may cross direct BP chains and joins,
-      // but never an ungrounded cycle, raw command or external input edge.
-      const bool recalled = valid && recall_entry_lift[start];
-      // Enter ends numeric entry while inhibiting the next automatic lift.
-      // A following fresh literal overwrites X and preserves Y/Z/T; false
-      // automatic-lift alone cannot distinguish this from an open mantissa.
-      const bool unsigned_integer_entry = at - literal->second.begin < 8U &&
-          std::all_of(items.begin() + static_cast<std::ptrdiff_t>(literal->second.begin),
-                      items.begin() + static_cast<std::ptrdiff_t>(at + 1U),
-              [](const auto& item) {
-                return item.kind == MachineItemKind::Op && item.opcode >= 0 && item.opcode <= 9;
-              });
-      const bool entered = valid && unsigned_integer_entry && !predecessors[start].empty() &&
-          std::all_of(predecessors[start].begin(), predecessors[start].end(),
-              [&](std::size_t previous) {
-                const auto item = flow.execution_states[previous].item_index;
-                return ordinary_item(item) && items[item].opcode == 0x0e;
-              });
-      if (valid && (automatic_entry_lift[start] || recalled || entered) &&
-          !external.contains(literal->second.begin)) {
-        if (slot != 0) return before(start, entered ? slot : slot - 1);
-        auto fact = constant(Range{literal->second.value}, literal->second.quantum);
-        fact.mantissa = literal->second.mantissa;
-        fact.canonical_small_integer = literal->second.canonical_small_integer;
-        fact.nonnegative_word = literal->second.value.lower >= 0;
-        return fact;
-      }
+      if (entry.start)
+        return slot == 0 ? literal_facts[index] : before(*entry.start, entry.entered ? slot : slot - 1);
     }
     if (family == 0x60)
       return slot==0?recalled_word(*recalled_memory):input(slot-1);
@@ -1517,17 +1649,23 @@ static PostLayoutNumericRangeProof prove_numeric_ranges_on_graph(
         if (complete_stack && precise_memory_values && (family == 0xb0 || family == 0xd0) && reg < 15)
           (void)before(state, 4 + reg);
       }
-  while (!work.empty() || !ordered_work.empty()) {
+  while (!work.empty() || !ordered_work.empty() || !dense_work.empty()) {
     if (result.work >= maximum_work) {
       result.exhausted = true;
       return result; // Nothing has been exported before convergence.
     }
     ++result.work;
-    const auto key = analysis_order ? ordered_work.begin()->second : work.front();
-    if (analysis_order) ordered_work.erase(ordered_work.begin());
-    else work.pop_front();
-    if (dense) dense_queued.at(dense_index(key)) = false;
-    else queued.erase(key);
+    Key key;
+    if (ordered_dense) {
+      const auto rank = dense_work.pop_min();
+      key = {state_by_rank[rank / 19U], static_cast<int>(rank % 19U)};
+    } else {
+      key = analysis_order ? ordered_work.begin()->second : work.front();
+      if (analysis_order) ordered_work.erase(ordered_work.begin());
+      else work.pop_front();
+      if (dense) dense_queued.at(dense_index(key)) = false;
+      else queued.erase(key);
+    }
     auto& previous = cached_value(key);
     if (is_top(previous))
       continue; // Only the entire reduced product at top is stable under joins.
@@ -1546,13 +1684,10 @@ static PostLayoutNumericRangeProof prove_numeric_ranges_on_graph(
         value.ordinary_value = true;
         value.mantissa = ordinary_mantissa();
       }
-      if (is_main && preloads && slot >= 4 &&
+      if (is_main && slot >= 4 &&
           flow.execution_states[state].return_stack.empty()) {
-        constexpr std::string_view names = "0123456789abcde";
-        for (const auto& preload : *preloads)
-          if (preload.register_name == std::string(1, names[static_cast<std::size_t>(slot - 4)]) &&
-              !preload.setup_expression && !preload.setup_target_name)
-            value = decimal(preload.value);
+        if (const auto* preload = initial_words[static_cast<std::size_t>(slot - 4)])
+          value = decimal(preload->value);
       }
     }
     // Exact stable-register interpretation uses the machine's selector
@@ -1564,26 +1699,37 @@ static PostLayoutNumericRangeProof prove_numeric_ranges_on_graph(
     if (stable.proved && slot == 0) {
       const auto& word = stable.x_before_state.at(state);
       if (word) {
-        value = decimal(*word);
+        value = stable_numeric_fact(*word, stable_before_x[state]);
         exact_stable = true;
       }
     }
-    if (slot >= 11) if (const auto invariant = invariant_high_preloads.find(slot - 4);
-        invariant != invariant_high_preloads.end()) {
-      value = decimal(invariant->second);
-      // The certificate preserves the numeric value, not canonical memory
-      // encoding, exact payload digits, or an integer-selector word class.
-      value.canonical_small_integer = false; value.integer_selector_word = false;
-      value.mantissa = ordinary_mantissa(); value.nonnegative_word = false;
-      exact_stable = true;
-    }
-    if (stable.proved && slot >= 11) {
-      const auto found = stable.before_item.find(at);
-      if (found != stable.before_item.end()) {
-        const auto& word = found->second[static_cast<std::size_t>(slot - 11)];
-        if (word) {
-          value = decimal(*word);
+    if (slot >= 11) {
+      const auto reg = static_cast<std::size_t>(slot - 11);
+      auto& invariant_fact = invariant_register_facts[reg];
+      if (!invariant_fact) {
+        if (const auto invariant = invariant_high_preloads.find(slot - 4);
+            invariant != invariant_high_preloads.end()) {
+          auto fact = decimal(invariant->second);
+          // Numerically invariant does not mean canonical stored digits.
+          fact.canonical_small_integer = false; fact.integer_selector_word = false;
+          fact.mantissa = ordinary_mantissa(); fact.nonnegative_word = false;
+          invariant_fact = fact;
+        }
+      }
+      if (invariant_fact) {
+        value = *invariant_fact;
+        exact_stable = true;
+      }
+      if (stable.proved) {
+        auto& cached = stable_before_registers[at][reg];
+        if (cached) {
+          value = *cached;
           exact_stable = true;
+        } else if (const auto found = stable.before_item.find(at); found != stable.before_item.end()) {
+          if (const auto& word = found->second[reg]) {
+            value = stable_numeric_fact(*word, cached);
+            exact_stable = true;
+          }
         }
       }
     }
@@ -1614,17 +1760,15 @@ static PostLayoutNumericRangeProof prove_numeric_ranges_on_graph(
       if (widened_queries) widened.insert(key);
     }
     previous = std::move(value);
-    if (const auto* users = lookup_dependents(key))
-      for (const auto& user : *users)
-        enqueue(user);
+    visit_dependents(key, enqueue);
   }
   if (widened_queries && !widened.empty()) {
     std::deque<Key> affected(widened.begin(), widened.end());
     while (!affected.empty()) {
       const auto key = affected.front(); affected.pop_front();
-      if (const auto* found = lookup_dependents(key))
-        for (const auto& user : *found)
-          if (widened.insert(user).second) affected.push_back(user);
+      visit_dependents(key, [&](const Key& user) {
+        if (widened.insert(user).second) affected.push_back(user);
+      });
     }
     for (const auto item : requested_items)
       if (const auto found = contexts.find(item); found != contexts.end())
@@ -1634,8 +1778,9 @@ static PostLayoutNumericRangeProof prove_numeric_ranges_on_graph(
   if(!result.exhausted && guarded && guarded->reachable.size()==count)
     for(std::size_t state=0;state<count;++state)
       if(!guarded->reachable[state])result.unreachable_states.insert(state);
-  if(!result.exhausted)for(const auto& [state,canonical]:canonical_memory_loads)
-    if(canonical)result.canonical_memory_load_states.insert(state);
+  if (!result.exhausted && !projection)
+    for (std::size_t state = 0; state < count; ++state)
+      if (canonical_memory_loads[state]) result.canonical_memory_load_states.insert(state);
   for (const auto item : requested_items) {
     const auto found = contexts.find(item);
     if (found == contexts.end())
@@ -1650,16 +1795,21 @@ static PostLayoutNumericRangeProof prove_numeric_ranges_on_graph(
         const int code = items[item].opcode, family = code & 0xf0, reg = code & 15;
         if (precise_memory_values && (family == 0xb0 || family == 0xd0) && reg < 15) {
           const auto& word = cached_value(Key{state, 4 + reg});
-          result.memory_selector_before_state[state] = {word.range,
+          const PostLayoutMemorySelectorFact fact{word.range,
               word.grounded && word.integer_selector_word, word.grounded && word.normalized_or_payload};
+          if (projection) projection->add_selector(state, fact);
+          else result.memory_selector_before_state[state] = fact;
         }
-        auto& values = result.stack_before_state[state];
+        std::array<OrdinaryStackValue, 4> values;
         for (int slot = 0; slot < 4; ++slot) {
           const auto& value = cached_value(Key{state, slot});
           values[static_cast<std::size_t>(slot)] = {value.range,
               value.grounded && value.ordinary_value, value.enclosure};
         }
+        if (projection) projection->add_stack(state, values);
+        else result.stack_before_state[state] = std::move(values);
       }
+      if (projection) continue;
       const auto& fact = cached_value(Key{state,0});
       if (fact.grounded && fact.nonnegative_word)
         result.nonnegative_words_before_state.insert(state);
@@ -1668,7 +1818,7 @@ static PostLayoutNumericRangeProof prove_numeric_ranges_on_graph(
         if(fact.canonical_small_integer)result.canonical_small_integer_states.insert(state);
       }
     }
-    if (std::all_of(found->second.begin(), found->second.end(), [&](std::size_t state) {
+    if (!projection && std::all_of(found->second.begin(), found->second.end(), [&](std::size_t state) {
           const auto& fact = cached_value(Key{state, 0});
           return fact.grounded && fact.nonnegative_word;
         })) result.nonnegative_words_before.insert(item);
@@ -1836,34 +1986,15 @@ static PostLayoutNumericRangeProof prove_bounded_stack_numeric_values_uncached(
   for (std::size_t state = 0; state < expanded->original_states.size(); ++state)
     if (const auto found = signs.signs.find(expanded->original_states[state]); found != signs.signs.end())
       imported.emplace(state, found->second);
+  NumericProgressProjection projection(flow.execution_states.size(), expanded->original_states);
   auto bounded = prove_numeric_ranges_on_graph(items, expanded->control, expanded->automatic_entry_lift,
       requested_items, &preloads, maximum_work - spent, input_policy, &expanded->analysis_order,
-      nullptr, nullptr, nullptr, true, &imported, true);
+      nullptr, nullptr, nullptr, true, &imported, true, nullptr, nullptr, &projection);
   if (bounded.exhausted) return {.work = spent + bounded.work, .exhausted = true};
   PostLayoutNumericRangeProof result;
   result.work = spent + bounded.work;
   result.x_before = std::move(bounded.x_before);
-  for (const auto& [state, slots] : bounded.stack_before_state) {
-    const auto origin = expanded->original_states.at(state);
-    const auto [entry, fresh] = result.stack_before_state.emplace(origin, slots);
-    if (!fresh) for (std::size_t slot = 0; slot < slots.size(); ++slot) {
-      auto& target = entry->second[slot];
-      target.range = join(target.range, slots[slot].range);
-      target.ordinary = target.ordinary && slots[slot].ordinary;
-      target.enclosure = join_enclosure(target.enclosure, slots[slot].enclosure);
-    }
-  }
-  for (const auto& [state, fact] : bounded.memory_selector_before_state) {
-    const auto origin = expanded->original_states.at(state);
-    const auto [entry, fresh] = result.memory_selector_before_state.emplace(origin, fact);
-    if (!fresh) {
-      entry->second.range = join(entry->second.range, fact.range);
-      entry->second.integer_selector_word = entry->second.integer_selector_word && fact.integer_selector_word;
-      entry->second.normalized_or_payload = entry->second.normalized_or_payload && fact.normalized_or_payload;
-    }
-  }
-  for (const auto& [state, slots] : result.stack_before_state)
-    if (slots[0].range) result.x_before_state.emplace(state, *slots[0].range);
+  projection.publish(result);
   return result;
 }
 
@@ -1923,12 +2054,12 @@ PostLayoutNumericRangeProof prove_post_layout_bounded_stack_numeric_values(
         value.execution_states, value.execution_successors, value.execution_edges,
         value.maximum_observed_return_depth, value.explored_states, value.reasons);
   };
-  LayoutSearchArtifact artifact{.items = items, .preloads = preloads};
   const bool trace = std::getenv("MKPRO_NATIVE_TRACE_NUMERIC_PROOF_CACHE") != nullptr;
   for (auto entry = cache.rbegin(); entry != cache.rend(); ++entry) {
     if (entry->maximum_work != maximum_work || entry->policy != input_policy ||
         entry->lift != automatic_entry_lift || entry->queries != requested_items ||
-        !same_layout_search_artifact(entry->artifact, artifact) ||
+        !same_layout_search_preloads(entry->artifact.preloads, preloads) ||
+        !same_layout_search_items(entry->artifact.items, items) ||
         flow_key(entry->flow) != flow_key(flow)) continue;
     ++bounded_numeric_cache_hits;
     if (trace) std::cerr << "[numeric-proof-cache] hit work=" << entry->proof.work << '\n';
@@ -1957,7 +2088,8 @@ PostLayoutNumericRangeProof prove_post_layout_bounded_stack_numeric_values(
       total -= cache.front().weight;
       cache.erase(cache.begin());
     }
-    cache.push_back({std::move(artifact), flow, automatic_entry_lift, requested_items,
+    cache.push_back({LayoutSearchArtifact{.items = items, .preloads = preloads},
+                     flow, automatic_entry_lift, requested_items,
                      maximum_work, input_policy, proof, weight});
   }
   return proof;

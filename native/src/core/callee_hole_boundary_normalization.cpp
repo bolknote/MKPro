@@ -1,4 +1,5 @@
 #include "mkpro/core/callee_hole_boundary_normalization.hpp"
+#include "mkpro/core/detail/stack_entry_restriction.hpp"
 
 #include "mkpro/core/passes/helpers.hpp"
 #include "mkpro/core/passes/cfg.hpp"
@@ -132,9 +133,10 @@ bool prove_stack_entry_equality(const StackEntryProofReader& reader,
 
 static bool prove_post_layout_stack_equality_impl(
     const std::vector<MachineItem>& items,
-    const AuthoritativePostLayoutControlFlow& flow, int entry_address,
+    const PostLayoutExecutionView& source, int entry_address,
     StackValueEqualityState initial, const PostLayoutStackEntryProofOptions& options,
-    const std::vector<std::size_t>* entry_states) {
+    const std::vector<std::size_t>* entry_states,
+    const detail::StackEntryRestriction* restriction = nullptr) {
   const bool trace = std::getenv("MKPRO_NATIVE_TRACE_STACK_ENTRY_EQUALITY") != nullptr;
   int diagnostic_pc = -1, diagnostic_opcode = -1, diagnostic_state = -1;
   const auto reject = [&](const char* reason) {
@@ -144,44 +146,47 @@ static bool prove_post_layout_stack_equality_impl(
                 << " equality=" << diagnostic_state << " rejected: " << reason << '\n';
     return false;
   };
-  if (!flow.proved || flow.execution_states.empty() ||
-      flow.execution_states.size() != flow.execution_successors.size())
+  if (!source.proved() || source.size() == 0 || source.size() != source.successors().size())
     return reject("exact execution graph is unavailable");
 
   std::set<std::size_t> requested;
   if (entry_states) {
     if (entry_states->empty()) return reject("no exact execution-state roots");
     for (const auto state:*entry_states)
-      if (state>=flow.execution_states.size() || !requested.insert(state).second)
+      if (state>=source.size() || !requested.insert(state).second)
         return reject("invalid or duplicate execution-state root");
   }
-  auto graph = options.refine_runtime_selectors
-      ? build_selector_consistent_execution_graph(items, flow)
-      : SelectorConsistentExecutionGraph{};
+  const auto graph = options.refine_runtime_selectors && !source.selection
+      ? shared_selector_consistent_execution_graph(items, source.control) : nullptr;
   // Borrow an immutable conservative graph rather than deep-copying its
   // adjacency lists for every stack query. A failed refinement still falls
   // back to exactly the original complete contexts.
-  const std::size_t state_count = graph.proved
-      ? graph.original_states.size() : flow.execution_states.size();
+  const bool use_refinement = graph && graph->proved;
+  const PostLayoutExecutionView view = use_refinement
+      ? PostLayoutExecutionView{source.control, graph.get()} : source;
+  const std::size_t state_count = view.size();
   const auto original_state = [&](std::size_t index) {
-    return graph.proved ? graph.original_states[index] : index;
+    return use_refinement ? view.original_index(index) : index;
   };
-  const auto& successors = graph.proved ? graph.successors : flow.execution_successors;
-  if (trace && graph.pruned_edges != 0)
+  const auto& successors = view.successors();
+  if (trace && use_refinement && graph->pruned_edges != 0)
     std::cerr << "[stack-entry-equality] selector-inconsistent edges removed="
-              << graph.pruned_edges << '\n';
+              << graph->pruned_edges << '\n';
 
   // Only compiler-typed show/entered protocols have the X/Y observation
   // contract. The authoritative graph has already checked their prompt,
   // contiguous input phases and single-step stores. An arbitrary manual
   // command or an unannotated STOP remains a full-state barrier.
   std::set<int> typed_protocols;
-  for (const auto& item : items)
+  for (std::size_t at = 0; at < items.size(); ++at) {
+    const auto& item = items[at];
     if (!item.raw && item.manual_interaction &&
+        (!restriction || !restriction->barriers[at]) &&
         item.manual_interaction->kind == ManualInteractionAnchorKind::PromptStop &&
         std::find(item.roles.begin(), item.roles.end(), kTypedDisplayObservationRole) !=
             item.roles.end())
       typed_protocols.insert(item.manual_interaction->protocol_id);
+  }
 
   const auto merge = [](StackValueEqualityState& into,
                         const StackValueEqualityState& from) {
@@ -211,7 +216,7 @@ static bool prove_post_layout_stack_equality_impl(
   auto unseeded=requested;
   for (std::size_t index = 0; index < state_count; ++index) {
     if (entry_states ? requested.contains(original_state(index)) :
-        flow.execution_states[original_state(index)].address == entry_address) {
+        view.state(index).address == entry_address) {
       unseeded.erase(original_state(index));
       incoming[index] = initial;
       if (options.numeric_entry_closed) entry_modes[index] = DecimalEntry::Closed;
@@ -232,13 +237,14 @@ static bool prove_post_layout_stack_equality_impl(
       continue;
     if (++explored > options.maximum_work)
       return reject("stack equality proof work exhausted");
-    const auto& execution = flow.execution_states[original_state(index)];
+    const auto& execution = view.state(index);
     if (execution.item_index >= items.size())
       return reject("execution state is outside the artifact");
     const auto& item = items[execution.item_index];
     diagnostic_pc = execution.address; diagnostic_opcode = item.opcode;
     diagnostic_state = stack_value_equality_key(state);
-    if (item.kind != MachineItemKind::Op || item.raw)
+    if (item.kind != MachineItemKind::Op || item.raw ||
+        (restriction && restriction->barriers[execution.item_index]))
       return reject("opaque or externally observed instruction");
 
     const bool typed_manual = item.manual_interaction &&
@@ -350,11 +356,15 @@ static bool prove_post_layout_stack_equality_impl(
     if (stack_values_fully_equal(state))
       continue;
     const auto& next_states = successors[index];
-    if (next_states.empty())
-      return reject("unequal stack reaches an unknown continuation");
+    const bool restrict_edge = restriction && (item.opcode == restriction->jump_opcode ||
+        item.opcode == restriction->call_opcode);
+    bool has_continuation = false;
     for (const auto successor : next_states) {
       if (successor >= incoming.size())
         return reject("successor is outside the execution graph");
+      if (restrict_edge && view.state(successor).address != restriction->target_address)
+        continue;
+      has_continuation = true;
       if (!incoming[successor].has_value()) {
         incoming[successor] = state;
         entry_modes[successor] = entry_mode;
@@ -368,6 +378,8 @@ static bool prove_post_layout_stack_equality_impl(
           pending.push_back(successor);
       }
     }
+    if (!has_continuation)
+      return reject("unequal stack reaches an unknown continuation");
   }
   if (trace)
     std::cerr << "[stack-entry-equality] entry=" << entry_address
@@ -380,7 +392,7 @@ bool prove_post_layout_stack_entry_equality(
     const std::vector<MachineItem>& items,
     const AuthoritativePostLayoutControlFlow& flow, int entry_address,
     StackValueEqualityState initial, const PostLayoutStackEntryProofOptions& options) {
-  return prove_post_layout_stack_equality_impl(items,flow,entry_address,initial,options,nullptr);
+  return prove_post_layout_stack_equality_impl(items,{flow},entry_address,initial,options,nullptr);
 }
 
 bool prove_post_layout_stack_state_equality(
@@ -388,7 +400,26 @@ bool prove_post_layout_stack_state_equality(
     const AuthoritativePostLayoutControlFlow& flow,
     const std::vector<std::size_t>& entry_states,
     StackValueEqualityState initial, const PostLayoutStackEntryProofOptions& options) {
-  return prove_post_layout_stack_equality_impl(items,flow,-1,initial,options,&entry_states);
+  return prove_post_layout_stack_equality_impl(items,{flow},-1,initial,options,&entry_states);
+}
+
+bool prove_post_layout_stack_state_equality_on_view(
+    const std::vector<MachineItem>& items, const PostLayoutExecutionView& view,
+    const std::vector<std::size_t>& entry_states, StackValueEqualityState initial,
+    const PostLayoutStackEntryProofOptions& options) {
+  if (options.refine_runtime_selectors) return false;
+  return prove_post_layout_stack_equality_impl(items, view, -1, initial, options, &entry_states);
+}
+
+bool detail::prove_restricted_post_layout_stack_equality(
+    const std::vector<MachineItem>& items, const PostLayoutExecutionView& view,
+    const StackEntryRestriction& restriction, int entry_address,
+    const std::vector<std::size_t>* entry_states, StackValueEqualityState initial,
+    const PostLayoutStackEntryProofOptions& options) {
+  if (options.refine_runtime_selectors || restriction.barriers.size() != items.size())
+    return false;
+  return prove_post_layout_stack_equality_impl(
+      items, view, entry_address, initial, options, entry_states, &restriction);
 }
 
 bool prove_post_layout_stack_producer_erasure(

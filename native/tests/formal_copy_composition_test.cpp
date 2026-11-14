@@ -7,6 +7,7 @@
 #include "mkpro/core/joint_constraint_origins.hpp"
 #include "mkpro/core/joint_proof_input.hpp"
 #include "mkpro/core/joint_representation_search.hpp"
+#include "mkpro/core/detail/layout_jobs.hpp"
 #include "mkpro/core/natural_target_component_layout.hpp"
 #include "mkpro/emulator/mk61.hpp"
 #include "test_support.hpp"
@@ -786,6 +787,7 @@ void completed_joint_search_cache() {
   policy = options; policy.reserve_suppressed_constant_preload_slots.insert("3.25");
   miss(root, policy, limits, true);
   auto budget = limits; ++budget.maximum_depth; miss(root, options, budget, true);
+  budget = limits; budget.prioritize_composition_depth = true; miss(root, options, budget, true);
   miss(root, options, limits, false);
   const JointRepresentationFinalizer identity = [](const auto& value) {
     return std::optional<LayoutSearchArtifact>{value};
@@ -830,6 +832,49 @@ void completed_joint_search_cache() {
   }
   require(original_observation == reused_observation,
       "a history-rebased winning artifact must preserve complete stock ROM state and the next input");
+}
+
+void shared_joint_proof_work() {
+  CompileOptions options;
+  options.analysis = true;
+  options.budget = 999999;
+  const LayoutSearchArtifact root{fixture(false, false, true),
+      {{.register_name = "1", .value = "3.25"}}, {{"shared-joint-root", "source A"}}};
+  const TransactionSearchLimits limits{.maximum_expansions = 1, .maximum_candidates = 2,
+      .maximum_depth = 1, .maximum_growth_cells = 4};
+  using Outcome = TransactionSearchResult<LayoutSearchArtifact>;
+  Outcome first, second, changed;
+  const auto work = detail::make_joint_layout_work();
+  const detail::JointLayoutWorkScope scope(work);
+  // Use independent search threads so a hit cannot come from the caller's
+  // older thread-local completed ledger.
+  const auto run_search = [&](Outcome& result, const LayoutSearchArtifact& input) {
+    std::thread worker([&] {
+      const detail::JointLayoutWorkScope inherit(work);
+      result = search_joint_representation_constraints(input, options, {}, limits, true);
+    });
+    worker.join();
+  };
+  run_search(first, root);
+  const auto before = detail::joint_layout_work_stats(*work);
+  run_search(second, root);
+  const auto after = detail::joint_layout_work_stats(*work);
+  require(after.variants.hits + after.closures.hits > before.variants.hits + before.closures.hits &&
+          first.incumbent && second.incumbent &&
+          first.expanded == second.expanded && first.admitted == second.admitted &&
+          first.rejected == second.rejected && first.duplicate == second.duplicate &&
+          first.budget_exhausted == second.budget_exhausted &&
+          same_layout_search_artifact(*first.incumbent, *second.incumbent),
+      "independent threads reuse exact subproofs without changing the joint frontier");
+  auto other = root;
+  other.optimizations = {{"shared-joint-root", "source B"}};
+  run_search(changed, other);
+  const auto rebased = detail::joint_layout_work_stats(*work);
+  require(rebased.variants.hits + rebased.closures.hits > after.variants.hits + after.closures.hits &&
+          changed.incumbent && changed.incumbent->optimizations.front().detail == "source B" &&
+          same_layout_search_artifact(*first.incumbent, *changed.incumbent) &&
+          run(root.items, root.preloads) == run(changed.incumbent->items, changed.incumbent->preloads),
+      "shared proof stages must preserve the current report prefix and ROM state");
 }
 
 void completed_search_cache() {
@@ -915,7 +960,7 @@ int main(int argc, char** argv) {
     if (argc == 2 && std::string(argv[1]) == "--game") { measure_game(); return 0; }
     counter_classification(); proof_and_rom(); footprint_layout_and_rom(); finite_encoding_and_rom();
     independent_nullable_completion();numeric_formal_origin_metadata();literal_preload_provenance();
-    pending_formal_recoloring();completed_search_cache();neutral_symbolic_root_and_rom();
+    pending_formal_recoloring();completed_search_cache();shared_joint_proof_work();neutral_symbolic_root_and_rom();
     std::cout << "formal copy composition compiler/ROM tests passed\n";
     return 0;
   } catch (const std::exception& error) {

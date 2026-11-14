@@ -1,6 +1,8 @@
 #include "mkpro/core/natural_target_component_layout.hpp"
 
 #include "mkpro/core/callee_hole_boundary_normalization.hpp"
+#include "mkpro/core/detail/layout_jobs.hpp"
+#include "mkpro/core/detail/natural_target_flow_proof_scope.hpp"
 #include "mkpro/core/indirect_addressing.hpp"
 #include "mkpro/core/indirect_read_observability.hpp"
 #include "mkpro/core/late_bound_decimal_selector.hpp"
@@ -9,11 +11,13 @@
 #include "mkpro/core/layout_deadline_packing.hpp"
 #include "mkpro/core/opcodes.hpp"
 #include "mkpro/core/passes/helpers.hpp"
+#include "mkpro/core/post_layout_indirect_flow.hpp"
 #include "mkpro/core/stable_register_value_flow.hpp"
 #include "mkpro/core/selector_writeback.hpp"
 
 #include <algorithm>
 #include <array>
+#include <cstdint>
 #include <compare>
 #include <deque>
 #include <exception>
@@ -29,6 +33,8 @@
 #include <string>
 #include <string_view>
 #include <tuple>
+#include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -280,11 +286,11 @@ enum class TraceEdgeKind {
 
 struct TraceState {
   std::size_t command = 0;
-  std::vector<std::size_t> returns;
+  detail::InlineProofRow<std::size_t, 5> returns;
   // Logical and official linear PCs share one class; side counters and
   // return frames retain their distinct hardware successor domains.
   int counter_domain = 0;
-  std::vector<int> return_domains;
+  detail::InlineProofRow<int, 5> return_domains;
   auto operator<=>(const TraceState&) const = default;
 };
 
@@ -3620,16 +3626,21 @@ std::optional<int> trace_counter_domain(std::optional<int> counter, AddressSpace
   } catch (const std::exception&) { return std::nullopt; }
 }
 
-std::optional<TraceGraph> build_trace_graph(
+template <class Visit>
+bool visit_trace_graph_rows(
     const std::vector<MachineItem>& items,
     const AuthoritativePostLayoutControlFlow& flow,
     const std::map<std::size_t, std::size_t>& origin_by_item,
-    AddressSpaceModel model, int maximum_states,
-    const std::map<std::size_t, std::size_t>* transparent_aliases = nullptr) {
-  if (!flow.proved || maximum_states <= 0 ||
+    AddressSpaceModel model,
+    const std::map<std::size_t, std::size_t>* transparent_aliases,
+    Visit visit) {
+  if (!flow.proved ||
       flow.execution_states.size() != flow.execution_edges.size())
-    return std::nullopt;
-  const ArtifactIndex index = index_artifact(items);
+    return false;
+  std::vector<std::size_t> physical_items;
+  physical_items.reserve(items.size());
+  for (std::size_t at = 0; at < items.size(); ++at)
+    if (items[at].kind != MachineItemKind::Label) physical_items.push_back(at);
   const auto canonical_origin = [&](std::size_t origin) {
     if (transparent_aliases) {
       const auto found = transparent_aliases->find(origin);
@@ -3641,6 +3652,8 @@ std::optional<TraceGraph> build_trace_graph(
   // execution edge, retaining its counter and every return frame; never
   // reconstruct fallthrough from a physical address.
   const auto retained_state = [&](std::size_t state) -> std::optional<std::size_t> {
+    if (!transparent_aliases || transparent_aliases->empty())
+      return state < flow.execution_states.size() ? std::optional{state} : std::nullopt;
     std::set<std::size_t> seen;
     for (;;) {
       if (state >= flow.execution_states.size() || !seen.insert(state).second)
@@ -3648,7 +3661,7 @@ std::optional<TraceGraph> build_trace_graph(
       const auto at = flow.execution_states[state].item_index;
       const auto origin = origin_for_item(origin_by_item, at);
       if (!origin || at >= items.size()) return std::nullopt;
-      if (!transparent_aliases || !transparent_aliases->contains(*origin)) return state;
+      if (!transparent_aliases->contains(*origin)) return state;
       if (items[at].kind != MachineItemKind::Op ||
           (items[at].opcode != kJumpOpcode && (items[at].opcode & 0xf0) != 0x80) ||
           flow.execution_edges[state].size() != 1U)
@@ -3665,39 +3678,47 @@ std::optional<TraceGraph> build_trace_graph(
       state = next;
     }
   };
-  const auto projected = [&](std::size_t state) -> std::optional<TraceState> {
-    if (state >= flow.execution_states.size()) return std::nullopt;
+  std::vector<std::optional<TraceState>> projected_states(flow.execution_states.size());
+  const auto projected = [&](std::size_t state) -> const TraceState* {
+    if (state >= flow.execution_states.size()) return nullptr;
+    auto& slot = projected_states[state];
+    if (slot) return &*slot;
     const auto& execution = flow.execution_states[state];
     const auto origin = origin_for_item(origin_by_item, execution.item_index);
     const auto mode = trace_counter_domain(execution.formal_opcode, model);
     if (!origin || !mode || execution.return_stack.size() != execution.formal_return_stack.size())
-      return std::nullopt;
+      return nullptr;
     TraceState result{.command = *origin, .counter_domain = *mode};
     for (std::size_t n = 0; n < execution.return_stack.size(); ++n) {
-      const auto item = command_at_address(items, index, execution.return_stack[n]);
-      const auto frame = item ? origin_for_item(origin_by_item, *item) : std::nullopt;
+      const int address = execution.return_stack[n];
+      if (address < 0 || static_cast<std::size_t>(address) >= physical_items.size())
+        return nullptr;
+      const auto item = physical_items[static_cast<std::size_t>(address)];
+      if (items[item].kind != MachineItemKind::Op) return nullptr;
+      const auto frame = origin_for_item(origin_by_item, item);
       const auto frame_mode = trace_counter_domain(execution.formal_return_stack[n], model);
-      if (!frame || !frame_mode) return std::nullopt;
+      if (!frame || !frame_mode) return nullptr;
       result.returns.push_back(canonical_origin(*frame));
       result.return_domains.push_back(*frame_mode);
     }
-    return result;
+    slot = std::move(result);
+    return &*slot;
   };
-  TraceGraph graph;
   for (std::size_t state = 0; state < flow.execution_states.size(); ++state) {
     const auto retained = retained_state(state);
-    if (!retained) return std::nullopt;
+    if (!retained) return false;
     if (*retained != state) continue;
     const auto source = projected(state);
     const auto at = flow.execution_states[state].item_index;
     if (!source || at >= items.size() || items[at].kind != MachineItemKind::Op)
-      return std::nullopt;
+      return false;
     const auto& item = items[at];
     std::vector<TraceEdge> edges;
+    edges.reserve(flow.execution_edges[state].size());
     for (const auto& edge : flow.execution_edges[state]) {
       const auto target_state = retained_state(edge.target_state);
-      const auto target = target_state ? projected(*target_state) : std::nullopt;
-      if (!target) return std::nullopt;
+      const auto target = target_state ? projected(*target_state) : nullptr;
+      if (!target) return false;
       TraceEdgeKind kind;
       switch (edge.kind) {
       case PostLayoutExecutionEdgeKind::Fallthrough:
@@ -3716,14 +3737,48 @@ std::optional<TraceGraph> build_trace_graph(
     }
     std::sort(edges.begin(), edges.end());
     edges.erase(std::unique(edges.begin(), edges.end()), edges.end());
-    const auto [found, inserted] = graph.emplace(*source, edges);
+    if (!visit(*source, std::move(edges))) return false;
+  }
+  return true;
+}
+
+std::optional<TraceGraph> build_trace_graph(
+    const std::vector<MachineItem>& items,
+    const AuthoritativePostLayoutControlFlow& flow,
+    const std::map<std::size_t, std::size_t>& origin_by_item,
+    AddressSpaceModel model, int maximum_states,
+    const std::map<std::size_t, std::size_t>* transparent_aliases = nullptr) {
+  if (maximum_states <= 0) return std::nullopt;
+  TraceGraph graph;
+  if (!visit_trace_graph_rows(items, flow, origin_by_item, model, transparent_aliases,
+      [&](const TraceState& source, std::vector<TraceEdge>&& edges) {
+    const auto [found, inserted] = graph.try_emplace(source, std::move(edges));
     // A quotient must be deterministic with respect to the retained context.
     // Never hide different hardware continuations by unioning their edges.
-    if ((!inserted && found->second != edges) ||
-        graph.size() > static_cast<std::size_t>(maximum_states))
-      return std::nullopt;
-  }
+    return (inserted || found->second == edges) &&
+        graph.size() <= static_cast<std::size_t>(maximum_states);
+  })) return std::nullopt;
   return graph;
+}
+
+bool trace_graph_matches(
+    const std::vector<MachineItem>& items, const AuthoritativePostLayoutControlFlow& flow,
+    const std::map<std::size_t, std::size_t>& origin_by_item,
+    AddressSpaceModel model, const TraceGraph& expected) {
+  std::vector<const TraceState*> covered;
+  covered.reserve(flow.execution_states.size());
+  if (!visit_trace_graph_rows(items, flow, origin_by_item, model, nullptr,
+      [&](const TraceState& source, const std::vector<TraceEdge>& edges) {
+    const auto found = expected.find(source);
+    if (found == expected.end() || found->second != edges) return false;
+    covered.push_back(&found->first);
+    return true;
+  })) return false;
+  // All constructed rows matched the corresponding reference row, including
+  // duplicates. Require coverage as well, so no reference state can vanish.
+  std::sort(covered.begin(), covered.end(), std::less<>{});
+  return static_cast<std::size_t>(
+      std::unique(covered.begin(), covered.end()) - covered.begin()) == expected.size();
 }
 
 using ExternalIdentity =
@@ -3803,74 +3858,107 @@ struct FlowEffectProofMemo {
   std::map<FlowEffectProofKey, FlowEffectProofResult> completed;
 };
 
-struct ConvertedFlowEffectProofContext {
-  std::shared_ptr<NaturalTargetFlowProofCache> cache;
-  std::shared_ptr<const LayoutSearchArtifact> source;
-  TraceGraph source_trace;
-  std::shared_ptr<FlowEffectProofMemo> effect_memo;
-  std::map<TraceState, std::vector<std::pair<TraceState, TraceEdgeKind>>>
-      incoming_edges;
-  std::set<std::size_t> external_entry_commands;
-  std::map<std::size_t, IrOp> raised_command_by_item;
-  std::map<TraceState, passes::X2ValueDataflowState> symbolic_x2_entries;
-  bool symbolic_x2_ready = false;
+using SymbolicFlowEntries = std::map<TraceState, passes::X2ValueDataflowState>;
+using FlowIncomingEdges =
+    std::map<TraceState, std::vector<std::pair<TraceState, TraceEdgeKind>>>;
+
+// The input is published once for a particular typed program, trace and set
+// of external entries. The once flags never guard work for a different key.
+struct PreparedFlowSource {
+  TraceGraph trace;
+  FlowIncomingEdges incoming_edges;
+  std::once_flag symbolic_once;
+  SymbolicFlowEntries symbolic_entries;
+  FlowEffectProofMemo effect_memo;
 };
 
-bool same_completed_flow_proof_input(
-    const ConvertedFlowEffectProofContext& left,
-    const ConvertedFlowEffectProofContext& right) {
-  return left.source && right.source &&
-         left.source_trace == right.source_trace &&
-         left.external_entry_commands == right.external_entry_commands &&
-         same_layout_search_artifact(*left.source, *right.source);
-}
+struct FlowSourceProgram {
+  std::vector<MachineItem> items;
+  std::vector<PostLayoutExternalEntryState> entries;
+  AddressSpaceModel model;
+  std::set<std::size_t> external_commands;
+  std::map<std::size_t, IrOp> commands;
+};
 
-bool restore_completed_flow_proof(ConvertedFlowEffectProofContext& context) {
-  if (!context.cache) return false;
-  const auto cache = context.cache;
-  const std::lock_guard lock(cache->mutex);
-  for (const auto& erased : cache->completed) {
-    const auto saved =
-        std::static_pointer_cast<const ConvertedFlowEffectProofContext>(erased);
-    if (!same_completed_flow_proof_input(context, *saved)) continue;
-    context = *saved;
-    context.cache = cache;
-    ++cache->stats.hits;
-    return true;
+struct FlowSourceCacheEntry {
+  std::size_t signature;
+  std::shared_ptr<const FlowSourceProgram> program;
+  std::shared_ptr<PreparedFlowSource> source;
+};
+
+struct ConvertedFlowEffectProofContext {
+  std::shared_ptr<NaturalTargetFlowProofCache> cache;
+  std::shared_ptr<const FlowSourceProgram> program;
+  std::shared_ptr<PreparedFlowSource> original_source;
+  std::shared_ptr<PreparedFlowSource> alternate_source;
+  const TraceGraph* original_trace = nullptr;
+  bool memoize_effects = true;
+};
+
+// This is a discriminator only: hits must still compare every typed item,
+// external entry and trace edge. Sample inexpensive fields before walking the
+// full trace or comparing proof metadata while holding the cache mutex.
+std::size_t flow_source_signature(const FlowSourceProgram& program, const TraceGraph& trace) {
+  std::size_t result = trace.size();
+  const auto mix = [&](std::size_t value) {
+    result ^= value + 0x9e3779b9U + (result << 6) + (result >> 2);
+  };
+  mix(static_cast<std::size_t>(program.model));
+  mix(program.items.size());
+  for (const auto& item : program.items) {
+    mix(static_cast<std::size_t>(item.kind));
+    mix(static_cast<std::size_t>(item.opcode));
   }
-  ++cache->stats.misses;
-  return false;
+  for (const auto& entry : program.entries) mix(entry.entry.item_index);
+  return result;
 }
 
-void retain_completed_flow_proof(const ConvertedFlowEffectProofContext& context) {
-  if (!context.cache || !context.symbolic_x2_ready) return;
-  const auto cache = context.cache;
-  const std::lock_guard lock(cache->mutex);
-  if (cache->stats.capacity == 0) return;
-  for (const auto& erased : cache->completed) {
-    const auto saved =
-        std::static_pointer_cast<const ConvertedFlowEffectProofContext>(erased);
-    if (same_completed_flow_proof_input(context, *saved)) return;
+std::shared_ptr<PreparedFlowSource> make_prepared_flow_source(const TraceGraph& trace) {
+  auto source = std::make_shared<PreparedFlowSource>();
+  source->trace = trace;
+  for (const auto& [from, edges] : trace)
+    for (const auto& edge : edges)
+      source->incoming_edges[edge.target].push_back({from, edge.kind});
+  return source;
+}
+
+std::shared_ptr<PreparedFlowSource> prepare_flow_source(
+    const TraceGraph& trace, const ConvertedFlowEffectProofContext& context) {
+  if (!context.cache || context.cache->stats.capacity == 0)
+    return make_prepared_flow_source(trace);
+  const auto signature = flow_source_signature(*context.program, trace);
+  const std::lock_guard lock(context.cache->mutex);
+  auto& entries = context.cache->completed;
+  for (auto it = entries.rbegin(); it != entries.rend(); ++it) {
+    const auto entry = std::static_pointer_cast<const FlowSourceCacheEntry>(*it);
+    if (entry->signature != signature ||
+        (entry->program != context.program &&
+         (entry->program->model != context.program->model ||
+          entry->program->entries != context.program->entries ||
+          !same_layout_search_items(entry->program->items, context.program->items))) ||
+        entry->source->trace != trace)
+      continue;
+    ++context.cache->stats.hits;
+    // Move only the entry handle. A worker can still use an evicted source.
+    std::rotate(it.base() - 1, it.base(), entries.end());
+    return entry->source;
   }
-  auto saved = std::make_shared<ConvertedFlowEffectProofContext>(context);
-  saved->cache.reset(); // No cache -> proof -> cache ownership cycle.
-  if (cache->completed.size() == cache->stats.capacity)
-    cache->completed.pop_front();
-  cache->completed.push_back(std::move(saved));
-  ++cache->stats.insertions;
+  ++context.cache->stats.misses;
+  auto source = make_prepared_flow_source(trace);
+  if (entries.size() == context.cache->stats.capacity) entries.pop_front();
+  entries.push_back(std::make_shared<const FlowSourceCacheEntry>(
+      FlowSourceCacheEntry{signature, context.program, source}));
+  ++context.cache->stats.insertions;
+  return source;
 }
 
-void bind_flow_proof_trace(
+PreparedFlowSource& bind_flow_proof_trace(
     const TraceGraph& trace, ConvertedFlowEffectProofContext& context) {
-  if (context.source_trace == trace) return;
-  context.source_trace = trace;
-  context.incoming_edges.clear();
-  context.symbolic_x2_entries.clear();
-  context.symbolic_x2_ready = false;
-  if (context.effect_memo) context.effect_memo = std::make_shared<FlowEffectProofMemo>();
-  for (const auto& [source, edges] : trace)
-    for (const TraceEdge& edge : edges)
-      context.incoming_edges[edge.target].push_back({source, edge.kind});
+  if (&trace == context.original_trace) return *context.original_source;
+  if (context.original_source->trace == trace) return *context.original_source;
+  if (!context.alternate_source || context.alternate_source->trace != trace)
+    context.alternate_source = prepare_flow_source(trace, context);
+  return *context.alternate_source;
 }
 
 ConvertedFlowEffectProofContext build_converted_flow_effect_proof_context(
@@ -3879,110 +3967,117 @@ ConvertedFlowEffectProofContext build_converted_flow_effect_proof_context(
     const TraceGraph& trace,
     std::shared_ptr<NaturalTargetFlowProofCache> cache = {},
     bool memoize_effects = true) {
-  ConvertedFlowEffectProofContext result;
-  result.cache = std::move(cache);
-  if (memoize_effects) result.effect_memo = std::make_shared<FlowEffectProofMemo>();
-  result.source = std::make_shared<const LayoutSearchArtifact>(
-      LayoutSearchArtifact{original_items, {}, {}});
-  result.source_trace = trace;
-  for (const auto& [source, edges] : trace) {
-    for (const TraceEdge& edge : edges)
-      result.incoming_edges[edge.target].push_back({source, edge.kind});
-  }
-  for (const PostLayoutExternalEntryState& entry : control_flow.external_entries)
-    result.external_entry_commands.insert(entry.entry.item_index);
+  auto program = std::make_shared<FlowSourceProgram>(
+      FlowSourceProgram{original_items, control_flow.external_entries, control_flow.address_space_model});
+  for (const auto& entry : program->entries)
+    program->external_commands.insert(entry.entry.item_index);
 
   const std::vector<IrOp> raised = raise_machine_to_ir(original_items);
   std::size_t raised_index = 0;
-  for (std::size_t item_index = 0; item_index < original_items.size(); ++item_index) {
-    const MachineItem& item = original_items.at(item_index);
-    if (item.kind != MachineItemKind::Op)
-      continue;
-    while (raised_index < raised.size() && raised.at(raised_index).kind == IrKind::Label)
+  for (std::size_t at = 0; at < original_items.size(); ++at) {
+    const auto& item = original_items[at];
+    if (item.kind != MachineItemKind::Op) continue;
+    while (raised_index < raised.size() && raised[raised_index].kind == IrKind::Label)
       ++raised_index;
-    if (raised_index >= raised.size() || raised.at(raised_index).opcode != item.opcode) {
-      result.raised_command_by_item.clear();
-      return result;
+    if (raised_index >= raised.size() || raised[raised_index].opcode != item.opcode) {
+      program->commands.clear();
+      break;
     }
-    result.raised_command_by_item.emplace(item_index, raised.at(raised_index));
-    ++raised_index;
+    program->commands.emplace(at, raised[raised_index++]);
   }
+  ConvertedFlowEffectProofContext result{.cache = std::move(cache),
+      .program = std::move(program), .original_trace = &trace, .memoize_effects = memoize_effects};
+  result.original_source = prepare_flow_source(trace, result);
   return result;
 }
 
-void ensure_symbolic_flow_entries(
-    const TraceGraph& trace, ConvertedFlowEffectProofContext& result) {
-  bind_flow_proof_trace(trace, result);
-  if (result.symbolic_x2_ready || restore_completed_flow_proof(result)) return;
-  result.symbolic_x2_ready = true;
-  // Unconditional PP/BP substitutions have identical stack/X2 transfers.
-  // Build the unchanged must-analysis only when a conditional proof actually
-  // needs symbolic entries; share its fixed point across all layout trials.
-  std::deque<TraceState> pending;
-  std::set<TraceState> queued;
-  const auto enqueue = [&](const TraceState& next_state) {
-    if (queued.insert(next_state).second) pending.push_back(next_state);
+SymbolicFlowEntries compute_symbolic_flow_entries(
+    const TraceGraph& trace, const FlowSourceProgram& program) {
+  // Keep the original ordered seed and edge traversal. Assign dense IDs only
+  // for this fixed point; producer identities still use the original items.
+  struct Successor {
+    std::size_t id;
+    passes::X2DataflowEdgeKind kind;
   };
+  std::map<TraceState, std::size_t> ids;
   for (const auto& [state, edges] : trace) {
     (void)edges;
-    if (!result.external_entry_commands.contains(state.command))
-      continue;
-    result.symbolic_x2_entries.emplace(
-        state, passes::empty_x2_value_dataflow_state(true));
-    enqueue(state);
+    const auto id = ids.size();
+    ids.emplace_hint(ids.end(), state, id);
   }
-  while (!pending.empty()) {
-    const TraceState state = std::move(pending.front());
-    pending.pop_front();
-    queued.erase(state);
-    const auto input = result.symbolic_x2_entries.find(state);
-    const auto command = result.raised_command_by_item.find(state.command);
-    const auto outgoing = trace.find(state);
-    if (input == result.symbolic_x2_entries.end() ||
-        command == result.raised_command_by_item.end() || outgoing == trace.end()) {
-      continue;
+  std::vector<std::vector<Successor>> successors(ids.size());
+  std::vector<const IrOp*> commands(ids.size(), nullptr);
+  std::vector<std::optional<passes::X2ValueDataflowState>> states(ids.size());
+  std::vector<bool> queued(ids.size(), false);
+  std::vector<int> producers(ids.size());
+  std::deque<std::size_t> pending;
+  const auto enqueue = [&](std::size_t id) {
+    if (queued[id]) return;
+    queued[id] = true;
+    pending.push_back(id);
+  };
+  for (const auto& [state, edges] : trace) {
+    const auto id = ids.at(state);
+    producers[id] = static_cast<int>(state.command);
+    if (const auto command = program.commands.find(state.command); command != program.commands.end())
+      commands[id] = &command->second;
+    if (program.external_commands.contains(state.command)) {
+      states[id] = passes::empty_x2_value_dataflow_state(true);
+      enqueue(id);
     }
-    const auto edge_kind_for = [](const TraceEdge& edge) {
-      return edge.kind == TraceEdgeKind::Fallthrough
+    for (const auto& edge : edges) {
+      const auto kind = edge.kind == TraceEdgeKind::Fallthrough
           ? passes::X2DataflowEdgeKind::Fallthrough
           : edge.kind == TraceEdgeKind::Taken ? passes::X2DataflowEdgeKind::Jump
-                                              : passes::X2DataflowEdgeKind::Normal;
-    };
-    // Transfer depends on the input, command and edge kind, never the target.
-    // Evaluate before any successor join: a self-edge must not change the
-    // popped input halfway through propagation to its other successors.
-    std::array<bool,3> computed{};
-    std::array<std::optional<passes::X2ValueDataflowState>,3> outputs;
-    for (const auto& edge : outgoing->second) {
-      const auto kind = edge_kind_for(edge);
-      const auto slot = static_cast<std::size_t>(kind);
-      if (computed[slot]) continue;
-      outputs[slot] = passes::transfer_x2_value_state_for_edge(
-          input->second, command->second, kind,
-          passes::X2TransferStateOptions{.track_register_memory = true},
-          static_cast<int>(state.command));
-      computed[slot] = true;
-    }
-    for (const TraceEdge& edge : outgoing->second) {
-      const auto& output = outputs[static_cast<std::size_t>(edge_kind_for(edge))];
-      if (!output) continue;
-      const auto existing = result.symbolic_x2_entries.find(edge.target);
-      if (existing != result.symbolic_x2_entries.end() &&
-          passes::same_x2_value_dataflow_state(existing->second,*output))
-        continue; // Idempotent join; avoid copying all register/shape sets.
-      const passes::X2ValueDataflowState joined =
-          passes::join_x2_value_dataflow_states(
-              existing == result.symbolic_x2_entries.end() ? nullptr : &existing->second,
-              *output, true);
-      if (existing != result.symbolic_x2_entries.end() &&
-          passes::same_x2_value_dataflow_state(existing->second, joined)) {
-        continue;
-      }
-      result.symbolic_x2_entries[edge.target] = joined;
-      enqueue(edge.target);
+                                             : passes::X2DataflowEdgeKind::Normal;
+      successors[id].push_back({ids.at(edge.target), kind});
     }
   }
-  retain_completed_flow_proof(result);
+  while (!pending.empty()) {
+    const auto id = pending.front();
+    pending.pop_front();
+    queued[id] = false;
+    if (!states[id] || commands[id] == nullptr) continue;
+
+    // Compute each transfer before any join (including self-edges).
+    std::array<bool, 3> computed{};
+    std::array<std::optional<passes::X2ValueDataflowState>, 3> outputs;
+    for (const auto& edge : successors[id]) {
+      const auto slot = static_cast<std::size_t>(edge.kind);
+      if (computed[slot]) continue;
+      outputs[slot] = passes::transfer_x2_value_state_for_edge(
+          *states[id], *commands[id], edge.kind,
+          passes::X2TransferStateOptions{.track_register_memory = true}, producers[id]);
+      computed[slot] = true;
+    }
+    for (const auto& edge : successors[id]) {
+      const auto& output = outputs[static_cast<std::size_t>(edge.kind)];
+      if (!output) continue;
+      auto& existing = states[edge.id];
+      if (existing && passes::same_x2_value_dataflow_state(*existing, *output)) continue;
+      auto joined = passes::join_x2_value_dataflow_states(
+          existing ? &*existing : nullptr, *output, true);
+      if (existing && passes::same_x2_value_dataflow_state(*existing, joined)) continue;
+      existing = std::move(joined);
+      enqueue(edge.id);
+    }
+  }
+  SymbolicFlowEntries result;
+  for (const auto& [state, id] : ids)
+    if (states[id]) result.emplace_hint(result.end(), state, std::move(*states[id]));
+  return result;
+}
+
+const SymbolicFlowEntries& ensure_symbolic_flow_entries(
+    PreparedFlowSource& source, const ConvertedFlowEffectProofContext& context) {
+  std::call_once(source.symbolic_once, [&] {
+    source.symbolic_entries = compute_symbolic_flow_entries(source.trace, *context.program);
+    if (context.cache) {
+      const std::lock_guard lock(context.cache->mutex);
+      ++context.cache->stats.symbolic_evaluations;
+    }
+  });
+  return source.symbolic_entries;
 }
 
 bool converted_flow_effects_equivalent_uncached(
@@ -3990,14 +4085,12 @@ bool converted_flow_effects_equivalent_uncached(
     const std::vector<NaturalTargetAnchorCandidate>& anchors,
     const std::vector<NaturalTargetFlowRewrite>& flows,
     const std::vector<DisplacedIndirectFlowRewrite>& displaced_flows,
-    const TraceGraph& trace, ConvertedFlowEffectProofContext& proof_context,
+    PreparedFlowSource& prepared, const ConvertedFlowEffectProofContext& proof_context,
     const std::vector<int>& released_registers,
     std::string* failure_reason = nullptr,
     std::size_t* failure_command = nullptr,
     int* x2_reconvergence_flows = nullptr) {
-  // Canonical transparent-jump traces can differ from the original input.
-  // Neither incoming edges nor completed X2 facts cross that identity change.
-  bind_flow_proof_trace(trace, proof_context);
+  const auto& trace = prepared.trace;
   if (x2_reconvergence_flows != nullptr)
     *x2_reconvergence_flows = 0;
   const auto fail = [&](std::string reason) {
@@ -4016,7 +4109,7 @@ bool converted_flow_effects_equivalent_uncached(
     converted_commands.insert(flow.original_command_item);
 
   const auto is_external_entry_command = [&](std::size_t command) {
-    return proof_context.external_entry_commands.contains(command);
+    return proof_context.program->external_commands.contains(command);
   };
   const auto command_preserves_x = [](int opcode) {
     return (opcode >= 0x40 && opcode <= 0x4f) || opcode == 0x51 || opcode == 0x53 ||
@@ -4024,9 +4117,8 @@ bool converted_flow_effects_equivalent_uncached(
            (opcode >= 0xb0 && opcode <= 0xbf);
   };
 
-  const auto& incoming_edges = proof_context.incoming_edges;
-  const auto& raised_command_by_item = proof_context.raised_command_by_item;
-  const auto& symbolic_x2_entries = proof_context.symbolic_x2_entries;
+  const auto& incoming_edges = prepared.incoming_edges;
+  const auto& raised_command_by_item = proof_context.program->commands;
 
   std::map<std::size_t, int> converted_opcode_by_command;
   for (const NaturalTargetFlowRewrite& flow : flows) {
@@ -4047,7 +4139,7 @@ bool converted_flow_effects_equivalent_uncached(
     converted_opcode_by_command.emplace(flow.command_origin, flow.direct_opcode);
 
   const auto symbolic_entry_has_x2_equal_x = [&](std::size_t command) {
-    ensure_symbolic_flow_entries(trace, proof_context);
+    const auto& symbolic_x2_entries = ensure_symbolic_flow_entries(prepared, proof_context);
     bool found = false;
     for (const auto& [state, edges] : trace) {
       (void)edges;
@@ -4067,7 +4159,7 @@ bool converted_flow_effects_equivalent_uncached(
 
   const auto paired_x2_reconverges_after_fallthrough =
       [&](std::size_t command) {
-        ensure_symbolic_flow_entries(trace, proof_context);
+        const auto& symbolic_x2_entries = ensure_symbolic_flow_entries(prepared, proof_context);
         const auto raised_command = raised_command_by_item.find(command);
         const auto converted_opcode = converted_opcode_by_command.find(command);
         if (raised_command == raised_command_by_item.end() ||
@@ -4605,16 +4697,12 @@ bool converted_flow_effects_equivalent(
     std::string* failure_reason = nullptr,
     std::size_t* failure_command = nullptr,
     int* x2_reconvergence_flows = nullptr) {
-  bind_flow_proof_trace(trace, proof_context);
-  if (!proof_context.effect_memo)
+  auto& prepared = bind_flow_proof_trace(trace, proof_context);
+  if (!proof_context.memoize_effects)
     return converted_flow_effects_equivalent_uncached(
-        original_items, anchors, flows, displaced_flows, trace, proof_context,
+        original_items, anchors, flows, displaced_flows, prepared, proof_context,
         released_registers, failure_reason, failure_command, x2_reconvergence_flows);
-  // Restore only the exact immutable input/trace context. Physical anchor
-  // addresses, layout order and operand origins are not read by this proof;
-  // selector identity, command identity/order and every replacement opcode are.
-  if (!proof_context.symbolic_x2_ready && proof_context.cache)
-    (void)restore_completed_flow_proof(proof_context);
+  auto& memo = prepared.effect_memo;
   FlowEffectProofKey key;
   for (const auto& anchor : anchors)
     key.anchors.emplace_back(anchor.selector.register_name, anchor.selector.register_index);
@@ -4632,9 +4720,9 @@ bool converted_flow_effects_equivalent(
   };
   std::optional<FlowEffectProofResult> cached;
   {
-    const std::lock_guard lock(proof_context.effect_memo->mutex);
-    const auto found = proof_context.effect_memo->completed.find(key);
-    if (found != proof_context.effect_memo->completed.end()) cached = found->second;
+    const std::lock_guard lock(memo.mutex);
+    const auto found = memo.completed.find(key);
+    if (found != memo.completed.end()) cached = found->second;
   }
   if (proof_context.cache) {
     const std::lock_guard lock(proof_context.cache->mutex);
@@ -4645,14 +4733,13 @@ bool converted_flow_effects_equivalent(
   FlowEffectProofResult result;
   std::size_t failed = std::numeric_limits<std::size_t>::max();
   result.equivalent = converted_flow_effects_equivalent_uncached(
-      original_items, anchors, flows, displaced_flows, trace, proof_context,
+      original_items, anchors, flows, displaced_flows, prepared, proof_context,
       released_registers, &result.reason, &failed, &result.x2_reconvergence_flows);
   if (failed != std::numeric_limits<std::size_t>::max()) result.failure_command = failed;
   {
-    const std::lock_guard lock(proof_context.effect_memo->mutex);
-    if (proof_context.effect_memo->completed.size() >= 128U)
-      proof_context.effect_memo->completed.erase(proof_context.effect_memo->completed.begin());
-    proof_context.effect_memo->completed.emplace(std::move(key), result);
+    const std::lock_guard lock(memo.mutex);
+    if (memo.completed.size() >= 128U) memo.completed.erase(memo.completed.begin());
+    memo.completed.emplace(std::move(key), result);
   }
   return publish(result);
 }
@@ -6158,7 +6245,8 @@ deferred_selector_allocation_impl(
                                        static_cast<int>(control_options.maximum_execution_states));
   const auto external = external_identities(control_flow, identity);
   if (!trace || !external) return result;
-  auto effects = build_converted_flow_effect_proof_context(items, control_flow, *trace);
+  const auto effects = build_converted_flow_effect_proof_context(
+      items, control_flow, *trace, detail::active_flow_proof_cache);
 
   struct Assignment {
     std::vector<int> group_by_carrier;
@@ -6166,26 +6254,28 @@ deferred_selector_allocation_impl(
   };
   std::vector<Assignment> assignments;
   std::vector<int> chosen(carriers.size(), -1);
-  std::set<int> occupied;
+  // There are at most 16 target groups and eight stable carriers. A
+  // complete assignment fits eight five-bit fields (0 is released).
+  // Admission still follows enumeration order; the set is membership only.
+  std::unordered_set<std::uint64_t> seen_assignments;
   std::size_t work = 0;
   // Enumerate a bounded matching, not a sequence of pairwise greedy swaps.
   // Whole-family permutations run first; replacements by direct-only groups
   // and complete releases then use their own remaining assignment choices.
-  const auto enumerate = [&](auto&& self, std::size_t at, bool incumbent_groups_only) -> void {
+  const auto enumerate = [&](auto&& self, std::size_t at, bool incumbent_groups_only,
+                              std::uint32_t occupied, std::uint64_t encoding) -> void {
     if ((!diverse && assignments.size() >= options.maximum_assignments) || ++work > 20000U) return;
     if (at == carriers.size()) {
       int delta = 0;
       for (std::size_t g = 0; g < groups.size(); ++g)
-        delta += occupied.contains(static_cast<int>(g))
+        delta += (occupied & (std::uint32_t{1} << g))
             ? -groups[g].direct_count : groups[g].old_indirect;
       bool same = true;
       for (std::size_t c = 0; c < carriers.size(); ++c)
         same = same && ((chosen[c] < 0 && !carriers[c].old_target) ||
             (chosen[c] >= 0 && carriers[c].old_target ==
                                       groups[static_cast<std::size_t>(chosen[c])].target));
-      if (same || delta > options.maximum_growth_cells ||
-          std::any_of(assignments.begin(), assignments.end(),
-              [&](const auto& old) { return old.group_by_carrier == chosen; }))
+      if (same || delta > options.maximum_growth_cells || !seen_assignments.insert(encoding).second)
         return;
       assignments.push_back({chosen, delta});
       return;
@@ -6200,38 +6290,42 @@ deferred_selector_allocation_impl(
     if (incumbent_groups_only && !carriers[at].old_target) choices.clear();
     if (!incumbent_groups_only || !carriers[at].old_target) choices.push_back(-1);
     for (int group : choices) {
-      if (group >= 0 && !occupied.insert(group).second) continue;
+      const auto bit = group >= 0 ? (std::uint32_t{1} << static_cast<unsigned>(group)) : 0U;
+      if (occupied & bit) continue;
       chosen[at] = group;
-      self(self, at + 1U, incumbent_groups_only);
-      if (group >= 0) occupied.erase(group);
+      self(self, at + 1U, incumbent_groups_only, occupied | bit,
+          (encoding << 5U) | static_cast<std::uint64_t>(group + 1));
       if ((!diverse && assignments.size() >= options.maximum_assignments) || work > 20000U) break;
     }
     chosen[at] = -1;
   };
-  enumerate(enumerate, 0, true);
-  if(!existing_families_only)enumerate(enumerate, 0, false);
+  enumerate(enumerate, 0, true, 0, 0);
+  if(!existing_families_only)enumerate(enumerate, 0, false, 0, 0);
   std::stable_sort(assignments.begin(), assignments.end(),
       [](const auto& a, const auto& b) { return a.delta < b.delta; });
 
   if(diverse) {
-    using Key=std::vector<int>;
-    struct Bucket {Key targets;std::vector<Assignment> choices;};
-    std::map<int,std::vector<Bucket>> tiers;
+    struct Tier {
+      std::vector<std::vector<Assignment>> buckets;
+      std::unordered_map<std::uint32_t, std::size_t> bucket_by_targets;
+    };
+    std::map<int, Tier> tiers;
     for(auto& assignment:assignments) {
-      Key targets;for(int group:assignment.group_by_carrier)if(group>=0)targets.push_back(group);
-      std::sort(targets.begin(),targets.end());
-      auto& buckets=tiers[assignment.delta];
-      auto found=std::find_if(buckets.begin(),buckets.end(),[&](const auto& b){return b.targets==targets;});
-      if(found==buckets.end()){buckets.push_back({targets,{}});found=std::prev(buckets.end());}
-      found->choices.push_back(std::move(assignment));
+      std::uint32_t targets = 0;
+      for (int group : assignment.group_by_carrier)
+        if (group >= 0) targets |= std::uint32_t{1} << static_cast<unsigned>(group);
+      auto& tier = tiers[assignment.delta];
+      const auto [at, fresh] = tier.bucket_by_targets.emplace(targets, tier.buckets.size());
+      if (fresh) tier.buckets.emplace_back();
+      tier.buckets[at->second].push_back(std::move(assignment));
     }
     assignments.clear();
-    for(auto& [delta,buckets]:tiers) {
+    for(auto& [delta,tier]:tiers) {
       (void)delta;
       for(std::size_t depth=0;;++depth) {
         bool any=false;
-        for(auto& bucket:buckets)if(depth<bucket.choices.size()) {
-          any=true;assignments.push_back(std::move(bucket.choices[depth]));
+        for(auto& bucket:tier.buckets)if(depth<bucket.size()) {
+          any=true;assignments.push_back(std::move(bucket[depth]));
         }
         if(!any)break;
       }
@@ -6239,7 +6333,8 @@ deferred_selector_allocation_impl(
   }
 
   if(diverse && assignments.size()>options.maximum_assignments) assignments.resize(options.maximum_assignments);
-  for (const auto& assignment : assignments) {
+  const auto prove_assignment = [&](const Assignment& assignment)
+      -> std::optional<DeferredNaturalTargetSelectorAllocation> {
     std::map<std::size_t, const Carrier*> selected;
     std::vector<NaturalTargetAnchorCandidate> anchors;
     std::vector<int> released;
@@ -6296,10 +6391,11 @@ deferred_selector_allocation_impl(
         shortened.push_back({source, *target, register_name(pick->second->reg), old.opcode});
       }
     }
+    auto local_effects = effects; // Only the selected trace handle is mutable.
     if (!valid || replacements.empty() ||
         !converted_flow_effects_equivalent(items, anchors, shortened, expanded,
-                                           *trace, effects, released))
-      continue;
+                                           *trace, local_effects, released))
+      return std::nullopt;
     DeferredNaturalTargetSelectorAllocation candidate;
     for (const auto& [target, carrier] : selected) {
       (void)target;
@@ -6329,10 +6425,10 @@ deferred_selector_allocation_impl(
           !is_indirect_flow(change->second.first))
         candidate.items.push_back(MachineItem::address(change->second.second));
     }
-    if (!valid) continue;
+    if (!valid) return std::nullopt;
     const auto final_flow = build_post_layout_control_flow(candidate.items, control_options);
     if (!final_flow.proved || (typed_resume_transport &&
-        !prove_post_layout_input_boundaries(candidate.items,final_flow).proved)) continue;
+        !prove_post_layout_input_boundaries(candidate.items,final_flow).proved)) return std::nullopt;
     for (const auto& [source, change] : replacements) {
       const auto final_source = new_by_origin.at(source);
       if (is_indirect_flow(change.first)) {
@@ -6345,15 +6441,33 @@ deferred_selector_allocation_impl(
       }
     }
     if (!valid || !indirect_memory_facts_equivalent(control_flow, final_flow, origin_by_item) ||
-        build_trace_graph(candidate.items, final_flow, origin_by_item, model,
-                          static_cast<int>(control_options.maximum_execution_states)) != trace ||
+        !trace_graph_matches(candidate.items, final_flow, origin_by_item, model, *trace) ||
         external_identities(final_flow, origin_by_item) != external)
-      continue;
+      return std::nullopt;
     candidate.changed_flows = static_cast<int>(replacements.size());
-    candidate.cell_delta = index_artifact(candidate.items).cells - index.cells;
-    if (candidate.cell_delta != assignment.delta) continue;
-    result.push_back(std::move(candidate));
-    if (result.size() >= options.maximum_candidates) break;
+    candidate.cell_delta = machine_cell_count(candidate.items) - index.cells;
+    if (candidate.cell_delta != assignment.delta) return std::nullopt;
+    return candidate;
+  };
+  const auto workers = detail::layout_worker_count();
+  for (std::size_t first = 0; first < assignments.size() &&
+       result.size() < options.maximum_candidates;) {
+    // At most as many simultaneous proofs as remaining output slots, so
+    // no proof is started beyond the frontier the serial loop would visit.
+    const auto count = std::min({static_cast<std::size_t>(workers),
+        assignments.size() - first, options.maximum_candidates - result.size()});
+    if (count == 1U) {
+      if (auto candidate = prove_assignment(assignments[first]))
+        result.push_back(std::move(*candidate));
+    } else {
+      std::vector<std::optional<DeferredNaturalTargetSelectorAllocation>> batch(count);
+      detail::evaluate_layout_jobs(count, [&](std::size_t at) {
+        batch[at] = prove_assignment(assignments[first + at]);
+      }, workers);
+      for (auto& candidate : batch)
+        if (candidate) result.push_back(std::move(*candidate));
+    }
+    first += count;
   }
   return result;
 }
@@ -7000,10 +7114,11 @@ NaturalTargetComponentLayoutResult optimize_natural_target_component_layout(
   }
   ConvertedFlowEffectProofContext flow_effect_proof_context =
       build_converted_flow_effect_proof_context(logical_items, *logical_flow,
-                                                *original_trace, options.flow_proof_cache,
+                                                *original_trace, options.flow_proof_cache
+                                                    ? options.flow_proof_cache : detail::active_flow_proof_cache,
                                                 options.memoize_flow_effects);
   if (options.eager_symbolic_flow_analysis)
-    ensure_symbolic_flow_entries(*original_trace, flow_effect_proof_context);
+    ensure_symbolic_flow_entries(*flow_effect_proof_context.original_source, flow_effect_proof_context);
 
   std::vector<SelectorCandidate> selectors = selector_candidates(
       logical_items, preloads, *logical_flow, options);

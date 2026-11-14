@@ -3,6 +3,7 @@
 #include "mkpro/core/passes/helpers.hpp"
 
 #include "mkpro/core/callee_hole_boundary_normalization.hpp"
+#include "mkpro/core/detail/post_layout_proof_cache.hpp"
 #include "mkpro/core/indirect_addressing.hpp"
 #include "mkpro/core/layout_search_artifact.hpp"
 #include "mkpro/core/opcodes.hpp"
@@ -10,15 +11,22 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
+#include <bit>
 #include <compare>
 #include <deque>
 #include <cstdlib>
 #include <exception>
 #include <map>
+#include <mutex>
+#include <numeric>
 #include <optional>
 #include <set>
+#include <span>
 #include <string>
 #include <tuple>
+#include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -52,17 +60,31 @@ resolve_post_layout_external_entry_contexts(const AuthoritativePostLayoutControl
   result.external.assign(count, false);
   result.main.assign(count, false);
   bool main = false;
+  std::unordered_map<std::size_t, detail::InlineProofRow<std::size_t, 2>> by_item;
+  if (control.external_entries.size() > 2U) {
+    for (const auto& entry : control.external_entries)
+      by_item.try_emplace(entry.entry.item_index);
+    for (std::size_t state = 0; state < count; ++state)
+      if (const auto found = by_item.find(control.execution_states[state].item_index);
+          found != by_item.end())
+        found->second.push_back(state);
+  }
   for (const auto& entry : control.external_entries) {
     bool matched = false;
-    for (std::size_t state = 0; state < count; ++state) {
+    const auto mark = [&](std::size_t state) {
       if (!post_layout_execution_matches_external_entry(control.execution_states[state], entry))
-        continue;
+        return;
       result.external[state] = true;
       if (entry.kind == ExternalEntryKind::Main) {
         result.main[state] = true;
         main = true;
       }
       matched = true;
+    };
+    if (by_item.empty()) {
+      for (std::size_t state = 0; state < count; ++state) mark(state);
+    } else {
+      for (const auto state : by_item.at(entry.entry.item_index)) mark(state);
     }
     if (!matched) return std::nullopt;
   }
@@ -80,11 +102,19 @@ constexpr int kErrorStopOpcode = 0x29;
 
 struct ArtifactIndex {
   std::vector<int> item_addresses;
-  std::map<int, std::size_t> cell_items;
-  std::map<std::string, int> label_addresses;
-  std::map<int, std::vector<std::string>> address_labels;
-  std::set<std::string> duplicate_labels;
+  // Labels have no width. All physical/logical cells therefore form a dense
+  // interval, including address operands. A formal cursor is decoded first.
+  std::vector<std::size_t> cell_items;
+  std::unordered_map<std::string_view, int> label_addresses;
+  std::map<int, std::vector<std::string_view>> address_labels;
+  bool duplicate_labels = false;
   int cells = 0;
+
+  std::optional<std::size_t> cell_at(int address) const {
+    if (address < 0 || static_cast<std::size_t>(address) >= cell_items.size())
+      return std::nullopt;
+    return cell_items[static_cast<std::size_t>(address)];
+  }
 };
 
 struct ExecutionCursor {
@@ -126,6 +156,66 @@ struct ExecutionState {
   auto operator<=>(const ExecutionState&) const = default;
 };
 
+struct ExecutionStateHash {
+  std::size_t operator()(const ExecutionState& state) const noexcept {
+    const auto cursor = [](const ExecutionCursor& pc) {
+      return static_cast<std::size_t>(pc.address) * 257U +
+          (pc.formal_opcode ? static_cast<std::size_t>(*pc.formal_opcode) + 1U : 0U);
+    };
+    std::size_t result = cursor(state.pc);
+    for (const auto& frame : state.returns) result = result * 16777619U ^ cursor(frame);
+    return result;
+  }
+};
+
+// Open-addressed index into a dense, insertion-ordered state array. Keys
+// remain exact even on a hash collision; rehashing never changes state IDs.
+template <class State, class Hash>
+class DenseStateIndex {
+ public:
+  explicit DenseStateIndex(std::size_t hint) {
+    const auto capacity = std::bit_ceil(std::max<std::size_t>(8, std::min<std::size_t>(hint, 65536U) * 2U));
+    slots_.resize(capacity);
+    states_.reserve(capacity / 2U);
+  }
+
+  std::size_t size() const { return states_.size(); }
+  const State& operator[](std::size_t index) const { return states_[index]; }
+
+  std::optional<std::size_t> find(const State& key) const {
+    const auto hash = Hash{}(key);
+    for (auto at = hash & (slots_.size() - 1U); slots_[at].id != 0U;
+         at = (at + 1U) & (slots_.size() - 1U)) {
+      const auto& slot = slots_[at];
+      if (slot.hash == hash && states_[slot.id - 1U] == key) return slot.id - 1U;
+    }
+    return std::nullopt;
+  }
+
+  void append(const State& key) {
+    if (states_.size() >= slots_.size() / 2U) {
+      std::vector<Slot> grown(slots_.size() * 2U);
+      for (const auto& slot : slots_)
+        if (slot.id != 0U) place(grown, slot);
+      slots_.swap(grown);
+    }
+    states_.push_back(key);
+    place(slots_, {Hash{}(key), states_.size()});
+  }
+
+ private:
+  struct Slot { std::size_t hash = 0, id = 0; };
+
+  static void place(std::vector<Slot>& slots, Slot slot) {
+    auto at = slot.hash & (slots.size() - 1U);
+    while (slots[at].id != 0U) at = (at + 1U) & (slots.size() - 1U);
+    slots[at] = slot;
+  }
+
+  std::vector<Slot> slots_;
+  std::vector<State> states_;
+};
+
 struct ManualProtocol {
   std::optional<std::size_t> prompt_item;
   std::map<int, std::size_t> phase_items;
@@ -139,17 +229,18 @@ void add_reason(AuthoritativePostLayoutControlFlow& result, std::string reason) 
 ArtifactIndex index_artifact(const std::vector<MachineItem>& items) {
   ArtifactIndex index;
   index.item_addresses.resize(items.size(), 0);
+  index.cell_items.reserve(items.size());
   int address = 0;
   for (std::size_t item_index = 0; item_index < items.size(); ++item_index) {
     const MachineItem& item = items.at(item_index);
     index.item_addresses.at(item_index) = address;
     if (item.kind == MachineItemKind::Label) {
       if (!index.label_addresses.emplace(item.name, address).second)
-        index.duplicate_labels.insert(item.name);
+        index.duplicate_labels = true;
       index.address_labels[address].push_back(item.name);
       continue;
     }
-    index.cell_items.emplace(address, item_index);
+    index.cell_items.push_back(item_index);
     ++address;
   }
   for (auto& [unused_address, labels] : index.address_labels) {
@@ -202,16 +293,22 @@ std::optional<std::size_t> next_cell_item(const std::vector<MachineItem>& items,
 std::optional<PostLayoutCommandIdentity> identity_at_address(const std::vector<MachineItem>& items,
                                                              const ArtifactIndex& index,
                                                              int address) {
-  const auto cell = index.cell_items.find(address);
-  if (cell == index.cell_items.end() || items.at(cell->second).kind != MachineItemKind::Op)
+  const auto cell = index.cell_at(address);
+  if (!cell || items.at(*cell).kind != MachineItemKind::Op)
     return std::nullopt;
   const auto aliases = index.address_labels.find(address);
   return PostLayoutCommandIdentity{
-      .item_index = cell->second,
+      .item_index = *cell,
       .address = address,
       .labels =
-          aliases == index.address_labels.end() ? std::vector<std::string>{} : aliases->second,
+          aliases == index.address_labels.end() ? std::vector<std::string>{} :
+              std::vector<std::string>(aliases->second.begin(), aliases->second.end()),
   };
+}
+
+bool executable_at(const std::vector<MachineItem>& items, const ArtifactIndex& index, int address) {
+  const auto item = index.cell_at(address);
+  return item && items[*item].kind == MachineItemKind::Op;
 }
 
 ExecutionCursor canonical_cursor(const ArtifactIndex& index, int address,
@@ -228,7 +325,21 @@ ExecutionCursor canonical_cursor(const ArtifactIndex& index, int address,
 }
 
 ExecutionCursor formal_cursor(int opcode, AddressSpaceModel model) {
-  return {.address = formal_address_info(opcode, model).actual, .formal_opcode = opcode};
+  // Decode the full counter byte with the same model. Do not repeatedly
+  // format its display label when advancing a proof through physical cells.
+  using Addresses = std::array<int, 256>;
+  const auto decode = [](AddressSpaceModel space) {
+    Addresses result{};
+    for (std::size_t code = 0; code < result.size(); ++code)
+      result[code] = formal_address_info(static_cast<int>(code), space).actual;
+    return result;
+  };
+  static const auto stock = decode(AddressSpaceModel::Standard);
+  static const auto expanded = decode(AddressSpaceModel::Mk61SMiniExpanded);
+  if (opcode < 0 || opcode > 0xff)
+    return {.address = formal_address_info(opcode, model).actual, .formal_opcode = opcode};
+  const auto& address = model == AddressSpaceModel::Mk61SMiniExpanded ? expanded : stock;
+  return {.address = address[static_cast<std::size_t>(opcode)], .formal_opcode = opcode};
 }
 
 std::optional<ExecutionCursor> sequential_successor(
@@ -237,7 +348,7 @@ std::optional<ExecutionCursor> sequential_successor(
   ExecutionCursor next = cursor.formal_opcode.has_value()
       ? formal_cursor(formal_address_successor_opcode(*cursor.formal_opcode), model)
       : ExecutionCursor{.address = cursor.address + 1};
-  return index.cell_items.contains(next.address) ? std::optional(next) : std::nullopt;
+  return index.cell_at(next.address) ? std::optional(next) : std::nullopt;
 }
 
 std::optional<ExecutionCursor> direct_target_cursor(
@@ -302,7 +413,7 @@ void validate_artifact_and_typed_targets(const std::vector<MachineItem>& items,
                                          AuthoritativePostLayoutControlFlow& result) {
   if (items.empty() || index.cells == 0)
     add_reason(result, "artifact contains no command cells");
-  if (!index.duplicate_labels.empty())
+  if (index.duplicate_labels)
     add_reason(result, "artifact contains duplicate labels");
 
   for (std::size_t item_index = 0; item_index < items.size(); ++item_index) {
@@ -344,7 +455,7 @@ void validate_artifact_and_typed_targets(const std::vector<MachineItem>& items,
             direct_target_address(items.at(*operand), index, options.address_space_model, result);
         if (!target.has_value()) {
           add_reason(result, "direct flow has an unresolved target");
-        } else if (!identity_at_address(items, index, *target).has_value()) {
+        } else if (!executable_at(items, index, *target)) {
           add_reason(result, "direct flow targets a non-executable command cell");
         }
       }
@@ -539,17 +650,15 @@ std::vector<int> stack_addresses(const std::vector<PostLayoutCommandIdentity>& r
   return result;
 }
 
-std::vector<int> cursor_addresses(const ExecutionFrames& cursors) {
-  std::vector<int> result;
-  result.reserve(cursors.size());
+detail::InlineProofRow<int, 5> cursor_addresses(const ExecutionFrames& cursors) {
+  detail::InlineProofRow<int, 5> result;
   for (const auto& cursor : cursors) result.push_back(cursor.address);
   return result;
 }
 
-std::vector<std::optional<int>> cursor_formals(
-    const ExecutionFrames& cursors) {
-  std::vector<std::optional<int>> result;
-  result.reserve(cursors.size());
+template <class Row>
+Row cursor_formals(const ExecutionFrames& cursors) {
+  Row result;
   for (const auto& cursor : cursors) result.push_back(cursor.formal_opcode);
   return result;
 }
@@ -581,7 +690,7 @@ bool add_external_entry(AuthoritativePostLayoutControlFlow& result,
       .kind = kind,
       .manual_interaction = std::move(manual),
       .formal_opcode = pc.formal_opcode,
-      .formal_return_stack = cursor_formals(returns),
+      .formal_return_stack = cursor_formals<std::vector<std::optional<int>>>(returns),
   };
   if (std::find(result.external_entries.begin(), result.external_entries.end(), candidate) ==
       result.external_entries.end()) {
@@ -616,53 +725,45 @@ void explore_entries_and_return_stacks(const std::vector<MachineItem>& items,
   }
   add_external_entry(result, items, index, main_cursor, {}, ExternalEntryKind::Main);
 
-  std::deque<std::size_t> pending;
-  std::map<ExecutionState, std::size_t> state_ids;
-  std::vector<ExecutionState> states;
+  // IDs still come from discovery order, never the interning table order.
+  DenseStateIndex<ExecutionState, ExecutionStateHash> states(
+      std::min(options.maximum_execution_states, items.size() * 2U));
+  // Decode an address word once per image, not once per return context.
+  // A failed decode ends exploration, so only successful results are kept.
+  std::vector<std::optional<ExecutionCursor>> decoded_operands;
   auto record_state = [&](const ExecutionState& state) -> std::optional<std::size_t> {
-    if (const auto found = state_ids.find(state); found != state_ids.end())
-      return found->second;
+    if (auto found = states.find(state)) return found;
     if (states.size() >= options.maximum_execution_states) {
       add_reason(result, "control-flow exploration exceeds the execution-state cap");
       return std::nullopt;
     }
-    const std::optional<PostLayoutCommandIdentity> identity =
-        identity_at_address(items, index, state.pc.address);
-    if (!identity.has_value()) {
+    const auto cell = index.cell_at(state.pc.address);
+    if (!cell || items[*cell].kind != MachineItemKind::Op) {
       add_reason(result, "control flow has a missing executable successor");
       return std::nullopt;
     }
     const std::size_t id = states.size();
-    state_ids.emplace(state, id);
-    states.push_back(state);
+    states.append(state);
     result.execution_states.push_back(PostLayoutExecutionState{
-        .item_index = identity->item_index,
+        .item_index = *cell,
         .address = state.pc.address,
         .return_stack = cursor_addresses(state.returns),
         .formal_opcode = state.pc.formal_opcode,
-        .formal_return_stack = cursor_formals(state.returns),
+        .formal_return_stack = cursor_formals<detail::InlineProofRow<std::optional<int>, 5>>(state.returns),
     });
     result.execution_successors.emplace_back();
     result.execution_edges.emplace_back();
-    pending.push_back(id);
     return id;
   };
   (void)record_state(ExecutionState{.pc = main_cursor});
   std::size_t explored = 0;
-  while (!pending.empty() && result.reasons.empty()) {
-    const std::size_t state_id = pending.front();
-    pending.pop_front();
-    const ExecutionState state = states.at(state_id);
+  for (std::size_t state_id = 0; state_id < states.size() && result.reasons.empty(); ++state_id) {
+    const ExecutionState state = states[state_id];
     ++explored;
     result.maximum_observed_return_depth =
         std::max(result.maximum_observed_return_depth, static_cast<int>(state.returns.size()));
 
-    const auto cell = index.cell_items.find(state.pc.address);
-    if (cell == index.cell_items.end() || items.at(cell->second).kind != MachineItemKind::Op) {
-      add_reason(result, "control flow reaches a non-executable cell");
-      break;
-    }
-    const std::size_t item_index = cell->second;
+    const std::size_t item_index = result.execution_states.at(state_id).item_index;
     const MachineItem& item = items.at(item_index);
     const int opcode = item.opcode;
 
@@ -673,7 +774,7 @@ void explore_entries_and_return_stacks(const std::vector<MachineItem>& items,
           record_state(ExecutionState{.pc = pc, .returns = returns});
       if (!successor.has_value())
         return;
-      std::vector<std::size_t>& edges = result.execution_successors.at(state_id);
+      auto& edges = result.execution_successors.at(state_id);
       if (std::find(edges.begin(), edges.end(), *successor) == edges.end())
         edges.push_back(*successor);
       const PostLayoutExecutionEdge labelled{
@@ -697,7 +798,7 @@ void explore_entries_and_return_stacks(const std::vector<MachineItem>& items,
       const std::optional<ExecutionCursor> padding_pc =
           sequential_successor(index, state.pc, options.address_space_model);
       if (!padding_pc.has_value() ||
-          !identity_at_address(items, index, padding_pc->address).has_value()) {
+          !executable_at(items, index, padding_pc->address)) {
         add_reason(result, "resumable error stop has no physical padding cell");
         continue;
       }
@@ -781,14 +882,16 @@ void explore_entries_and_return_stacks(const std::vector<MachineItem>& items,
         add_reason(result, "reachable address-taking command has no operand");
         continue;
       }
-      const auto operand = index.cell_items.find(operand_cursor->address);
-      if (operand == index.cell_items.end()) {
+      const auto operand = index.cell_at(operand_cursor->address);
+      if (!operand) {
         add_reason(result, "formal address operand has no physical cell");
         continue;
       }
-      result.execution_states.at(state_id).operand_item_index = operand->second;
-      const auto target = direct_target_cursor(
-          items.at(operand->second), index, options.address_space_model, result);
+      result.execution_states.at(state_id).operand_item_index = *operand;
+      if (decoded_operands.empty()) decoded_operands.resize(items.size());
+      auto& target = decoded_operands[*operand];
+      if (!target)
+        target = direct_target_cursor(items[*operand], index, options.address_space_model, result);
       if (!target.has_value()) {
         add_reason(result, "reachable address word has no resolved execution target");
         continue;
@@ -802,7 +905,7 @@ void explore_entries_and_return_stacks(const std::vector<MachineItem>& items,
           continue;
         }
         if (!fallthrough.has_value() ||
-            !identity_at_address(items, index, fallthrough->address).has_value()) {
+            !executable_at(items, index, fallthrough->address)) {
           add_reason(result, "direct call has no executable continuation");
           continue;
         }
@@ -837,7 +940,7 @@ void explore_entries_and_return_stacks(const std::vector<MachineItem>& items,
         const std::optional<ExecutionCursor> continuation =
             sequential_successor(index, state.pc, options.address_space_model);
         if (!continuation.has_value() ||
-            !identity_at_address(items, index, continuation->address).has_value()) {
+            !executable_at(items, index, continuation->address)) {
           add_reason(result, "indirect call has no executable continuation");
           continue;
         }
@@ -907,7 +1010,7 @@ bool has_executable_address_words(const std::vector<MachineItem>& items) {
 std::optional<PostLayoutByteImage> materialize_post_layout_byte_image(
     const std::vector<MachineItem>& items, const PostLayoutControlFlowOptions& options) {
   const ArtifactIndex index = index_artifact(items);
-  if (!index.duplicate_labels.empty())
+  if (index.duplicate_labels)
     return std::nullopt;
   PostLayoutByteImage image{.items = items, .options = options};
   for (std::size_t i = 0; i < items.size(); ++i) {
@@ -926,7 +1029,7 @@ std::optional<PostLayoutByteImage> materialize_post_layout_byte_image(
       if (found != index.label_addresses.end())
         target = found->second;
     }
-    if (!target.has_value() || !index.cell_items.contains(*target))
+    if (!target.has_value() || !index.cell_at(*target))
       return std::nullopt;
     try {
       const int encoded = operand.formal_opcode.has_value()
@@ -1030,43 +1133,374 @@ build_post_layout_control_flow_uncached(const std::vector<MachineItem>& items,
   return result;
 }
 
+namespace {
+
+// Separate the physical CFG from data effects. CFG rows contain only
+// command identities, labelled continuations and memory alias sets.
+bool execution_operand(const MachineItem& item) {
+  return item.kind == MachineItemKind::Address &&
+         std::find(item.roles.begin(), item.roles.end(), "exec") != item.roles.end();
+}
+
+bool can_project_cfg_opcodes(const std::vector<MachineItem>& items,
+                             const PostLayoutControlFlowOptions& options) {
+  if (!options.opcode_address_words.empty()) return false;
+  // A non-address command normally cannot be fetched as an operand. A
+  // formal cursor can also fetch across one of the non-linear successors,
+  // so check all such pairs, irrespective of their current reachability.
+  const auto jumps = [](AddressSpaceModel model) {
+    std::set<std::pair<int, int>> pairs;
+    for (int opcode = 0; opcode <= 0xff; ++opcode) {
+      const auto here = formal_cursor(opcode, model).address;
+      const auto next = formal_cursor(formal_address_successor_opcode(opcode), model).address;
+      if (next != here + 1) pairs.emplace(here, next);
+    }
+    return std::vector(pairs.begin(), pairs.end());
+  };
+  static const auto stock = jumps(AddressSpaceModel::Standard);
+  static const auto expanded = jumps(AddressSpaceModel::Mk61SMiniExpanded);
+  const auto& non_linear = options.address_space_model == AddressSpaceModel::Mk61SMiniExpanded
+      ? expanded : stock;
+  std::array<const MachineItem*, 112> physical{};
+  bool formal = options.main_formal_opcode.has_value() || !options.proved_indirect_formal_targets.empty();
+  bool expects_operand = false;
+  int cells = 0;
+  for (const auto& item : items) {
+    if (execution_operand(item)) return false;
+    formal = formal || item.formal_opcode.has_value() || item.indirect_flow_formal_targets.has_value();
+    if (item.kind == MachineItemKind::Label) continue;
+    if (expects_operand && item.kind == MachineItemKind::Op) return false;
+    expects_operand = takes_address(item);
+    if (static_cast<std::size_t>(cells) < physical.size())
+      physical[static_cast<std::size_t>(cells)] = &item;
+    ++cells;
+  }
+  // A shorter ordinary image cannot leave the canonical counter interval:
+  // its first missing physical successor is reached before the hardware
+  // window can wrap. Explicit formal entries do not have this restriction.
+  if (formal || cells == official_program_step_limit(options.address_space_model))
+    for (const auto& [source, target] : non_linear) {
+      const auto* command = physical[static_cast<std::size_t>(source)];
+      const auto* operand = physical[static_cast<std::size_t>(target)];
+      if (command && operand && takes_address(*command) && operand->kind == MachineItemKind::Op)
+        return false;
+    }
+  return true;
+}
+
+int cfg_opcode(const MachineItem& item, bool project_opcodes) {
+  const auto opcode = item.opcode;
+  if (!project_opcodes || item.kind != MachineItemKind::Op || item.manual_interaction ||
+      opcode < 0 || opcode > 0xff) return opcode;
+  // CFG exploration does not evaluate data, register identities or branch
+  // predicates. The selector product and data proofs still use exact code.
+  if (opcode == kErrorStopOpcode || opcode == kStopOpcode ||
+      opcode == kJumpOpcode || opcode == kCallOpcode || opcode == kReturnOpcode)
+    return opcode;
+  if (is_direct_conditional_opcode(opcode)) return 0x57;
+  if (is_indirect_flow_opcode(opcode)) return opcode & 0xf0;
+  if (is_indirect_memory_opcode(opcode)) return opcode == 0xdf ? opcode : opcode & 0xf0;
+  return takes_address(item) ? opcode : 0;
+}
+
+enum class ProofOpcodeProjection { Exact, Control, Selector };
+
+int proof_key_opcode(const MachineItem& item, ProofOpcodeProjection projection) {
+  if (projection != ProofOpcodeProjection::Selector)
+    return cfg_opcode(item, projection == ProofOpcodeProjection::Control);
+  const auto code = item.opcode;
+  if (item.kind != MachineItemKind::Op || item.raw || item.manual_interaction)
+    return code;
+  // Narrow classes of identical selector transfers AND fresh-entry effects.
+  // No tracked store/read, typed literal, or opaque command is merged. The
+  // independently checked control graph still owns every branch and operand.
+  if (is_direct_conditional_opcode(code)) return 0x57;
+  if (code >= 0x40 && code <= 0x46) return 0x40; // Retain the X literal.
+  if (((code >= 0x10 && code <= 0x13) || code == 0x15 || code == 0x22 ||
+       code == 0x31 || code == 0x32 || code == 0x34 || code == 0x35 ||
+       (code >= 0x60 && code <= 0x66)) &&
+      opcode_by_code(code).risk != OpcodeRisk::Dangerous)
+    return 0x10; // Forget the X literal and close numeric entry.
+  return code;
+}
+
+void mix_proof_hash(std::size_t& hash, std::size_t value) noexcept {
+  hash ^= value + static_cast<std::size_t>(0x9e3779b97f4a7c15ULL) + (hash << 6) + (hash >> 2);
+}
+
+std::size_t cfg_item_signature(const std::vector<MachineItem>& items, ProofOpcodeProjection projection) {
+  std::size_t result = items.size();
+  for (const auto& item : items) {
+    mix_proof_hash(result, static_cast<std::size_t>(proof_key_opcode(item, projection)));
+    mix_proof_hash(result, static_cast<std::size_t>(item.kind));
+    if (item.kind == MachineItemKind::Label)
+      mix_proof_hash(result, std::hash<std::string_view>{}(item.name));
+    if (item.kind == MachineItemKind::Address)
+      mix_proof_hash(result, std::hash<IrTarget>{}(item.target));
+  }
+  return result;
+}
+
+bool post_layout_cache_enabled() {
+  const char* mode = std::getenv("MKPRO_NATIVE_CFG_CACHE");
+  return !mode || std::string_view(mode) != "0";
+}
+
+template<class Input, class Output>
+struct ProofSnapshotCache {
+  struct Job {
+    explicit Job(Input key) : input(std::move(key)) {}
+    Input input;
+    std::shared_ptr<const Output> value;
+    std::exception_ptr error;
+    std::atomic<bool> ready{false};
+    std::size_t states = 0;
+  };
+
+  // Shards keep unrelated branches (and evictions) off each other's locks.
+  struct Shard {
+    std::mutex mutex;
+    std::unordered_multimap<std::size_t, std::shared_ptr<Job>> entries;
+    std::deque<std::pair<std::size_t, std::shared_ptr<Job>>> completed;
+    std::size_t states = 0;
+  };
+
+  explicit ProofSnapshotCache(std::size_t max_entries, std::size_t max_states)
+      : max_entries_(max_entries), max_states_(max_states) {}
+
+  template<class Match, class Capture, class Build>
+  std::shared_ptr<const Output> get(std::size_t hash, Match match, Capture capture, Build build) {
+    auto& shard = shards_[hash % shards_.size()];
+    std::shared_ptr<Job> job;
+    bool producer = false;
+    {
+      const std::lock_guard lock(shard.mutex);
+      const auto [first, last] = shard.entries.equal_range(hash);
+      for (auto it = first; it != last; ++it)
+        if (match(it->second->input)) {
+          job = it->second;
+          hits.fetch_add(1, std::memory_order_relaxed);
+          break;
+        }
+      if (!job) {
+        job = std::make_shared<Job>(capture());
+        shard.entries.emplace(hash, job);
+        producer = true;
+      }
+    }
+    if (!producer) {
+      if (!job->ready.load(std::memory_order_acquire)) {
+        shared_in_flight.fetch_add(1, std::memory_order_relaxed);
+        job->ready.wait(false, std::memory_order_acquire);
+      }
+      if (job->error) std::rethrow_exception(job->error);
+      return job->value;
+    }
+
+    std::shared_ptr<const Output> result;
+    try {
+      builds.fetch_add(1, std::memory_order_relaxed);
+      result = build();
+    } catch (...) {
+      job->error = std::current_exception();
+      job->ready.store(true, std::memory_order_release);
+      job->ready.notify_all();
+      {
+        const std::lock_guard lock(shard.mutex);
+        erase(shard, hash, job);
+      }
+      throw;
+    }
+    job->value = result;
+    job->ready.store(true, std::memory_order_release);
+    job->ready.notify_all();
+    // Drop large evicted graphs outside the lock. Waiters and clients retain
+    // their own immutable owners.
+    std::vector<std::shared_ptr<Job>> retired;
+    {
+      const std::lock_guard lock(shard.mutex);
+      job->states = state_count(*result);
+      if (job->states <= max_states_) {
+        shard.states += job->states;
+        shard.completed.emplace_back(hash, job);
+        while (shard.completed.size() > max_entries_ || shard.states > max_states_) {
+          const auto& [old_hash, old] = shard.completed.front();
+          shard.states -= old->states;
+          erase(shard, old_hash, old);
+          retired.push_back(std::move(shard.completed.front().second));
+          shard.completed.pop_front();
+        }
+      } else {
+        erase(shard, hash, job);
+      }
+    }
+    return result;
+  }
+
+  std::atomic<std::size_t> builds{0}, hits{0}, shared_in_flight{0};
+
+ private:
+  static std::size_t state_count(const Output& result) {
+    if constexpr (requires { result.original_states; }) return result.original_states.size();
+    else return result.execution_states.size();
+  }
+
+  static void erase(Shard& shard, std::size_t hash, const std::shared_ptr<Job>& job) {
+    const auto [first, last] = shard.entries.equal_range(hash);
+    for (auto it = first; it != last; ++it)
+      if (it->second == job) {
+        shard.entries.erase(it);
+        break;
+      }
+  }
+
+  std::array<Shard, 8> shards_;
+  std::size_t max_entries_;
+  std::size_t max_states_;
+};
+
+struct ControlItemKey {
+  MachineItemKind kind;
+  int opcode;
+  bool raw;
+  bool discarded_indirect_recall;
+  StopDisposition stop;
+  std::optional<ManualInteractionAnchor> manual;
+  std::optional<int> formal;
+  std::string name;
+  IrTarget target;
+  std::optional<std::vector<IrTarget>> indirect_flow;
+  std::optional<std::vector<int>> indirect_formal;
+  std::optional<std::vector<int>> indirect_memory;
+  bool executable_operand;
+
+  explicit ControlItemKey(const MachineItem& item, ProofOpcodeProjection projection)
+      : kind(item.kind), opcode(proof_key_opcode(item, projection)), raw(item.raw),
+        discarded_indirect_recall(item.discarded_indirect_recall_value),
+        stop(item.stop_disposition), manual(item.manual_interaction), formal(item.formal_opcode),
+        name(item.name), target(item.target), indirect_flow(item.indirect_flow_targets),
+        indirect_formal(item.indirect_flow_formal_targets), indirect_memory(item.indirect_memory_targets),
+        executable_operand(execution_operand(item)) {}
+
+  bool matches(const MachineItem& item, ProofOpcodeProjection projection) const {
+    return kind == item.kind && opcode == proof_key_opcode(item, projection) && raw == item.raw &&
+        discarded_indirect_recall == item.discarded_indirect_recall_value &&
+        stop == item.stop_disposition && manual == item.manual_interaction &&
+        formal == item.formal_opcode && name == item.name && target == item.target &&
+        indirect_flow == item.indirect_flow_targets && indirect_formal == item.indirect_flow_formal_targets &&
+        indirect_memory == item.indirect_memory_targets && executable_operand == execution_operand(item);
+  }
+};
+
+std::vector<ControlItemKey> capture_control_items(const std::vector<MachineItem>& items,
+                                                  ProofOpcodeProjection projection) {
+  std::vector<ControlItemKey> result;
+  result.reserve(items.size());
+  for (const auto& item : items) result.emplace_back(item, projection);
+  return result;
+}
+
+bool same_control_items(const std::vector<ControlItemKey>& keys,
+                        const std::vector<MachineItem>& items, ProofOpcodeProjection projection) {
+  return std::equal(keys.begin(), keys.end(), items.begin(), items.end(),
+      [projection](const auto& key, const auto& item) { return key.matches(item, projection); });
+}
+
+struct CfgProofInput {
+  std::vector<ControlItemKey> items;
+  PostLayoutControlFlowOptions options;
+  bool project_opcodes;
+};
+
+struct SelectorGraphInput {
+  std::vector<ControlItemKey> items;
+  std::shared_ptr<const AuthoritativePostLayoutControlFlow> control;
+  std::optional<std::map<std::string, int>> bindings;
+  std::size_t maximum_states;
+  bool preserve_direct_formal_contexts;
+  bool transport_stable_indirect;
+};
+
+struct ProjectedFlowInput {
+  std::shared_ptr<const AuthoritativePostLayoutControlFlow> control;
+  std::shared_ptr<const SelectorConsistentExecutionGraph> selection;
+};
+
+} // namespace
+
+namespace detail {
+
+struct PostLayoutProofCache {
+  ProofSnapshotCache<CfgProofInput, AuthoritativePostLayoutControlFlow> cfg{64, 32768};
+  ProofSnapshotCache<SelectorGraphInput, SelectorConsistentExecutionGraph> selectors{32, 16384};
+  ProofSnapshotCache<ProjectedFlowInput, AuthoritativePostLayoutControlFlow> projections{16, 8192};
+};
+
+std::shared_ptr<PostLayoutProofCache> make_post_layout_proof_cache() {
+  return std::make_shared<PostLayoutProofCache>();
+}
+
+PostLayoutProofCacheStats post_layout_proof_cache_stats(const PostLayoutProofCache& cache) {
+  return {
+      cache.cfg.builds.load(std::memory_order_relaxed), cache.cfg.hits.load(std::memory_order_relaxed),
+      cache.selectors.builds.load(std::memory_order_relaxed), cache.selectors.hits.load(std::memory_order_relaxed),
+      cache.cfg.shared_in_flight.load(std::memory_order_relaxed) +
+          cache.selectors.shared_in_flight.load(std::memory_order_relaxed)};
+}
+
+} // namespace detail
+
 std::shared_ptr<const AuthoritativePostLayoutControlFlow>
 shared_post_layout_control_flow(const std::vector<MachineItem>& items,
                                const PostLayoutControlFlowOptions& options) {
-  const char* enabled=std::getenv("MKPRO_NATIVE_CFG_CACHE");
-  if(enabled && std::string_view(enabled)=="0")
+  const auto build = [&] {
     return std::make_shared<const AuthoritativePostLayoutControlFlow>(
-        build_post_layout_control_flow_uncached(items,options));
+        build_post_layout_control_flow_uncached(items, options));
+  };
+  if (!post_layout_cache_enabled()) return build();
+
+  if (const auto& owner = detail::active_post_layout_proof_cache) {
+    const bool project_opcodes = can_project_cfg_opcodes(items, options);
+    const auto projection = project_opcodes ? ProofOpcodeProjection::Control
+                                            : ProofOpcodeProjection::Exact;
+    auto signature = cfg_item_signature(items, projection);
+    mix_proof_hash(signature, static_cast<std::size_t>(options.address_space_model));
+    mix_proof_hash(signature, std::hash<IrTarget>{}(options.main_entry));
+    mix_proof_hash(signature, options.maximum_execution_states);
+    // Byte-image overlays recursively build a different, encoded item image.
+    // Exclude the outer transformation from in-flight memoization to avoid
+    // recursive waits on the same proof operation.
+    if (has_executable_address_words(items)) return build();
+    return owner->cfg.get(signature, [&](const CfgProofInput& old) {
+      return old.project_opcodes == project_opcodes && old.options == options &&
+             same_control_items(old.items, items, projection);
+    }, [&] { return CfgProofInput{capture_control_items(items, projection), options, project_opcodes}; }, build);
+  }
+
+  // Standalone proofs have no compilation owner; preserve the bounded, exact
+  // thread-local cache and its public owning-snapshot behavior.
   struct Entry {
-    LayoutSearchArtifact artifact;
+    std::vector<MachineItem> items;
     PostLayoutControlFlowOptions options;
     std::shared_ptr<const AuthoritativePostLayoutControlFlow> flow;
   };
-  // A bounded per-thread cache owns every snapshot. A caller may freely prune
-  // or mutate its returned graph without changing another proof's input.
   static thread_local std::vector<Entry> cache;
-  const auto key=[](const PostLayoutControlFlowOptions& value){
-    return std::tie(value.address_space_model,value.maximum_return_depth,
-        value.maximum_execution_states,value.main_entry,value.main_formal_opcode,
-        value.proved_indirect_formal_targets,value.empty_return_target,value.opcode_address_words);
-  };
-  for(auto it=cache.rbegin();it!=cache.rend();++it)
-    if(key(it->options)==key(options) && same_layout_search_items(it->artifact.items,items))
+  for (auto it = cache.rbegin(); it != cache.rend(); ++it)
+    if (it->options == options && same_layout_search_items(it->items, items))
       return it->flow;
-  auto flow=std::make_shared<const AuthoritativePostLayoutControlFlow>(
-      build_post_layout_control_flow_uncached(items,options));
-  constexpr std::size_t maximum_entries=16,maximum_states=65536;
-  if(flow->execution_states.size()<=maximum_states){
-    std::size_t states=flow->execution_states.size();
-    for(const auto& entry:cache)states+=entry.flow->execution_states.size();
-    while(!cache.empty() && (cache.size()>=maximum_entries || states>maximum_states)){
-      states-=cache.front().flow->execution_states.size();cache.erase(cache.begin());
+  auto flow = build();
+  constexpr std::size_t maximum_entries = 16, maximum_states = 65536;
+  if (flow->execution_states.size() <= maximum_states) {
+    std::size_t states = flow->execution_states.size();
+    for (const auto& entry : cache) states += entry.flow->execution_states.size();
+    while (!cache.empty() && (cache.size() >= maximum_entries || states > maximum_states)) {
+      states -= cache.front().flow->execution_states.size();
+      cache.erase(cache.begin());
     }
-    cache.push_back({LayoutSearchArtifact{.items=items},options,flow});
+    cache.push_back({items, options, flow});
   }
   return flow;
 }
-
 AuthoritativePostLayoutControlFlow
 build_post_layout_control_flow(const std::vector<MachineItem>& items,
                                const PostLayoutControlFlowOptions& options) {
@@ -1074,6 +1508,117 @@ build_post_layout_control_flow(const std::vector<MachineItem>& items,
 }
 
 namespace {
+
+// Hash borrowed frames, not copies. These keys are local to one read-only
+// CFG verifier; the state arrays outlive the table for its whole lifetime.
+struct ExactExecutionKey {
+  std::size_t item;
+  std::optional<int> counter;
+  std::span<const int> returns;
+  std::span<const std::optional<int>> formal_returns;
+
+  bool operator==(const ExactExecutionKey& other) const {
+    return item == other.item && counter == other.counter &&
+        std::equal(returns.begin(), returns.end(), other.returns.begin(), other.returns.end()) &&
+        std::equal(formal_returns.begin(), formal_returns.end(),
+                   other.formal_returns.begin(), other.formal_returns.end());
+  }
+};
+
+struct ExactExecutionHash {
+  std::size_t operator()(const ExactExecutionKey& key) const noexcept {
+    const auto optional_hash = [](std::optional<int> value) {
+      return value ? static_cast<std::size_t>(*value) + 1U : 0U;
+    };
+    std::size_t hash = key.item * 16777619U ^ optional_hash(key.counter);
+    for (const int address : key.returns)
+      hash = hash * 16777619U ^ static_cast<std::size_t>(address);
+    for (const auto counter : key.formal_returns)
+      hash = hash * 16777619U ^ optional_hash(counter);
+    return hash;
+  }
+};
+
+// The verifier knows the maximum number of distinct states upfront. Index
+// their positions in one allocation, recovering exact keys from the immutable
+// state array on collisions. This avoids allocating a hash node per command.
+class ExactExecutionIndex {
+ public:
+  explicit ExactExecutionIndex(const std::vector<PostLayoutExecutionState>& states)
+      : states_(states), slots_(std::bit_ceil(std::max<std::size_t>(4, states.size() * 2U)),
+                                states.size()) {}
+
+  bool insert(std::size_t state) {
+    auto& slot = slots_[position(key(state))];
+    if (slot != states_.size()) return false;
+    slot = state;
+    return true;
+  }
+
+  std::optional<std::size_t> find(const ExactExecutionKey& query) const {
+    const auto state = slots_[position(query)];
+    return state == states_.size() ? std::nullopt : std::optional{state};
+  }
+
+ private:
+  ExactExecutionKey key(std::size_t index) const {
+    const auto& state = states_[index];
+    return {state.item_index, state.formal_opcode, state.return_stack, state.formal_return_stack};
+  }
+
+  std::size_t position(const ExactExecutionKey& query) const {
+    const auto mask = slots_.size() - 1U;
+    auto hash = ExactExecutionHash{}(query);
+    // Opcode and item indices are correlated in ordinary physical layouts.
+    // Mix high bits before indexing a power-of-two table.
+    hash ^= hash >> 16U;
+    hash *= 0x9e3779b1U;
+    hash ^= hash >> 16U;
+    auto pos = hash & mask;
+    while (slots_[pos] != states_.size() && !(key(slots_[pos]) == query))
+      pos = (pos + 1U) & mask;
+    return pos;
+  }
+
+  const std::vector<PostLayoutExecutionState>& states_;
+  std::vector<std::size_t> slots_;
+};
+
+struct StatePairHash {
+  std::size_t operator()(const std::pair<std::size_t, std::size_t>& pair) const noexcept {
+    auto hash = pair.first;
+    mix_proof_hash(hash, pair.second);
+    return hash;
+  }
+};
+
+// Return stacks have at most five hardware frames. Keep an overflow fallback
+// for verify-by-value callers that supply a larger graph, with the same
+// lexicographic comparison as the original vector key.
+class RelocatedReturnAddresses {
+ public:
+  void push_back(int address) {
+    if (size_ < addresses_.size()) addresses_[size_] = address;
+    else overflow_.push_back(address);
+    ++size_;
+  }
+  auto operator<=>(const RelocatedReturnAddresses& other) const {
+    const auto end = addresses_.begin() +
+        static_cast<std::ptrdiff_t>(std::min(size_, addresses_.size()));
+    const auto other_end = other.addresses_.begin() +
+        static_cast<std::ptrdiff_t>(std::min(other.size_, other.addresses_.size()));
+    if (const auto order = std::lexicographical_compare_three_way(
+            addresses_.begin(), end, other.addresses_.begin(), other_end); order != 0)
+      return order;
+    return overflow_ <=> other.overflow_;
+  }
+  bool operator==(const RelocatedReturnAddresses& other) const { return (*this <=> other) == 0; }
+
+ private:
+  std::array<int, 5> addresses_{};
+  std::vector<int> overflow_;
+  std::size_t size_ = 0;
+};
 
 enum class RegisterWriteEffect {
   None,
@@ -1086,15 +1631,17 @@ struct RegisterAccessEffect {
   RegisterWriteEffect writes = RegisterWriteEffect::None;
 };
 
-std::optional<std::string> stable_indirect_flow_register(const MachineItem& item) {
+std::optional<std::size_t> stable_indirect_flow_slot(const MachineItem& item) {
   if (item.kind != MachineItemKind::Op || !is_indirect_flow_opcode(item.opcode))
     return std::nullopt;
-  const int index = item.opcode & 0x0f;
-  if (index < 0 || index > 14)
-    return std::nullopt;
-  const std::string register_name = register_name_for_index(index);
-  return is_stable_indirect_selector(register_name) ? std::optional<std::string>(register_name)
-                                                    : std::nullopt;
+  const int reg = item.opcode & 0x0f;
+  return reg >= 7 && reg <= 14 ? std::optional{static_cast<std::size_t>(reg - 7)}
+                               : std::nullopt;
+}
+
+std::optional<std::string> stable_indirect_flow_register(const MachineItem& item) {
+  const auto slot = stable_indirect_flow_slot(item);
+  return slot ? std::optional{register_name_for_index(static_cast<int>(*slot) + 7)} : std::nullopt;
 }
 
 RegisterAccessEffect register_access_effect(const MachineItem& item,
@@ -1314,41 +1861,37 @@ static SelectorConsistentExecutionGraph build_selector_execution_graph_impl(
                   edge.indirect_formal_opcode.has_value()
                       ? -1 : control.execution_states[edge.target_state].address};
   };
-  std::array<std::set<Choice>, 8> alternatives;
-  using ExactState = std::tuple<std::size_t, std::optional<int>, std::vector<int>,
-                                std::vector<std::optional<int>>>;
-  std::map<ExactState, std::size_t> original_ids;
+  std::array<std::optional<Choice>, 8> first_choice;
+  std::array<bool, 8> tracked{};
+  ExactExecutionIndex original_ids(control.execution_states);
   for (std::size_t i = 0; i < count; ++i) {
     const auto& state = control.execution_states[i];
-    if (state.item_index >= items.size() ||
-        !original_ids.emplace(ExactState{state.item_index, state.formal_opcode,
-                                        state.return_stack, state.formal_return_stack}, i).second)
+    if (state.item_index >= items.size() || !original_ids.insert(i))
       return {};
-    std::set<std::size_t> labelled;
-    const auto reg = stable_indirect_flow_register(items[state.item_index]);
+    const auto slot = stable_indirect_flow_slot(items[state.item_index]);
+    const auto& projected = control.execution_successors[i];
     for (const auto& edge : control.execution_edges[i]) {
       if (edge.target_state >= count ||
+          std::find(projected.begin(), projected.end(), edge.target_state) == projected.end() ||
           (edge.kind != PostLayoutExecutionEdgeKind::IndirectTarget &&
            edge.indirect_formal_opcode.has_value()))
         return {};
-      labelled.insert(edge.target_state);
-      if (reg && edge.kind == PostLayoutExecutionEdgeKind::IndirectTarget)
-        alternatives[static_cast<std::size_t>(register_index(*reg) - 7)].insert(choice_for(edge));
+      if (slot && !tracked[*slot] && edge.kind == PostLayoutExecutionEdgeKind::IndirectTarget) {
+        const auto candidate = choice_for(edge);
+        if (first_choice[*slot]) tracked[*slot] = *first_choice[*slot] != candidate;
+        else first_choice[*slot] = candidate;
+      }
     }
-    const auto& projected = control.execution_successors[i];
-    if (labelled != std::set<std::size_t>(projected.begin(), projected.end()))
+    if (std::any_of(projected.begin(), projected.end(), [&](std::size_t target) {
+          const auto& edges = control.execution_edges[i];
+          return std::none_of(edges.begin(), edges.end(),
+                              [&](const auto& edge) { return edge.target_state == target; });
+        }))
       return {};
   }
-  std::array<bool, 8> tracked{};
-  for (std::size_t i = 0; i < tracked.size(); ++i)
-    tracked[i] = alternatives[i].size() > 1;
   if (std::none_of(tracked.begin(), tracked.end(), [](bool value) { return value; })) {
-    result.original_states.reserve(count);
-    for (std::size_t i = 0; i < count; ++i)
-      result.original_states.push_back(i);
-    result.successors = control.execution_successors;
-    result.execution_edges = control.execution_edges;
     result.proved = true;
+    result.identity_projection = true;
     return result;
   }
 
@@ -1408,17 +1951,30 @@ static SelectorConsistentExecutionGraph build_selector_execution_graph_impl(
     std::optional<int> x_literal;
     auto operator<=>(const ProductState&) const = default;
   };
-  std::map<ProductState, std::size_t> ids;
-  std::vector<ProductState> states;
+  struct ProductStateHash {
+    std::size_t operator()(const ProductState& state) const noexcept {
+      std::size_t result = state.original;
+      for (std::size_t i = 0; i < state.choices.size(); ++i) {
+        if (const auto& choice = state.choices[i]) {
+          mix_proof_hash(result, i);
+          mix_proof_hash(result, choice->formal
+              ? static_cast<std::size_t>(*choice->formal)
+              : static_cast<std::size_t>(choice->logical) + 256U);
+        }
+        if (const auto& digit = state.literals[i])
+          mix_proof_hash(result, i * 256U + static_cast<std::size_t>(*digit) + 128U);
+      }
+      if (state.x_literal) mix_proof_hash(result, static_cast<std::size_t>(*state.x_literal));
+      return result;
+    }
+  };
+  DenseStateIndex<ProductState, ProductStateHash> states(count);
   const auto intern = [&](const ProductState& state) -> std::optional<std::size_t> {
-    const auto found = ids.find(state);
-    if (found != ids.end())
-      return found->second;
+    if (auto found = states.find(state)) return found;
     if (states.size() >= maximum_states)
       return std::nullopt;
     const std::size_t id = states.size();
-    ids.emplace(state, id);
-    states.push_back(state);
+    states.append(state);
     result.original_states.push_back(state.original);
     result.successors.emplace_back();
     result.execution_edges.emplace_back();
@@ -1426,10 +1982,12 @@ static SelectorConsistentExecutionGraph build_selector_execution_graph_impl(
   };
   bool has_main = false;
   for (const auto& entry : control.external_entries) {
-    const auto found = original_ids.find(ExactState{
-        entry.entry.item_index, entry.formal_opcode, stack_addresses(entry.return_stack),
+    detail::InlineProofRow<int, 5> returns;
+    for (const auto& frame : entry.return_stack) returns.push_back(frame.address);
+    const auto found = original_ids.find(ExactExecutionKey{
+        entry.entry.item_index, entry.formal_opcode, returns,
         entry.formal_return_stack});
-    if (found == original_ids.end() || !intern(ProductState{.original = found->second}))
+    if (!found || !intern(ProductState{.original = *found}))
       return {};
     has_main = has_main || entry.kind == ExternalEntryKind::Main;
   }
@@ -1458,10 +2016,8 @@ static SelectorConsistentExecutionGraph build_selector_execution_graph_impl(
                 item, register_name_for_index(static_cast<int>(slot) + 7)).writes !=
                 RegisterWriteEffect::None)
           effect.invalidated |= 1U << slot;
-      if (const auto reg = stable_indirect_flow_register(item)) {
-        const auto slot = static_cast<std::size_t>(register_index(*reg) - 7);
-        if (tracked[slot]) effect.stable_slot = slot;
-      }
+      if (const auto slot = stable_indirect_flow_slot(item); slot && tracked[*slot])
+        effect.stable_slot = slot;
     }
     entry = effect;
     return *entry;
@@ -1553,10 +2109,164 @@ static SelectorConsistentExecutionGraph build_selector_execution_graph_impl(
 }
 
 
+namespace {
+
+std::shared_ptr<const SelectorConsistentExecutionGraph> shared_selector_graph(
+    const std::vector<MachineItem>& items, const AuthoritativePostLayoutControlFlow& control,
+    std::size_t maximum_states, const std::map<std::string, int>* bindings,
+    bool preserve_direct_formal_contexts,
+    const std::shared_ptr<const AuthoritativePostLayoutControlFlow>& control_owner = {}) {
+  const auto build = [&] {
+    return std::make_shared<const SelectorConsistentExecutionGraph>(
+        build_selector_execution_graph_impl(items, control, maximum_states, bindings,
+                                            preserve_direct_formal_contexts));
+  };
+  const auto& owner = detail::active_post_layout_proof_cache;
+  if (!owner || !post_layout_cache_enabled() || !control.proved) return build();
+
+  // Binding validation reads only labels actually named by indirect
+  // commands. Preserve absent bindings (including the empty deferred map),
+  // but don't price an unrelated placement label as a new data proof.
+  std::optional<std::map<std::string, int>> required;
+  if (bindings) {
+    required.emplace();
+    for (const auto& [site, unused] : control.indirect_flow_targets) {
+      (void)unused;
+      if (site >= items.size() || !items[site].indirect_flow_targets) return build();
+      for (const auto& target : *items[site].indirect_flow_targets) {
+        const auto* label = std::get_if<std::string>(&target);
+        if (!label) return build();
+        const auto found = bindings->find(*label);
+        if (found == bindings->end()) return build();
+        required->insert(*found);
+      }
+    }
+  }
+  const bool transport_stable_indirect = std::any_of(items.begin(), items.end(),
+      [](const auto& item) {
+        return std::find(item.roles.begin(), item.roles.end(),
+                         kTransportedConstantPrefixRole) != item.roles.end();
+      });
+  constexpr auto projection = ProofOpcodeProjection::Selector;
+  auto signature = cfg_item_signature(items, projection);
+  mix_proof_hash(signature, transport_stable_indirect);
+  mix_proof_hash(signature, static_cast<std::size_t>(control.address_space_model));
+  mix_proof_hash(signature, maximum_states);
+  mix_proof_hash(signature, control.execution_states.size());
+  mix_proof_hash(signature, preserve_direct_formal_contexts);
+  for (const auto& entry : control.external_entries) {
+    mix_proof_hash(signature, entry.entry.item_index);
+    mix_proof_hash(signature, static_cast<std::size_t>(entry.kind));
+  }
+  if (required) {
+    mix_proof_hash(signature, required->size() + 1U);
+    for (const auto& [label, encoded] : *required) {
+      mix_proof_hash(signature, std::hash<std::string_view>{}(label));
+      mix_proof_hash(signature, static_cast<std::size_t>(encoded));
+    }
+  }
+  return owner->selectors.get(signature, [&](const SelectorGraphInput& old) {
+    return old.maximum_states == maximum_states &&
+           old.preserve_direct_formal_contexts == preserve_direct_formal_contexts &&
+           old.bindings == required &&
+           (old.control.get() == &control || *old.control == control) &&
+           old.transport_stable_indirect == transport_stable_indirect &&
+           same_control_items(old.items, items, projection);
+  }, [&] {
+    return SelectorGraphInput{capture_control_items(items, projection), control_owner ? control_owner
+            : std::make_shared<const AuthoritativePostLayoutControlFlow>(control),
+        required, maximum_states,
+        preserve_direct_formal_contexts, transport_stable_indirect};
+  }, build);
+}
+
+} // namespace
+
+static SelectorConsistentExecutionGraph materialize_selector_graph(
+    SelectorConsistentExecutionGraph selection, const AuthoritativePostLayoutControlFlow& control) {
+  if (selection.identity_projection) {
+    selection.original_states.resize(control.execution_states.size());
+    std::iota(selection.original_states.begin(), selection.original_states.end(), std::size_t{0});
+    selection.successors = control.execution_successors;
+    selection.execution_edges = control.execution_edges;
+  }
+  return selection;
+}
+
+std::shared_ptr<const AuthoritativePostLayoutControlFlow> shared_post_layout_projected_flow(
+    const std::shared_ptr<const AuthoritativePostLayoutControlFlow>& control,
+    const std::shared_ptr<const SelectorConsistentExecutionGraph>& selection) {
+  if (!control || !selection || !control->proved || !selection->proved) return {};
+  if (selection->identity_projection) return control;
+  const auto build = [&] {
+    AuthoritativePostLayoutControlFlow projected{
+        .proved = true, .address_space_model = control->address_space_model,
+        .external_entries = control->external_entries,
+        .indirect_flow_targets = control->indirect_flow_targets,
+        .indirect_memory_targets = control->indirect_memory_targets,
+        .empty_return_target = control->empty_return_target,
+        .execution_successors = selection->successors,
+        .execution_edges = selection->execution_edges,
+        .maximum_observed_return_depth = control->maximum_observed_return_depth,
+        .explored_states = control->explored_states, .reasons = control->reasons};
+    projected.execution_states.reserve(selection->original_states.size());
+    for (const auto row : selection->original_states)
+      projected.execution_states.push_back(control->execution_states.at(row));
+    return std::make_shared<const AuthoritativePostLayoutControlFlow>(std::move(projected));
+  };
+  const auto& owner = detail::active_post_layout_proof_cache;
+  if (!owner || !post_layout_cache_enabled()) return build();
+  auto signature = std::hash<const void*>{}(control.get());
+  mix_proof_hash(signature, std::hash<const void*>{}(selection.get()));
+  return owner->projections.get(signature, [&](const ProjectedFlowInput& input) {
+    return input.control == control && input.selection == selection;
+  }, [&] { return ProjectedFlowInput{control, selection}; }, build);
+}
+
+std::shared_ptr<const SelectorConsistentExecutionGraph>
+shared_selector_consistent_execution_graph(
+    const std::vector<MachineItem>& items, const AuthoritativePostLayoutControlFlow& control,
+    std::size_t maximum_states) {
+  return shared_selector_graph(items, control, maximum_states, nullptr, false);
+}
+
+std::shared_ptr<const SelectorConsistentExecutionGraph>
+shared_selector_consistent_execution_graph(
+    const std::vector<MachineItem>& items,
+    const std::shared_ptr<const AuthoritativePostLayoutControlFlow>& control,
+    std::size_t maximum_states) {
+  if (!control) return std::make_shared<const SelectorConsistentExecutionGraph>();
+  return shared_selector_graph(items, *control, maximum_states, nullptr, false, control);
+}
+
+std::shared_ptr<const SelectorConsistentExecutionGraph>
+shared_deferred_selector_consistent_execution_graph(
+    const std::vector<MachineItem>& items, const AuthoritativePostLayoutControlFlow& control,
+    const std::map<std::string, int>& encoded_target_origins, std::size_t maximum_states,
+    bool preserve_direct_formal_contexts) {
+  return shared_selector_graph(items, control, maximum_states, &encoded_target_origins,
+                               preserve_direct_formal_contexts);
+}
+
+std::shared_ptr<const SelectorConsistentExecutionGraph>
+shared_deferred_selector_consistent_execution_graph(
+    const std::vector<MachineItem>& items,
+    const std::shared_ptr<const AuthoritativePostLayoutControlFlow>& control,
+    const std::map<std::string, int>& encoded_target_origins, std::size_t maximum_states,
+    bool preserve_direct_formal_contexts) {
+  if (!control) return std::make_shared<const SelectorConsistentExecutionGraph>();
+  return shared_selector_graph(items, *control, maximum_states, &encoded_target_origins,
+                               preserve_direct_formal_contexts, control);
+}
+
 SelectorConsistentExecutionGraph build_selector_consistent_execution_graph(
     const std::vector<MachineItem>& items,
     const AuthoritativePostLayoutControlFlow& control, std::size_t maximum_states) {
-  return build_selector_execution_graph_impl(items, control, maximum_states, nullptr);
+  if (!detail::active_post_layout_proof_cache)
+    return materialize_selector_graph(
+        build_selector_execution_graph_impl(items, control, maximum_states, nullptr), control);
+  return materialize_selector_graph(
+      *shared_selector_consistent_execution_graph(items, control, maximum_states), control);
 }
 
 DeferredSelectorExecutionGraph build_deferred_selector_consistent_execution_graph(
@@ -1564,11 +2274,14 @@ DeferredSelectorExecutionGraph build_deferred_selector_consistent_execution_grap
     const AuthoritativePostLayoutControlFlow& control,
     const std::map<std::string, int>& encoded_target_origins, std::size_t maximum_states,
     bool preserve_direct_formal_contexts) {
-  auto execution = build_selector_execution_graph_impl(
-      items, control, maximum_states, &encoded_target_origins, preserve_direct_formal_contexts);
+  auto execution = detail::active_post_layout_proof_cache
+      ? *shared_deferred_selector_consistent_execution_graph(
+            items, control, encoded_target_origins, maximum_states, preserve_direct_formal_contexts)
+      : build_selector_execution_graph_impl(
+            items, control, maximum_states, &encoded_target_origins, preserve_direct_formal_contexts);
   if (!execution.proved)
     return {};
-  return {std::move(execution), encoded_target_origins};
+  return {materialize_selector_graph(std::move(execution), control), encoded_target_origins};
 }
 
 bool prove_post_layout_direct_conditional_inversion_effects(
@@ -1661,10 +2374,10 @@ PostLayoutExecutionRelocationProof prove_post_layout_execution_relocation(
     return old_to_new_item.at(item);
   };
   const auto mapped_address = [&](int address) -> std::optional<int> {
-    const auto old_cell = before_index.cell_items.find(address);
-    if (old_cell == before_index.cell_items.end())
+    const auto old_cell = before_index.cell_at(address);
+    if (!old_cell)
       return std::nullopt;
-    const auto next = mapped_item(old_cell->second);
+    const auto next = mapped_item(*old_cell);
     return next.has_value() ? std::optional<int>(after_index.item_addresses.at(*next))
                             : std::nullopt;
   };
@@ -1672,29 +2385,24 @@ PostLayoutExecutionRelocationProof prove_post_layout_execution_relocation(
   std::map<std::size_t,std::size_t> copy_prefix_successors;
   std::set<std::size_t> copy_prefix_starts;
   std::set<int> copy_prefix_interiors;
-  const auto frame_addresses = [&](const std::vector<int>& frames, bool remap)
-      -> std::optional<std::vector<int>> {
-    if (!remap) {
-      auto canonical = frames;
-      for (auto& address : canonical) {
+  const auto frame_addresses = [&](std::span<const int> frames, bool remap)
+      -> std::optional<RelocatedReturnAddresses> {
+    RelocatedReturnAddresses mapped;
+    for (int address : frames) {
+      if (remap) {
+        const auto next = mapped_address(address);
+        if (!next) return std::nullopt;
+        address = *next;
+      } else {
         if (copy_prefix_interiors.contains(address)) return std::nullopt;
         if (const auto found = copy_frame_continuations.find(address); found != copy_frame_continuations.end())
           address = found->second;
       }
-      return canonical;
-    }
-    std::vector<int> mapped;
-    for (const int address : frames) {
-      const auto next = mapped_address(address);
-      if (!next.has_value())
-        return std::nullopt;
-      mapped.push_back(*next);
+      mapped.push_back(address);
     }
     return mapped;
   };
 
-  using ExactState = std::tuple<std::size_t, std::optional<int>, std::vector<int>,
-                                std::vector<std::optional<int>>>;
   using EntryLabel = std::tuple<int, bool, int, int, int>;
   struct Entries {
     std::vector<std::set<EntryLabel>> labels;
@@ -1704,35 +2412,32 @@ PostLayoutExecutionRelocationProof prove_post_layout_execution_relocation(
       -> std::optional<Entries> {
     Entries result;
     result.labels.resize(control.execution_states.size());
-    std::map<ExactState, std::size_t> states;
+    ExactExecutionIndex states(control.execution_states);
     for (std::size_t i = 0; i < control.execution_states.size(); ++i) {
       const auto& state = control.execution_states.at(i);
-      if (state.return_stack.size() != state.formal_return_stack.size() ||
-          !states.emplace(ExactState{state.item_index, state.formal_opcode,
-                                     state.return_stack, state.formal_return_stack}, i).second)
+      if (state.return_stack.size() != state.formal_return_stack.size() || !states.insert(i))
         return std::nullopt;
     }
     for (const auto& entry : control.external_entries) {
-      std::vector<int> frames;
+      detail::InlineProofRow<int, 5> frames;
       for (const auto& frame : entry.return_stack)
         frames.push_back(frame.address);
-      const auto found = states.find(ExactState{entry.entry.item_index, entry.formal_opcode,
+      const auto found = states.find(ExactExecutionKey{entry.entry.item_index, entry.formal_opcode,
                                                frames, entry.formal_return_stack});
-      if (found == states.end() ||
-          control.execution_states.at(found->second).address != entry.entry.address)
+      if (!found || control.execution_states.at(*found).address != entry.entry.address)
         return std::nullopt;
       const auto& manual = entry.manual_interaction;
       // Main is an initial root, not a fresh user interaction whenever an
       // internal loop revisits the same command under another formal counter.
       // The unique main-to-main correspondence is pinned by the initial pair.
       if (entry.kind != ExternalEntryKind::Main)
-        result.labels.at(found->second).emplace(
+        result.labels.at(*found).emplace(
             static_cast<int>(entry.kind), manual.has_value(),
             manual.has_value() ? manual->protocol_id : -1,
             manual.has_value() ? manual->phase : -1,
             manual.has_value() ? static_cast<int>(manual->kind) : -1);
       if (entry.kind == ExternalEntryKind::Main)
-        result.mains.push_back(found->second);
+        result.mains.push_back(*found);
     }
     if (result.mains.size() != 1U)
       return std::nullopt;
@@ -2203,14 +2908,11 @@ PostLayoutExecutionRelocationProof prove_post_layout_execution_relocation(
     }
   }
 
-  using EdgeKey = std::tuple<PostLayoutExecutionEdgeKind, std::size_t, std::vector<int>>;
+  using EdgeKey = std::tuple<PostLayoutExecutionEdgeKind, std::size_t, RelocatedReturnAddresses>;
   using EdgeGroups = std::map<EdgeKey, std::vector<PostLayoutExecutionEdge>>;
-  const auto edge_groups = [&](const AuthoritativePostLayoutControlFlow& control,
-                               std::size_t state_index, bool remap)
-      -> std::optional<EdgeGroups> {
-    EdgeGroups groups;
-    std::set<std::size_t> targets;
-    for (const auto& edge : control.execution_edges.at(state_index)) {
+  const auto edge_key = [&](const AuthoritativePostLayoutControlFlow& control,
+      std::size_t state_index, const PostLayoutExecutionEdge& edge, bool remap)
+      -> std::optional<EdgeKey> {
       if (edge.target_state >= control.execution_states.size() ||
           (edge.kind != PostLayoutExecutionEdgeKind::IndirectTarget &&
            edge.indirect_formal_opcode.has_value()))
@@ -2261,7 +2963,7 @@ PostLayoutExecutionRelocationProof prove_post_layout_execution_relocation(
         if (completion != return_completions.end() && (completed_fallthrough || completed_branch))
           item = completion->second.front();
       }
-      const auto frames = frame_addresses(target.return_stack, remap);
+      auto frames = frame_addresses(target.return_stack, remap);
       if (!item.has_value() || !frames.has_value())
         return std::nullopt;
       auto kind = edge.kind;
@@ -2283,7 +2985,17 @@ PostLayoutExecutionRelocationProof prove_post_layout_execution_relocation(
                        control.execution_states.at(state_index).item_index) &&
           kind == PostLayoutExecutionEdgeKind::DirectTarget)
         kind = PostLayoutExecutionEdgeKind::IndirectTarget;
-      groups[EdgeKey{kind, canonical_return(*item), *frames}].push_back(edge);
+      return EdgeKey{kind, canonical_return(*item), std::move(*frames)};
+  };
+  const auto edge_groups = [&](const AuthoritativePostLayoutControlFlow& control,
+                               std::size_t state_index, bool remap)
+      -> std::optional<EdgeGroups> {
+    EdgeGroups groups;
+    std::set<std::size_t> targets;
+    for (const auto& edge : control.execution_edges.at(state_index)) {
+      auto key = edge_key(control, state_index, edge, remap);
+      if (!key) return std::nullopt;
+      groups[std::move(*key)].push_back(edge);
       targets.insert(edge.target_state);
     }
     const auto& projected = control.execution_successors.at(state_index);
@@ -2293,9 +3005,11 @@ PostLayoutExecutionRelocationProof prove_post_layout_execution_relocation(
   };
 
   using StatePair = std::pair<std::size_t, std::size_t>;
-  std::set<StatePair> discovered;
+  std::unordered_set<StatePair, StatePairHash> discovered;
+  discovered.reserve(std::min(options.maximum_state_pairs, before_control.execution_states.size()));
   std::deque<StatePair> pending;
-  std::set<std::size_t> old_seen, new_seen;
+  std::vector<bool> old_seen(before_control.execution_states.size());
+  std::vector<bool> new_seen(after_control.execution_states.size());
   std::set<std::pair<std::size_t, int>> used_remaps;
   const auto enqueue = [&](std::size_t old_state, std::size_t new_state) {
     const StatePair pair{old_state, new_state};
@@ -2321,7 +3035,7 @@ PostLayoutExecutionRelocationProof prove_post_layout_execution_relocation(
       if (!frames || !new_frames || *frames != *new_frames ||
           !new_entries->labels[new_state_index].empty())
         return reject("inserted copy changes its paired return continuation");
-      new_seen.insert(new_state_index);
+      new_seen[new_state_index] = true;
       if (!enqueue(old_state_index,after_control.execution_edges[new_state_index].front().target_state))
         return reject("inserted copy exceeds the execution-pair budget");
       continue;
@@ -2330,7 +3044,7 @@ PostLayoutExecutionRelocationProof prove_post_layout_execution_relocation(
       if (!frames || !new_frames || *frames != *new_frames ||
           !new_entries->labels[new_state_index].empty())
         return reject("inserted jump changes its paired continuation");
-      new_seen.insert(new_state_index);
+      new_seen[new_state_index] = true;
       if (!enqueue(old_state_index,
                    after_control.execution_edges[new_state_index].front().target_state))
         return reject("inserted jump exceeds the execution-pair budget");
@@ -2342,7 +3056,7 @@ PostLayoutExecutionRelocationProof prove_post_layout_execution_relocation(
         if(!frames||!new_frames||*frames!=*new_frames||!old_entries->labels[old_state_index].empty()||
             !new_entries->labels[new_state_index].empty())
           return reject("pure return completion changes an interaction or frame");
-        new_seen.insert(new_state_index);
+        new_seen[new_state_index] = true;
         if(!enqueue(old_state_index,after_control.execution_edges[new_state_index].front().target_state))
           return reject("pure return completion exceeds its execution-pair budget");
         continue;
@@ -2354,7 +3068,7 @@ PostLayoutExecutionRelocationProof prove_post_layout_execution_relocation(
           !old_entries->labels.at(old_state_index).empty() ||
           !new_entries->labels.at(new_state_index).empty())
         return reject("producer erasure changes an entry or return continuation");
-      old_seen.insert(old_state_index);
+      old_seen[old_state_index] = true;
       const auto next = before_control.execution_edges[old_state_index].front().target_state;
       if (!enqueue(next, new_state_index))
         return reject("producer erasure exceeds its execution-pair budget");
@@ -2369,7 +3083,7 @@ PostLayoutExecutionRelocationProof prove_post_layout_execution_relocation(
       if (jump.kind == MachineItemKind::Op && jump.opcode == kJumpOpcode &&
           !jump.manual_interaction.has_value() && edges.size() == 1U &&
           edges.front().kind == PostLayoutExecutionEdgeKind::DirectTarget) {
-        old_seen.insert(old_state_index);
+        old_seen[old_state_index] = true;
         if (!enqueue(edges.front().target_state, new_state_index))
           return reject("transparent-jump transport exceeds its bounded state-pair budget");
         continue;
@@ -2425,14 +3139,51 @@ PostLayoutExecutionRelocationProof prove_post_layout_execution_relocation(
       }
     }
 
-    old_seen.insert(old_state_index);
-    new_seen.insert(new_state_index);
+    old_seen[old_state_index] = true;
+    new_seen[new_state_index] = true;
+    const auto declared = options.indirect_entry_remap.find(old_state.item_index);
+    const auto& old_out = before_control.execution_edges[old_state_index];
+    const auto& new_out = after_control.execution_edges[new_state_index];
+    // An ordinary instruction or a terminal state does not need grouping.
+    // Keep all labelled-edge/alias/return-stack checks, in the same walk.
+    if (old_out.size() <= 1U && new_out.size() <= 1U) {
+      const auto matches_projection = [](const auto& edges, const auto& successors) {
+        return edges.empty() ? successors.empty() :
+            !successors.empty() && std::all_of(successors.begin(), successors.end(),
+                [&](std::size_t next) { return next == edges.front().target_state; });
+      };
+      if (old_out.size() != new_out.size() ||
+          !matches_projection(old_out, before_control.execution_successors[old_state_index]) ||
+          !matches_projection(new_out, after_control.execution_successors[new_state_index]))
+        return reject("labelled execution alternatives differ after relocation");
+      if (old_out.empty()) continue;
+      const auto& previous_edge = old_out.front();
+      const auto& next_edge = new_out.front();
+      const auto a = edge_key(before_control, old_state_index, previous_edge, true);
+      const auto b = edge_key(after_control, new_state_index, next_edge, false);
+      if (!a || !b) return reject("labelled execution alternatives differ after relocation");
+      if (*a != *b && !(options.allow_bypassed_direct_jumps &&
+          std::get<0>(*a) == std::get<0>(*b) && std::get<2>(*a) == std::get<2>(*b)))
+        return reject("branch, return, or resume reaches a different relocated context");
+      if (std::get<0>(*a) == PostLayoutExecutionEdgeKind::IndirectTarget &&
+          previous_edge.indirect_formal_opcode && declared != options.indirect_entry_remap.end()) {
+        const int counter = *previous_edge.indirect_formal_opcode;
+        const auto mapped = declared->second.find(counter);
+        if (mapped != declared->second.end()) {
+          used_remaps.emplace(old_state.item_index, counter);
+          if (next_edge.indirect_formal_opcode != mapped->second)
+            return reject("declared selector transport does not match its new entry counter");
+        }
+      }
+      if (!enqueue(previous_edge.target_state, next_edge.target_state))
+        return reject("execution-context transport exceeds its bounded state-pair budget");
+      continue;
+    }
     const auto old_groups = edge_groups(before_control, old_state_index, true);
     const auto new_groups = edge_groups(after_control, new_state_index, false);
     if (!old_groups.has_value() || !new_groups.has_value() ||
         old_groups->size() != new_groups->size())
       return reject("labelled execution alternatives differ after relocation");
-    const auto declared = options.indirect_entry_remap.find(old_state.item_index);
     for (const auto& [key, old_edges] : *old_groups) {
       auto matching = new_groups->find(key);
       if (matching == new_groups->end() && options.allow_bypassed_direct_jumps &&
@@ -2486,8 +3237,8 @@ PostLayoutExecutionRelocationProof prove_post_layout_execution_relocation(
         return reject("relocation introduces an unpaired execution alternative");
     }
   }
-  if (old_seen.size() != before_control.execution_states.size() ||
-      new_seen.size() != after_control.execution_states.size())
+  if (std::find(old_seen.begin(), old_seen.end(), false) != old_seen.end() ||
+      std::find(new_seen.begin(), new_seen.end(), false) != new_seen.end())
     return reject("not every exact execution context has a rooted correspondence");
   for (const auto& [source, remap] : options.indirect_entry_remap)
     for (const auto& [old_code, new_code] : remap) {

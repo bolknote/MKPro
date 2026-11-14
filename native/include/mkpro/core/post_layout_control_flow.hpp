@@ -1,5 +1,6 @@
 #pragma once
 
+#include "mkpro/core/detail/inline_proof_row.hpp"
 #include "mkpro/core/formal_address.hpp"
 #include "mkpro/core/ir.hpp"
 
@@ -50,11 +51,11 @@ struct PostLayoutExternalEntryState {
 struct PostLayoutExecutionState {
   std::size_t item_index = 0;
   int address = -1;
-  std::vector<int> return_stack;
+  detail::InlineProofRow<int, 5> return_stack;
   // Exact hardware counter and return frames. nullopt denotes the separate
   // logical layout space, not a physical alias past the selected model's limit.
   std::optional<int> formal_opcode;
-  std::vector<std::optional<int>> formal_return_stack;
+  detail::InlineProofRow<std::optional<int>, 5> formal_return_stack;
   // Address operands can be fetched across a side-branch discontinuity.
   std::optional<std::size_t> operand_item_index;
 
@@ -89,6 +90,9 @@ struct PostLayoutExecutionEdge {
   bool operator==(const PostLayoutExecutionEdge&) const = default;
 };
 
+using PostLayoutSuccessors = std::vector<detail::InlineProofRow<std::size_t, 2>>;
+using PostLayoutEdges = std::vector<detail::InlineProofRow<PostLayoutExecutionEdge, 2>>;
+
 struct PostLayoutControlFlowOptions {
   AddressSpaceModel address_space_model = AddressSpaceModel::Standard;
   int maximum_return_depth = 5;
@@ -119,6 +123,8 @@ struct PostLayoutControlFlowOptions {
   // also serve as address words. The caller must first encode the real final
   // operand byte, not its numeric target. Default typed-IR validation is unchanged.
   std::vector<std::size_t> opcode_address_words;
+
+  bool operator==(const PostLayoutControlFlowOptions&) const = default;
 };
 
 // A private executable view of compiler-owned address/code overlays. Item
@@ -144,13 +150,15 @@ struct AuthoritativePostLayoutControlFlow {
   std::map<std::size_t, std::vector<int>> indirect_memory_targets;
   std::optional<PostLayoutCommandIdentity> empty_return_target;
   std::vector<PostLayoutExecutionState> execution_states;
-  std::vector<std::vector<std::size_t>> execution_successors;
+  PostLayoutSuccessors execution_successors;
   // Labelled alternatives retain branch direction and encoded selector
   // provenance even when the legacy successor projection deduplicates them.
-  std::vector<std::vector<PostLayoutExecutionEdge>> execution_edges;
+  PostLayoutEdges execution_edges;
   int maximum_observed_return_depth = 0;
   std::size_t explored_states = 0;
   std::vector<std::string> reasons;
+
+  bool operator==(const AuthoritativePostLayoutControlFlow&) const = default;
 };
 
 
@@ -300,12 +308,55 @@ shared_post_layout_control_flow(const std::vector<MachineItem>& items,
 struct SelectorConsistentExecutionGraph {
   bool proved = false;
   std::vector<std::size_t> original_states;
-  std::vector<std::vector<std::size_t>> successors;
+  PostLayoutSuccessors successors;
   // Preserve branch/resume kinds after product-state expansion. Data proofs
   // must not reconstruct these labels from physical adjacency.
-  std::vector<std::vector<PostLayoutExecutionEdge>> execution_edges;
+  PostLayoutEdges execution_edges;
   std::size_t pruned_edges = 0;
+  // The projection retained every state and edge in the original order.
+  bool identity_projection = false;
+
+  bool operator==(const SelectorConsistentExecutionGraph&) const = default;
 };
+
+// A borrowed view of the original exact execution contexts with optional
+// selector-refined edges. Identity results need neither copied adjacency
+// nor an explicit identity row map. Keep both owners alive while using it.
+struct PostLayoutExecutionView {
+  const AuthoritativePostLayoutControlFlow& control;
+  const SelectorConsistentExecutionGraph* selection = nullptr;
+
+  bool proved() const { return control.proved && (!selection || selection->proved); }
+  bool refined() const { return selection && !selection->identity_projection; }
+  std::size_t size() const {
+    return refined() ? selection->original_states.size() : control.execution_states.size();
+  }
+  std::size_t original_index(std::size_t i) const {
+    return refined() ? selection->original_states.at(i) : i;
+  }
+  const PostLayoutExecutionState& state(std::size_t i) const {
+    return control.execution_states.at(original_index(i));
+  }
+  const PostLayoutSuccessors& successors() const {
+    return refined() ? selection->successors : control.execution_successors;
+  }
+  const PostLayoutEdges& edges() const {
+    return refined() ? selection->execution_edges : control.execution_edges;
+  }
+};
+
+// The shared API elides the tables for an identity projection. Use the view
+// above to read its rows. The value API still materializes independent tables.
+std::shared_ptr<const SelectorConsistentExecutionGraph>
+shared_selector_consistent_execution_graph(
+    const std::vector<MachineItem>& items, const AuthoritativePostLayoutControlFlow& control,
+    std::size_t maximum_states = 20000);
+
+std::shared_ptr<const SelectorConsistentExecutionGraph>
+shared_selector_consistent_execution_graph(
+    const std::vector<MachineItem>& items,
+    const std::shared_ptr<const AuthoritativePostLayoutControlFlow>& control,
+    std::size_t maximum_states = 20000);
 
 SelectorConsistentExecutionGraph build_selector_consistent_execution_graph(
     const std::vector<MachineItem>& items,
@@ -322,6 +373,25 @@ struct DeferredSelectorExecutionGraph {
   SelectorConsistentExecutionGraph execution;
   std::map<std::string, int> encoded_target_origins;
 };
+
+std::shared_ptr<const SelectorConsistentExecutionGraph>
+shared_deferred_selector_consistent_execution_graph(
+    const std::vector<MachineItem>& items, const AuthoritativePostLayoutControlFlow& control,
+    const std::map<std::string, int>& encoded_target_origins, std::size_t maximum_states = 20000,
+    bool preserve_direct_formal_contexts = false);
+
+std::shared_ptr<const SelectorConsistentExecutionGraph>
+shared_deferred_selector_consistent_execution_graph(
+    const std::vector<MachineItem>& items,
+    const std::shared_ptr<const AuthoritativePostLayoutControlFlow>& control,
+    const std::map<std::string, int>& encoded_target_origins, std::size_t maximum_states = 20000,
+    bool preserve_direct_formal_contexts = false);
+
+// Adapter for proofs that still require an owning AuthoritativeData graph.
+// Returns the original owner unchanged when the projection is the identity.
+std::shared_ptr<const AuthoritativePostLayoutControlFlow> shared_post_layout_projected_flow(
+    const std::shared_ptr<const AuthoritativePostLayoutControlFlow>& control,
+    const std::shared_ptr<const SelectorConsistentExecutionGraph>& selection);
 
 DeferredSelectorExecutionGraph build_deferred_selector_consistent_execution_graph(
     const std::vector<MachineItem>& items,

@@ -67,3 +67,58 @@ growth, rejection of unproved or unclosed smaller states, cyclic transitions,
 family fairness, deterministic limits and proof-sensitive artifact identity.
 Existing selector compiler/ROM tests continue to verify the actual machine
 rewrites. The search is not a new permission to alter program behavior.
+
+## Sharing proof work across branches
+
+Compilation owns a bounded group of lazily started helpers. Independent
+descendant batches publish to the same queue, so a worker finishing one
+branch can help another instead of leaving that branch's remaining checks
+serial. A caller waiting for its own batch may also run its descendants,
+but never work from a sibling batch that could be waiting on it.
+Batch results and errors are consumed in input order. The
+`MKPRO_NATIVE_LAYOUT_JOBS` setting controls concurrency, not search budgets.
+Selector allocations prove consecutive assignments in bounded parallel batches.
+A batch contains no more assignments than the remaining candidate slots, so
+it cannot start work beyond the serial frontier. The exact CFG, writeback
+proofs and trace comparisons still apply to each candidate independently.
+
+One compilation also owns bounded memo tables for register/coalescing
+variants, literal preparations, constraint closures and order-reduction
+proofs. The last shares the compact relational conclusion, not the numeric
+solver's expanded graph or stack facts, and includes the exact input
+artifact, projected graph, literal span and numeric input policy in its key.
+Keys require exact item metadata, relevant machine policies and the specific
+equations, setup words and limits read by the proof. A hash only chooses a
+bucket. A proof that does not read incoming optimization reports stores its
+own report suffix rather than another branch's history.
+
+Complete frontiers and callback-driven finalization are not shared across
+search roots. Nonrecursive proofs can
+share in-flight work; cached and uncached results go through the same
+publication gates. Control snapshots share the same typed graph, and selector
+snapshots additionally key on the relevant entry/transfer effects and encoded
+target equations. Neither projection relaxes numeric, stack or formal-address
+proof obligations. `MKPRO_NATIVE_TRACE_JOINT_WORK=1` reports builds, hits
+and waits per work family. `MKPRO_NATIVE_SHARE_JOINT_WORK=0` disables
+compilation-wide memoization for comparison without changing eligible proofs.
+Final selector-family exchanges also run independent layout seeds in the
+same pool, preserving pair order, exchange/release order and the exact
+non-growing and growth limits. The owner deduplicates complete artifacts
+in discovery order. Numeric interval cache keys omit display-only item
+fields and pure cell-origin annotations while retaining semantic roles.
+
+Size-only closure callers can supply an exclusive bound from their incumbent.
+Use it only when an equal or longer result cannot be published or retained
+as a continuation. A callback finalizer can still repay layout debt and
+therefore does not inherit this bound.
+
+The parametric lane prepares continuation and literal layouts before
+requesting a numeric interval. A family without a structurally eligible
+layout needs no interval proof. The ordinary-layout preflight uses the
+entire encoding domain and padding allowance; a projected tail is checked
+separately. Reuse the proved selector constraints to reject incompatible
+fixed addresses and gaps in both lanes before asking for numeric facts.
+Flexible selector bounds are omitted from this relaxation to include the
+official-address fallback. These checks can reject an impossible placement but never
+authorize one. The first viable layout requests the original exact domain
+proof, which all of that family's layouts then share.

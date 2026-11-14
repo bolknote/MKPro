@@ -248,10 +248,10 @@ static PassResult process_register_webs(
     return symbolic_flow(ordinary);
   };
   const auto selector_view = [&](const std::vector<MachineItem>& machine,
-                                 const AuthoritativePostLayoutControlFlow& flow) {
-    return closed_origins ? build_selector_consistent_execution_graph(machine, flow) :
-        build_deferred_selector_consistent_execution_graph(machine, flow, *encoded_origins,
-            20000, preserve_direct_formal_contexts).execution;
+      const std::shared_ptr<const AuthoritativePostLayoutControlFlow>& flow) {
+    return closed_origins ? shared_selector_consistent_execution_graph(machine, flow) :
+        shared_deferred_selector_consistent_execution_graph(machine, flow, *encoded_origins,
+            20000, preserve_direct_formal_contexts);
   };
   const bool trace = std::getenv("MKPRO_NATIVE_TRACE_REGISTER_WEBS") != nullptr;
   const auto unchanged = [&](const char* reason = "no admissible copy merge") {
@@ -306,30 +306,27 @@ static PassResult process_register_webs(
     address += cells_per_op(op);
   }
   const auto machine = lower_ir_to_machine(ops);
-  auto flow = deferred_control ? build_post_layout_control_flow(machine, *deferred_control)
-                               : build_post_layout_control_flow(machine);
-  if (!flow.proved && !deferred_control) {
+  auto flow_owner = deferred_control ? shared_post_layout_control_flow(machine, *deferred_control)
+                                     : shared_post_layout_control_flow(machine);
+  if (!flow_owner->proved && !deferred_control) {
     PostLayoutControlFlowOptions options;
     options.empty_return_target = IrTarget{1};
-    flow = build_post_layout_control_flow(machine, options);
+    flow_owner = shared_post_layout_control_flow(machine, options);
   }
-  if (!flow.proved || flow.execution_states.empty()) {
-    if (trace && !flow.reasons.empty())
-      std::cerr << "[register-web-copy-coalesce] CFG: " << flow.reasons.front() << '\n';
+  if (!flow_owner->proved || flow_owner->execution_states.empty()) {
+    if (trace && !flow_owner->reasons.empty())
+      std::cerr << "[register-web-copy-coalesce] CFG: " << flow_owner->reasons.front() << '\n';
     return unchanged("exact execution graph unavailable");
   }
 
   if (encoded_origins) {
-    const auto selector = selector_view(machine, flow);
-    if (!selector.proved)
+    const auto selector = selector_view(machine, flow_owner);
+    auto projected = shared_post_layout_projected_flow(flow_owner, selector);
+    if (!projected)
       return unchanged("deferred selector equations have no execution certificate");
-    const auto states = flow.execution_states;
-    flow.execution_states.clear();
-    for (const auto original : selector.original_states)
-      flow.execution_states.push_back(states.at(original));
-    flow.execution_successors = selector.successors;
-    flow.execution_edges = selector.execution_edges;
+    flow_owner = std::move(projected);
   }
+  const auto& flow = *flow_owner;
 
   std::vector<std::size_t> sites;
   for (const auto& state : flow.execution_states) {
@@ -1038,22 +1035,23 @@ static PassResult process_register_webs(
       auto candidate = emit_recolored(relocated_counters);
       if (deferred_control) {
         const auto changed_machine = lower_ir_to_machine(candidate);
-        const auto changed_flow = build_post_layout_control_flow(changed_machine, *deferred_control);
+        const auto changed_flow = shared_post_layout_control_flow(changed_machine, *deferred_control);
         const auto selected = selector_view(changed_machine, changed_flow);
-        if (!changed_flow.proved || !selected.proved ||
-            !prove_post_layout_input_boundaries(changed_machine, changed_flow).proved)
+        if (!changed_flow->proved || !selected->proved ||
+            !prove_post_layout_input_boundaries(changed_machine, *changed_flow).proved)
           continue;
         if (preserve_direct_formal_contexts) {
           // Equal-width allocation cannot invent a new PC/return frame or
           // borrow an unproved side-space opcode. Compare the selected exact
           // graphs, not merely successful independent CFG construction.
-          bool same = selected.original_states.size() == flow.execution_states.size() &&
-              selected.successors == flow.execution_successors &&
-              selected.execution_edges == flow.execution_edges &&
+          const PostLayoutExecutionView selected_view{*changed_flow, selected.get()};
+          bool same = selected_view.size() == flow.execution_states.size() &&
+              selected_view.successors() == flow.execution_successors &&
+              selected_view.edges() == flow.execution_edges &&
               changed_machine.size() == machine.size();
-          for (std::size_t state = 0; same && state < selected.original_states.size(); ++state) {
+          for (std::size_t state = 0; same && state < selected_view.size(); ++state) {
             const auto& before = flow.execution_states[state];
-            const auto& after = changed_flow.execution_states.at(selected.original_states[state]);
+            const auto& after = selected_view.state(state);
             same = before == after;
             if (same && has_noncanonical_post_layout_counter(before, flow.address_space_model)) {
               same = machine.at(before.item_index).opcode == changed_machine.at(after.item_index).opcode;
@@ -1105,11 +1103,12 @@ static PassResult process_register_webs(
   std::vector<IrOp> result = emit_recolored(relocated_counters);
   if (deferred_control) {
     const auto after_machine = lower_ir_to_machine(result);
-    const auto after_flow = build_post_layout_control_flow(after_machine, *deferred_control);
+    const auto after_owner = shared_post_layout_control_flow(after_machine, *deferred_control);
+    const auto& after_flow = *after_owner;
     if (!after_flow.proved ||
         !prove_post_layout_input_boundaries(after_machine, after_flow).proved ||
-        !build_deferred_selector_consistent_execution_graph(
-             after_machine, after_flow, *encoded_origins).execution.proved)
+        !shared_deferred_selector_consistent_execution_graph(
+             after_machine, after_owner, *encoded_origins)->proved)
       return unchanged("coalesced callback/input obligations did not survive transport");
     // An empty return may name a physical command instead of a label. Do not
     // move or delete that command merely because the rebuilt graph is valid.

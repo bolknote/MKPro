@@ -1,5 +1,6 @@
 #include "mkpro/core/natural_target_component_layout.hpp"
 
+#include "mkpro/core/detail/layout_jobs.hpp"
 #include "mkpro/core/emit/machine_emitter.hpp"
 #include "mkpro/core/emit/lowering/proc_raw_setup.hpp"
 #include "mkpro/core/indirect_addressing.hpp"
@@ -1074,6 +1075,22 @@ void natural_target_component_layout_is_generic_and_proof_gated() {
     enabled.allow_typed_resume_conversion = true;
     const auto candidates = core::balanced_deferred_natural_target_selector_allocations(
         items, words, graph, {}, control, enabled);
+    const auto allocate = [&](unsigned workers) {
+      core::detail::LayoutExecutor executor(workers);
+      const core::detail::LayoutExecutorScope scope(executor);
+      auto bounded = enabled;
+      bounded.maximum_candidates = 2;
+      return core::balanced_deferred_natural_target_selector_allocations(
+          items, words, graph, {}, control, bounded);
+    };
+    const auto serial = allocate(1), parallel = allocate(4);
+    require(!serial.empty() && serial.size() == parallel.size() &&
+            std::equal(serial.begin(), serial.end(), parallel.begin(), [](const auto& a, const auto& b) {
+              return a.encoded_selector_targets == b.encoded_selector_targets &&
+                  a.changed_flows == b.changed_flows && a.cell_delta == b.cell_delta &&
+                  core::same_layout_search_items(a.items, b.items);
+            }),
+            "parallel proofs retain the serial winner order at the candidate boundary");
     const auto chosen = std::find_if(candidates.begin(), candidates.end(), [&](const auto& candidate) {
       if (!contains_resume_conversion(candidate) || candidate.cell_delta != -2) return false;
       const auto after = core::build_post_layout_control_flow(candidate.items, control);
@@ -1184,6 +1201,56 @@ void natural_target_component_layout_is_generic_and_proof_gated() {
     require(core::LayoutGapCapacityBound(empty, 11).minimum_padding(0U, gaps) == 44 &&
                 core::LayoutGapCapacityBound(lengths, 0).minimum_padding(0U, empty) == 0,
             "empty suffixes and zero gaps must remain valid bound inputs");
+  }
+  {
+    // The loop has the same reachable graph whichever command is the
+    // external entry. An entry can carry different X/X2 despite that graph.
+    const std::vector loop{MachineItem::label("loop"), op(0x40), op(0x51),
+                           MachineItem::address(std::string("loop"))};
+    const auto flow_at_start = core::build_post_layout_control_flow(loop);
+    const auto flow_at_jump = core::build_post_layout_control_flow(loop, {.main_entry = 1});
+    require(flow_at_start.proved && flow_at_jump.proved, "both external entries are valid");
+    core::NaturalTargetComponentLayoutOptions options;
+    options.eager_symbolic_flow_analysis = true;
+    const auto cache = core::make_natural_target_flow_proof_cache(4);
+    const auto stats = [&] { return core::natural_target_flow_proof_cache_stats(cache); };
+    const auto run = [&](const auto& items, const auto& cfg) {
+      return core::optimize_natural_target_component_layout(items, {}, cfg, options);
+    };
+    const auto baseline = run(loop, flow_at_start);
+    const auto same_result = [](const auto& left, const auto& right) {
+      return core::same_layout_search_artifact(
+          {left.items, left.preloads, {}}, {right.items, right.preloads, {}}) &&
+          left.plan.proved == right.plan.proved && left.removed_cells == right.removed_cells;
+    };
+    const core::detail::FlowProofCacheScope scope(cache);
+    std::vector<core::NaturalTargetComponentLayoutResult> layouts(4);
+    core::detail::evaluate_layout_jobs(layouts.size(), [&](std::size_t index) {
+      layouts[index] = run(loop, flow_at_start);
+    }, 4);
+    require(stats().symbolic_evaluations == 1 && stats().hits >= 3 &&
+                std::all_of(layouts.begin(), layouts.end(), [&](const auto& layout) {
+                  return same_result(layout, baseline);
+                }),
+            "sibling layout workers share one completed exact X2 analysis");
+    const auto before_entry = stats().symbolic_evaluations;
+    (void)run(loop, flow_at_jump);
+    require(stats().symbolic_evaluations > before_entry,
+            "an altered external entry requires a new X2 analysis");
+
+    // A direct jump makes this input eligible for layout, regardless of
+    // whether a selector is available. Only the return edge changes.
+    const std::vector returns{op(0x51), MachineItem::address(2), op(0x52), stop(), stop()};
+    const auto exit_one = core::build_post_layout_control_flow(returns, {.empty_return_target = 3});
+    const auto exit_two = core::build_post_layout_control_flow(returns, {.empty_return_target = 4});
+    require(exit_one.proved && exit_two.proved && exit_one.external_entries == exit_two.external_entries,
+            "changed return edge has the same external entry");
+    (void)run(returns, exit_one);
+    const auto before_edge = stats().symbolic_evaluations;
+    require(before_edge == before_entry + 2, "the first return graph reached X2 analysis");
+    (void)run(returns, exit_two);
+    require(stats().symbolic_evaluations == before_edge + 1,
+            "an altered return edge cannot reuse a different X2 graph");
   }
   {
     const auto codes = [](const std::vector<MachineItem>& items) {

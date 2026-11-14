@@ -23,6 +23,8 @@
 #include "mkpro/emulator/mk61.hpp"
 #include "test_support.hpp"
 #include <algorithm>
+#include <chrono>
+#include <condition_variable>
 #include <exception>
 #include <cstdlib>
 #include <fstream>
@@ -519,6 +521,24 @@ void strict_joint_closure_size_contract(){
   require(admitted && same_layout_search_artifact(*admitted,*unrestricted) &&
       observe(root,-1,true)==observe(*admitted,-1,true),
       "a size-compatible closure keeps the same artifact and ROM behavior");
+  {
+    const auto work = detail::make_joint_layout_work();
+    const detail::JointLayoutWorkScope scope(work);
+    const auto width = cells(root.items);
+    require(run(width + 2).has_value(), "a wider bound can complete the ordinary proof");
+    const auto tighter = run(width + 1);
+    require(tighter && same_layout_search_artifact(*tighter, *unrestricted) &&
+            detail::joint_layout_work_stats(*work).closures.hits == 1 &&
+            !run(width),
+            "a tighter admissible bound shares the same artifact and remains exclusive");
+  }
+  {
+    const auto work = detail::make_joint_layout_work();
+    const detail::JointLayoutWorkScope scope(work);
+    require(run(cells(root.items) + 1).has_value() && run(std::nullopt).has_value() &&
+            detail::joint_layout_work_stats(*work).closures.builds == 2,
+            "an unlimited request must not inherit a finite proof bound");
+  }
 }
 
 void independent_layout_job_contract(){
@@ -544,6 +564,82 @@ void independent_layout_job_contract(){
           "parallel results retain serial discovery order and exact machine items");
   }
 }
+
+void nested_layout_jobs_keep_order_and_context() {
+  const auto proofs = detail::make_post_layout_proof_cache();
+  const auto work = detail::make_joint_layout_work();
+  const detail::PostLayoutProofCacheScope proof_scope(proofs);
+  const detail::JointLayoutWorkScope work_scope(work);
+  std::vector<std::vector<int>> output(4, std::vector<int>(17, -1));
+  detail::evaluate_layout_jobs(output.size(), [&](std::size_t outer) {
+    detail::evaluate_layout_jobs(output[outer].size(), [&](std::size_t inner) {
+      require(detail::active_post_layout_proof_cache == proofs &&
+          detail::active_joint_layout_work == work, "a nested job inherits its own proof owners");
+      output[outer][inner] = static_cast<int>(outer * 100U + inner);
+    }, 4);
+  }, 4);
+  for (std::size_t outer = 0; outer < output.size(); ++outer)
+    for (std::size_t inner = 0; inner < output[outer].size(); ++inner)
+      require(output[outer][inner] == static_cast<int>(outer * 100U + inner),
+          "nested batches publish every result at its original index");
+  bool threw = false;
+  try {
+    detail::evaluate_layout_jobs(4, [&](std::size_t index) {
+      if (index == 0 || index == 2) throw std::runtime_error(std::to_string(index));
+    }, 4);
+  } catch (const std::runtime_error& failure) {
+    threw = std::string_view(failure.what()) == "0";
+  }
+  require(threw, "nested executor preserves original exception order");
+
+  // A one-worker executor cannot start helpers. The calling thread must
+  // still finish its descendants even if an individual batch requests more
+  // workers; the outer bound must never turn nesting into a self-wait.
+  {
+    detail::LayoutExecutor executor(1);
+    const detail::LayoutExecutorScope scope(executor);
+    int completed = 0;
+    detail::evaluate_layout_jobs(2, [&](std::size_t) {
+      detail::evaluate_layout_jobs(3, [&](std::size_t) {
+        detail::evaluate_layout_jobs(4, [&](std::size_t) { ++completed; }, 4);
+      }, 4);
+    }, 4);
+    require(completed == 24, "deep nested batches drain within a one-thread executor");
+  }
+  {
+    detail::LayoutExecutor executor(2);
+    const detail::LayoutExecutorScope scope(executor);
+    const auto owner = std::this_thread::get_id();
+    std::mutex gate;
+    std::condition_variable changed;
+    int inside = 0;
+    bool helper_started = false, children_met = true, owner_helped = false;
+    constexpr auto safety_wait = std::chrono::seconds(5);
+    detail::evaluate_layout_jobs(2, [&](std::size_t) {
+      if (std::this_thread::get_id() == owner) {
+        std::unique_lock lock(gate);
+        if (!changed.wait_for(lock, safety_wait, [&] { return helper_started; }))
+          children_met = false;
+        return;
+      }
+      {
+        const std::lock_guard lock(gate);
+        helper_started = true;
+        changed.notify_all();
+      }
+      detail::evaluate_layout_jobs(2, [&](std::size_t) {
+        std::unique_lock lock(gate);
+        owner_helped |= std::this_thread::get_id() == owner;
+        ++inside;
+        changed.notify_all();
+        if (!changed.wait_for(lock, safety_wait, [&] { return inside == 2; }))
+          children_met = false;
+      }, 2);
+    }, 2);
+    require(owner_helped && children_met && inside == 2,
+            "a waiting owner shares any descendant that its helper publishes");
+  }
+}
 void padded_symbolic_packing(){
   for(const bool empty_return:{false,true}){
     MachineEmitter e;if(empty_return)e.emit_op(0x52);
@@ -556,6 +652,11 @@ void padded_symbolic_packing(){
     passes::SymbolicRegionProjection projection;for(const auto& op:ops)projection.cell_widths.push_back(passes::cells_per_op(op));
     projection.defer_indirect_entries=true;projection.maximum_padding_cells=2;
     const std::map<std::string,int> targets{{"first",old_target+5}};
+    require(!passes::unprojected_symbolic_region_target_may_fit(
+                ops, "first", old_target + 5, old_target + 5, 2) &&
+            passes::unprojected_symbolic_region_target_may_fit(
+                ops, "first", old_target + 5, old_target + 5, 3),
+            "the relaxed subset-sum bound must include exact required padding");
     require(!passes::layout_symbolic_regions(ops,targets,{options},4096,&control,true,&projection),
         "a placement cannot borrow more neutral cells than its declared budget");
     projection.maximum_padding_cells=3;
@@ -2342,6 +2443,7 @@ void data_and_rom(){
   strict_joint_closure_size_contract();
   selector_graph_write_contract();
   independent_layout_job_contract();
+  nested_layout_jobs_keep_order_and_context();
   padded_symbolic_packing();
   whole_family_permutation();
   charged_alias_privacy();

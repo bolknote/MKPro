@@ -75614,7 +75614,8 @@ apply_absolute_dark_layout_to_selected_result(const std::string& source,
                                                const CompileOptions& options) {
   using LayoutArtifact = core::LayoutSearchArtifact;
   using LayoutEdge = core::ProvedSearchTransition<LayoutArtifact>;
-  const auto flow_proof_cache = core::make_natural_target_flow_proof_cache();
+  const auto flow_proof_cache = core::detail::active_flow_proof_cache
+      ? core::detail::active_flow_proof_cache : core::make_natural_target_flow_proof_cache();
   const core::TransactionSearchLimits search_limits;
   const int original_cells = core::machine_cell_count(selected.items);
   int growth_origin_cells = original_cells;
@@ -79830,11 +79831,17 @@ CompileResult compile_source_for_optimizer_profile(
                  "callee-hole proof rejected candidate: charge-entry call does not resolve "
                  "to its store at address ");
     };
-    std::size_t finalized_layout_attempts = 0;
-    std::size_t finalization_index = 0;
-    for (const FinalLayoutCandidateGroup& finalist_group : finalist_groups) {
+    std::size_t finalized_layout_attempts = finalist_groups.size();
+    struct ProvedFinalist {
+      RankedFinalist rank;
+      std::optional<CompileResult> eligible;
+      bool repairable = false;
+    };
+    std::vector<std::optional<ProvedFinalist>> proved_finalists(finalist_groups.size());
+    core::detail::evaluate_layout_jobs(finalist_groups.size(), [&](std::size_t index) {
+      const auto& finalist_group = finalist_groups[index];
       const FinalLayoutCandidate& finalist = finalist_group.representative;
-      ++finalization_index;
+      const auto finalization_index = index + 1U;
       const auto finalist_started = std::chrono::steady_clock::now();
       if (trace_candidates) {
         std::cerr << "[candidate-trace] final-start #" << finalization_index << "/"
@@ -79842,7 +79849,6 @@ CompileResult compile_source_for_optimizer_profile(
                   << (finalist.name.empty() ? "incumbent" : finalist.name) << "\n";
       }
       try {
-        ++finalized_layout_attempts;
         CompileOptions finalized_options = finalist.options;
         // Dark-side suffix placement is a property of the finalized machine
         // artifact, not of the lowering flags that happened to expose it. A
@@ -79934,11 +79940,11 @@ CompileResult compile_source_for_optimizer_profile(
         }
         if (!finalized.implemented ||
             (!final_static_proof_accepted && !repairable_finalist)) {
-          continue;
+          return;
         }
         const FinalLayoutCandidate& ranked_candidate =
             final_static_proof_accepted ? *accepted_equivalent : finalist;
-        ranked_finalists.push_back(RankedFinalist{
+        RankedFinalist rank{
             .cells = finalized.steps.size(),
             .candidate = ranked_candidate,
             .demotable_preload_values =
@@ -79947,16 +79953,10 @@ CompileResult compile_source_for_optimizer_profile(
                           finalized,
                           ranked_candidate.options.suppress_constant_preloads)
                     : std::vector<std::string>{},
-        });
-        if (repairable_finalist) {
-          has_repairable_finalist = true;
-          continue;
-        }
-        if (finalized_best.has_value() &&
-            !candidate_beats_best(finalized, *finalized_best, options))
-          continue;
-        finalized_best = std::move(finalized);
-        selected_finalist = *accepted_equivalent;
+        };
+        proved_finalists[index] = ProvedFinalist{
+            std::move(rank), repairable_finalist ? std::nullopt : std::optional{std::move(finalized)},
+            repairable_finalist};
       } catch (const std::exception&) {
         if (trace_candidates) {
           const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -79969,6 +79969,18 @@ CompileResult compile_source_for_optimizer_profile(
         // An independently finalized candidate is opportunistic; other proved
         // finalists and the ordinary incumbent remain available.
       }
+    });
+    // Reuse exactly the same exhaustive group ordering for all gates,
+    // stable ties and bounded compositions following this independent phase.
+    for (auto& proof : proved_finalists) {
+      if (!proof) continue;
+      has_repairable_finalist |= proof->repairable;
+      if (proof->eligible && (!finalized_best ||
+              candidate_beats_best(*proof->eligible, *finalized_best, options))) {
+        finalized_best = std::move(proof->eligible);
+        selected_finalist = proof->rank.candidate;
+      }
+      ranked_finalists.push_back(std::move(proof->rank));
     }
 
     // Return-suffix outlining and natural-target component layout can reverse
@@ -81883,12 +81895,24 @@ CompileResult close_final_contextual_layout_roots(
                 word.lowered_data_value == std::optional<std::string>{"-99999999"};
           }))
         rematerialization_roots.push_back({true, true});
-      for (const auto& rematerialization : rematerialization_roots) {
+      struct Replay {
+        RematerializationRoot root;
+        int allocation_mode;
+        std::optional<Checkpoint> checkpoint;
+      };
+      std::vector<Replay> replays;
+      for (const auto& root : rematerialization_roots)
+        for (const int mode : {0, 1, 2, 3, 4})
+          replays.push_back({root, mode, std::nullopt});
+      const bool source_has_entered = lower_ascii(source).find("entered") != std::string::npos;
+      core::detail::evaluate_layout_jobs(replays.size(), [&](std::size_t index) {
+      auto& task = replays[index];
+      const auto& rematerialization = task.root;
+      const int allocation_mode = task.allocation_mode;
       const bool rematerialize = rematerialization.enabled;
-      for(const int allocation_mode:{0,1,2,3,4}) {
       const bool regenerate_classes = allocation_mode == 4;
-      if (regenerate_classes && !rematerialization.inline_literal) continue;
-      if (comparison_options.fast_candidate_search && allocation_mode != 1 && !regenerate_classes) continue;
+      if (regenerate_classes && !rematerialization.inline_literal) return;
+      if (comparison_options.fast_candidate_search && allocation_mode != 1 && !regenerate_classes) return;
       auto replay_options = lowering_options;
       replay_options.alternating_sign_toggle_args = true;
       replay_options.zero_underflow_optimizer_root = rematerialize;
@@ -81904,20 +81928,20 @@ CompileResult close_final_contextual_layout_roots(
       // Keep the memory-backed expression ABI as an independent lifetime root.
       // It can expose common entry prologues that are absent in the one-X ABI.
       if(allocation_mode==3){
-        if(!replay_options.single_x_expression_helper_entries)continue;
+        if(!replay_options.single_x_expression_helper_entries)return;
         replay_options.single_x_expression_helper_entries=false;
         replay_options.stack_argument_helper_entries=true;
       }
       if(allocation_mode==1 || allocation_mode==3 || regenerate_classes){
-        if(allocation_mode==3 && replay_options.forced_logical_register_assignments.empty() && replay_options.forced_register_shares.empty())continue;
+        if(allocation_mode==3 && replay_options.forced_logical_register_assignments.empty() && replay_options.forced_register_shares.empty())return;
         auto probe_options=replay_options;probe_options.collect_logical_register_allocation=true;
         probe_options.repair_logical_register_assignment_preferences=true;
         probe_options.compact_logical_register_allocation=regenerate_classes;
         probe_options.preserve_logical_register_instruction_classes=!regenerate_classes;
         if (regenerate_classes) probe_options.forced_register_shares.clear();
         probe_options.logical_register_dead_store_elimination=true;
-        const auto probe=compile_source_once(source,probe_options,lower_ascii(source).find("entered")!=std::string::npos,false,false);
-        if(!probe.implemented || probe.logical_register_assignments.empty())continue;
+        const auto probe=compile_source_once(source,probe_options,source_has_entered,false,false);
+        if(!probe.implemented || probe.logical_register_assignments.empty())return;
         replay_options.forced_register_shares.clear();
         replay_options.forced_logical_register_assignments=probe.logical_register_assignments;
         replay_options.logical_register_dead_store_elimination=true;
@@ -81950,11 +81974,7 @@ CompileResult close_final_contextual_layout_roots(
       }
       if (replay.implemented && has_optimization_named(replay.optimizations,"alternating-sign-toggle-arg") &&
           ((!rematerialization.inline_literal && rematerialize == lowering_options.zero_underflow_optimizer_root) ||
-           has_optimization_named(replay.optimizations,"zero-underflow-constant-rematerialization")) &&
-          std::none_of(seeds.begin(),seeds.end(),[&](const auto& old){
-            return core::same_layout_search_artifact(
-                {old.result.items,old.result.preloads,{}},{replay.items,replay.preloads,{}});
-          })) {
+           has_optimization_named(replay.optimizations,"zero-underflow-constant-rematerialization"))) {
         if(allocation_mode==1 || allocation_mode==3 || regenerate_classes)replay.optimizations.push_back({"abi-logical-allocation-repair",
             "Rebuilt the changed ABI logical graph, retained valid old color preferences, repaired conflicts within instruction-class domains, then regenerated and independently re-verified every hard assignment. No previous sharing proof was reused."});
         if (regenerate_classes)
@@ -81965,10 +81985,18 @@ CompileResult close_final_contextual_layout_roots(
         if (rematerialization.inline_literal || rematerialize != lowering_options.zero_underflow_optimizer_root)
           replay.optimizations.push_back({"joint-finite-abi-rematerialization-root",
               "Composed finite-argument promotion with an independently proved source constant rematerialization before rebuilding the logical interference graph. Retired initializer provenance is demand, not permission to reuse its old physical home; every assignment, callback and final placement is proved again."});
+        task.checkpoint = Checkpoint{std::move(replay), std::move(replay_proof)};
+      }
+      });
+      for (auto& task : replays) {
+        if (!task.checkpoint) continue;
+        const auto& replay = task.checkpoint->result;
+        if (std::any_of(seeds.begin(), seeds.end(), [&](const auto& old) {
+              return core::same_layout_search_artifact(
+                  {old.result.items, old.result.preloads, {}}, {replay.items, replay.preloads, {}});
+            })) continue;
         independent_lifetime_roots.insert(seeds.size());
-        seeds.push_back({std::move(replay),std::move(replay_proof)});
-      }
-      }
+        seeds.push_back(std::move(*task.checkpoint));
       }
     }
   }
@@ -82168,6 +82196,62 @@ CompileResult explicit_lowering_root_for_testing(
 CompileResult compile_source(std::string source, const CompileOptions& requested_options) {
   const CompileOptions options = apply_source_feature_profile_hint(source, requested_options);
   if(auto cached=read_completed_compile_result_cache(source,options))return *cached;
+  // Independent proof waves recur throughout compilation. Retain their
+  // lazily started helpers across waves and through recursive source replays.
+  // Cache ownership is still captured separately for each submitted batch.
+  std::optional<core::detail::LayoutExecutor> executor;
+  std::optional<core::detail::LayoutExecutorScope> executor_scope;
+  const auto workers = core::detail::layout_worker_count();
+  if (!core::detail::active_layout_executor && workers > 1U) {
+    executor.emplace(workers);
+    executor_scope.emplace(*executor);
+  }
+  const core::detail::FlowProofCacheScope flow_proof_scope(
+      core::detail::active_flow_proof_cache ? core::detail::active_flow_proof_cache
+          : core::make_natural_target_flow_proof_cache(128));
+  const auto parent_proof_cache = core::detail::active_post_layout_proof_cache;
+  const char* share_proofs = std::getenv("MKPRO_NATIVE_SHARE_POST_LAYOUT_PROOFS");
+  const auto proof_cache = parent_proof_cache ? parent_proof_cache
+      : (!share_proofs || std::string_view(share_proofs) != "0"
+            ? core::detail::make_post_layout_proof_cache() : nullptr);
+  struct ProofCacheTrace {
+    const std::shared_ptr<core::detail::PostLayoutProofCache>& cache;
+    bool enabled;
+    ~ProofCacheTrace() {
+      if (!enabled || !cache) return;
+      const auto stats = core::detail::post_layout_proof_cache_stats(*cache);
+      std::cerr << "[post-layout-proofs] cfg-builds=" << stats.cfg_builds
+                << " cfg-hits=" << stats.cfg_hits
+                << " selector-builds=" << stats.selector_builds
+                << " selector-hits=" << stats.selector_hits
+                << " shared-in-flight=" << stats.shared_in_flight << '\n';
+    }
+  };
+  const ProofCacheTrace proof_cache_trace{proof_cache,
+      !parent_proof_cache && std::getenv("MKPRO_NATIVE_TRACE_POST_LAYOUT_PROOFS") != nullptr};
+  const core::detail::PostLayoutProofCacheScope post_layout_proof_scope(proof_cache);
+  const auto parent_joint_work = core::detail::active_joint_layout_work;
+  const char* share_joint_work = std::getenv("MKPRO_NATIVE_SHARE_JOINT_WORK");
+  const auto joint_work = parent_joint_work ? parent_joint_work
+      : (!share_joint_work || std::string_view(share_joint_work) != "0"
+            ? core::detail::make_joint_layout_work() : nullptr);
+  const core::detail::JointLayoutWorkScope joint_work_scope(joint_work);
+  struct JointWorkTrace {
+    const std::shared_ptr<core::detail::JointLayoutWork>& work;
+    bool enabled;
+    ~JointWorkTrace() {
+      if (!enabled || !work) return;
+      const auto stats = core::detail::joint_layout_work_stats(*work);
+      std::cerr << "[joint-layout-work] builds/hits/waits"
+                << " variants=" << stats.variants.builds << '/' << stats.variants.hits << '/' << stats.variants.waits
+                << " literals=" << stats.literals.builds << '/' << stats.literals.hits << '/' << stats.literals.waits
+                << " closures=" << stats.closures.builds << '/' << stats.closures.hits << '/' << stats.closures.waits
+                << " order-proofs=" << stats.order_proofs.builds << '/' << stats.order_proofs.hits
+                << '/' << stats.order_proofs.waits << '\n';
+    }
+  };
+  const JointWorkTrace joint_work_trace{joint_work,
+      !parent_joint_work && std::getenv("MKPRO_NATIVE_TRACE_JOINT_WORK") != nullptr};
   if (options.ordinary_decimal_keyboard_input) {
     // A narrower input domain adds legal transformations, not a different
     // pruning order for the historical optimizer portfolio. First retain its

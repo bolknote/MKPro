@@ -136,6 +136,24 @@ void pinned_layout_saving() {
   const auto before = place(raise_machine_to_ir(original));
   const auto after = place(found.front().transformation.ops);
   require(before.has_value() && after.has_value(), "both polarities obtain complete legal fixed-anchor layouts");
+  const auto neutral = raise_machine_to_ir(original);
+  require(core::passes::symbolic_region_constraints_may_fit(neutral, {}, {{"anchor", 9}},
+              "anchor", 9, 12, 4, 17),
+          "relaxed geometry must retain the successful anchored layout");
+  require(!core::passes::symbolic_region_constraints_may_fit(neutral, {}, {{"anchor", 9}},
+              "anchor", 10, 12, 4, 17),
+          "an exact anchor cannot satisfy a disjoint encoding range");
+  require(!core::passes::symbolic_region_constraints_may_fit(neutral, {}, {{"anchor", 9}},
+              "anchor", 9, 12, 4, 14),
+          "an exclusive ceiling must charge the minimum necessary padding");
+  auto relabelled = original;
+  for (auto& item : relabelled)
+    if (item.kind == MachineItemKind::Op) item.comment = "independent input";
+  const auto repeated = place(raise_machine_to_ir(relabelled));
+  require(repeated && repeated->work == before->work &&
+      repeated->projected_targets == before->projected_targets &&
+      repeated->projected_cells == before->projected_cells,
+      "same padding geometry preserves the chosen layout and charged work for another artifact");
   const auto old_code = lower_ir_to_machine(before->ops), new_code = lower_ir_to_machine(after->ops);
   require(resolve_machine_items(old_code).steps.size() == 16U &&
       resolve_machine_items(new_code).steps.size() == 14U,

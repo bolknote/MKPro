@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <array>
 #include <cstddef>
+#include <cstdint>
 #include <deque>
 #include <map>
 #include <optional>
@@ -900,6 +901,36 @@ SharedHelperContinuationProof verify_shared_helper_continuation(
   SharedHelperRelocationCheck relocation;
   return verify_shared_helper_continuation_indexed(
       items, helper_label, options, index, relocation);
+}
+
+bool has_shared_helper_continuation_shape(const std::vector<MachineItem>& items) {
+  std::array<std::uint16_t, 256> observed{};
+  bool pair = false;
+  std::size_t calls = 0;
+  for (std::size_t i = 0; i < items.size(); ++i) {
+    const auto& item = items[i];
+    if (item.kind != MachineItemKind::Op) continue;
+    std::size_t end = i;
+    if (item.opcode == 0x53) {
+      const auto operand = next_cell_item(items, i);
+      if (!operand || items[*operand].kind != MachineItemKind::Address) continue;
+      end = *operand;
+    } else if (basic_kind_for_opcode(item.opcode) != IrKind::IndirectCall) {
+      continue;
+    }
+    ++calls;
+    if (!pair) {
+      const auto shape = continuation_shape(items, end);
+      if (shape.supported) {
+        const auto bit = static_cast<std::uint16_t>(1U << (shape.store_opcode & 15));
+        auto& matches = observed[static_cast<std::size_t>(shape.join_opcode)];
+        pair = (matches & bit) != 0U;
+        matches = static_cast<std::uint16_t>(matches | bit);
+      }
+    }
+    if (calls >= 3U && pair) return true;
+  }
+  return false;
 }
 
 void visit_shared_helper_continuations(

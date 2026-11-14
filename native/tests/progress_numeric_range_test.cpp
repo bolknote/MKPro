@@ -1,4 +1,5 @@
 #include "mkpro/core/callee_hole_boundary_normalization.hpp"
+#include "mkpro/core/detail/dense_ordered_worklist.hpp"
 #include "mkpro/core/emit/machine_emitter.hpp"
 #include "mkpro/core/joint_representation_search.hpp"
 #include "mkpro/core/passes/finite_mode_representation.hpp"
@@ -120,6 +121,17 @@ MonotoneProgressProof progress(const Fixture& f, std::size_t budget=100000) {
 }
 
 void dense_progress_numeric_equivalence() {
+  {
+    detail::DenseOrderedWorklist work(20001);
+    require(work.empty(), "the ordered bit queue starts empty");
+    for (const std::size_t rank : {20000U, 4096U, 64U, 63U, 0U, 4096U})
+      work.insert(rank);
+    require(work.pop_min() == 0 && work.pop_min() == 63, "queue orders bits within a word");
+    work.insert(2);
+    require(work.pop_min() == 2 && work.pop_min() == 64 && work.pop_min() == 4096 &&
+                work.pop_min() == 20000 && work.empty(),
+            "queue supports reinsertion below the current minimum, deduplication and multiple levels");
+  }
   for (const bool interactive : {false, true}) {
     const auto f = fixture(interactive);
     const auto flow = build_post_layout_control_flow(f.items);
