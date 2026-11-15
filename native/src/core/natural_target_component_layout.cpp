@@ -12,6 +12,7 @@
 #include "mkpro/core/opcodes.hpp"
 #include "mkpro/core/passes/helpers.hpp"
 #include "mkpro/core/post_layout_indirect_flow.hpp"
+#include "mkpro/core/selector_vacancy_layout.hpp"
 #include "mkpro/core/stable_register_value_flow.hpp"
 #include "mkpro/core/selector_writeback.hpp"
 
@@ -7932,6 +7933,182 @@ NaturalTargetComponentLayoutResult optimize_natural_target_component_layout(
                        : std::max(static_cast<int>(result.plan.flows.size()),
                                   result.plan.fallthrough_jump_folds);
   result.removed_cells = result.plan.removed_cells;
+  return result;
+}
+
+std::vector<SelectorVacancySeed> prepare_selector_vacancy_layout_seeds(
+    const std::vector<MachineItem>& items, const std::vector<PreloadReport>& preloads,
+    const AuthoritativePostLayoutControlFlow& flow,
+    const PostLayoutControlFlowOptions& control, bool allow_rf,
+    const std::set<std::string>& reserved) {
+  if (!flow.proved || flow.address_space_model != control.address_space_model ||
+      has_executable_address_words(items) ||
+      std::any_of(items.begin(), items.end(), [](const auto& item) { return item.raw; }))
+    return {};
+  bool unique = false;
+  const auto owners = preload_index(preloads, unique);
+  if (!unique) return {};
+
+  constexpr std::string_view names = "0123456789abcdef";
+  struct Footprint {
+    std::vector<std::size_t> direct;
+    std::vector<std::size_t> selectors;
+    bool indirectly_addressed = false;
+    bool written = false;
+  };
+  std::array<Footprint, 16> uses;
+  std::set<std::size_t> operands;
+  for (const auto& state : flow.execution_states)
+    if (state.operand_item_index) operands.insert(*state.operand_item_index);
+  for (std::size_t index = 0; index < items.size(); ++index) {
+    const auto& item = items[index];
+    if (item.kind != MachineItemKind::Op) continue;
+    const auto r = static_cast<std::size_t>(item.opcode & 15);
+    const int family = item.opcode & 0xf0;
+    if (family == 0x40 || family == 0x60) {
+      uses[r].direct.push_back(index);
+      uses[r].written |= family == 0x40;
+    } else if (is_indirect_flow(item.opcode) || is_indirect_memory(item.opcode)) {
+      uses[r].selectors.push_back(index);
+      if (is_indirect_memory(item.opcode)) {
+        const auto targets = flow.indirect_memory_targets.find(index);
+        if (targets == flow.indirect_memory_targets.end() || targets->second.empty())
+          return {};
+        for (const int target : targets->second) {
+          if (target < 0 || target >= static_cast<int>(uses.size())) return {};
+          uses[static_cast<std::size_t>(target)].indirectly_addressed = true;
+        }
+      }
+    }
+  }
+  const auto name = [&](std::size_t r) { return std::string(1, names[r]); };
+  const auto unused = [&](std::size_t r) {
+    const auto key = name(r);
+    const auto& use = uses[r];
+    return use.direct.empty() && use.selectors.empty() && !use.indirectly_addressed &&
+        !owners.contains(key) && !reserved.contains(key);
+  };
+  std::vector<SelectorVacancySeed> seeds;
+  for (std::size_t r = 7; r < 15; ++r) {
+    if (!unused(r)) continue;
+    // All unused stable homes have the same transfer and writeback class.
+    // Keep one representative, independently of the options with RF.
+    seeds.push_back({.items = items, .preloads = preloads, .vacant = name(r)});
+    break;
+  }
+  if (!allow_rf || control.address_space_model != AddressSpaceModel::Mk61SMiniExpanded ||
+      !unused(15))
+    return seeds;
+
+  for (std::size_t r = 7; r < 15; ++r) {
+    const auto key = name(r);
+    const auto& use = uses[r];
+    const auto owner = owners.find(key);
+    if (use.direct.empty() || use.indirectly_addressed || reserved.contains(key) ||
+        owner == owners.end())
+      continue;
+    const auto& preload = preloads[owner->second];
+    if (!is_literal_runtime_preload(preload) ||
+        std::any_of(use.direct.begin(), use.direct.end(), [&](const auto index) {
+          return operands.contains(index) || items[index].manual_interaction ||
+              items[index].borrowed_entry_phase_selector;
+        }))
+      continue;
+    const bool split = !use.selectors.empty();
+    if (split) {
+      // A stable selector can still rewrite its word. Copying data out of
+      // such a register is legal only for an exact stored-word fixed point.
+      if (use.written ||
+          std::any_of(use.selectors.begin(), use.selectors.end(), [&](const auto index) {
+            const auto& item = items[index];
+            return !is_indirect_flow(item.opcode) ||
+                !flow.indirect_flow_targets.contains(index) ||
+                item.borrowed_entry_phase_selector ||
+                is_proved_dynamic_selector_consumer(item);
+          }))
+        continue;
+      try {
+        const auto decoded = evaluate_indirect_address(
+            key, preload.value, IndirectOperationKind::Flow, control.address_space_model);
+        if (!decoded || !indirect_writeback_preserves_literal_word(*decoded, preload.value))
+          continue;
+      } catch (const std::exception&) {
+        continue;
+      }
+    } else if (preload.retunable_natural_fractional_prefix) {
+      continue;
+    }
+
+    SelectorVacancySeed seed{.items = items, .preloads = preloads,
+        .vacant = split ? std::nullopt : std::optional{key},
+        .data_moved_to_rf = key, .split_data_and_selector = split};
+    for (const auto index : use.direct) {
+      auto& item = seed.items[index];
+      item.opcode = (item.opcode & 0xf0) | 15;
+      item.mnemonic = opcode_by_code(item.opcode).name;
+    }
+    if (build_post_layout_control_flow(seed.items, control) != flow) continue;
+    if (split) {
+      auto copy = preload;
+      copy.register_name = "f";
+      copy.retunable_natural_fractional_prefix.reset();
+      seed.preloads.insert(seed.preloads.begin(), std::move(copy));
+    } else {
+      seed.preloads[owner->second].register_name = "f";
+    }
+    seeds.push_back(std::move(seed));
+  }
+  return seeds;
+}
+
+NaturalTargetComponentLayoutResult close_selector_vacancy_layout(
+    const SelectorVacancySeed& seed, const AuthoritativePostLayoutControlFlow& flow,
+    NaturalTargetComponentLayoutOptions options) {
+  if (!flow.proved || (!seed.vacant && !seed.split_data_and_selector)) return {};
+
+  // The new setup word is not allowed to change a live startup stack value.
+  const auto entries = resolve_post_layout_external_entry_contexts(flow);
+  if (!entries) return {};
+  std::vector<std::size_t> main;
+  for (std::size_t i = 0; i < entries->main.size(); ++i)
+    if (entries->main[i]) main.push_back(i);
+  if (main.empty() || !prove_post_layout_stack_state_equality(
+          seed.items, flow, main, {{false, false, false, false}, false, false},
+          {.transport_closed_entry_through_control = true,
+           .use_indirect_store_entry_facts = true}))
+    return {};
+
+  const auto normalized = normalize_natural_target_overflow_formals(
+      seed.items, options.address_space_model);
+  if (!normalized) return {};
+  const auto references = collect_direct_references(
+      *normalized, index_artifact(*normalized), options.address_space_model);
+  if (!references) return {};
+  // These constraints were formerly consulted only when rebinding the
+  // finished layout. Feed the same mandatory identities into placement.
+  for (const auto& reference : *references) {
+    if (!reference.preserved_formal_opcode) continue;
+    const NaturalTargetRequiredAbsoluteTarget pin{
+        .target_item = reference.target,
+        .target_address = formal_address_info(
+            *reference.preserved_formal_opcode, options.address_space_model).actual};
+    if (std::find(options.required_absolute_targets.begin(),
+                  options.required_absolute_targets.end(), pin) ==
+        options.required_absolute_targets.end())
+      options.required_absolute_targets.push_back(pin);
+  }
+  auto words = seed.preloads;
+  if (seed.vacant) {
+    // This is only a seed for an address-only family, never published. The
+    // solver rebuilds and decodes the actual word in the final geometry.
+    words.insert(words.begin(), PreloadReport{.register_name = *seed.vacant, .value = "1"});
+  }
+  options.reallocate_released_address_only_selectors = true;
+  auto result = optimize_natural_target_component_layout(seed.items, words, flow, options);
+  if (!result.plan.proved || result.applied <= 0) return {};
+  if (seed.vacant && std::none_of(result.plan.flows.begin(), result.plan.flows.end(),
+          [&](const auto& rewrite) { return rewrite.selector_register == *seed.vacant; }))
+    return {};
   return result;
 }
 

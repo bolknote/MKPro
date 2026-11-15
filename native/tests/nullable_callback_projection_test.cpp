@@ -423,6 +423,34 @@ void achieved_game_size() {
   require(cached.steps.size()==result.steps.size() && has_input_contract(cached) &&
           machine_items_to_json(cached.items)==machine_items_to_json(result.items),
       "revisiting the decimal contract after an unrestricted cache lookup must retain the exact proved artifact");
+
+  auto expanded_options = options;
+  expanded_options.feature_profile = FeatureProfile::Mk61SMiniExpanded;
+  const auto expanded = compile_source(source, expanded_options);
+  const auto stock_root = std::find_if(expanded.candidates.begin(), expanded.candidates.end(),
+      [](const auto& candidate) {
+        return candidate.site == "ordinary-decimal-profile-search" &&
+            candidate.variant == "transported-stock-decimal-root";
+      });
+  require(expanded.implemented && expanded.diagnostics.empty() &&
+      expanded.feature_profile == expanded_options.feature_profile &&
+      expanded.budget == expanded_options.budget && has_input_contract(expanded),
+      "expanded profile must retain its delivery and decimal input contracts");
+  std::cout << "4x4 MK-61S ordinary-decimal: " << expanded.steps.size() << " cells\n";
+  require(stock_root != expanded.candidates.end() &&
+      stock_root->steps == static_cast<int>(result.steps.size()),
+      "expanded decimal search must compare the completed stock decimal artifact");
+  require(expanded.steps.size() <= result.steps.size(),
+      "expanded decimal result must not lose a portable size win: " + stock_root->reason);
+  if (stock_root->selected) {
+    require(std::any_of(expanded.optimizations.begin(), expanded.optimizations.end(),
+        [](const auto& report) { return report.name == "optimizer-root-memory-model-transport"; }),
+        "a selected stock decimal root must carry its independent cross-model certificate");
+    require(result.steps.size() == expanded.steps.size() &&
+        std::equal(result.steps.begin(), result.steps.end(), expanded.steps.begin(),
+            [](const auto& a, const auto& b) { return a.opcode == b.opcode; }),
+        "transport must preserve the selected stock program's command bytes and size");
+  }
 }
 } // namespace
 int main(int argc,char** argv) {

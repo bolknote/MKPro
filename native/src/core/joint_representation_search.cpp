@@ -835,7 +835,10 @@ bool contextual_identity_expansion_demand(const std::vector<IrOp>& code,
     digits = digit ? digits + 1U : 0U;
     poolable_literal = poolable_literal || digits >= 2U;
   }
-  constexpr std::string_view homes = "0123456789abcde";
+  const auto profile = effective_optimizer_feature_profile(options);
+  const bool allow_rf = feature_profile_has_rf_register(profile) &&
+      feature_profile_has_rf_register(options.optimizer_register_profile_override.value_or(profile));
+  const std::string_view homes = allow_rf ? "0123456789abcdef" : "0123456789abcde";
   return poolable_literal && std::any_of(homes.begin(), homes.end(), [&](char home) {
         return !occupied.contains(std::string(1, home));
       });
@@ -1103,10 +1106,17 @@ std::vector<ConstrainedRepresentation> pool_allocation_exposed_literals(
     used.insert(effect.may_defs.begin(),effect.may_defs.end());
   }
   for(const auto& word:parent.artifact.preloads)used.insert(word.register_name);
+  const auto profile = effective_optimizer_feature_profile(context.options);
+  const bool allow_rf = feature_profile_has_rf_register(profile) &&
+      feature_profile_has_rf_register(
+          context.options.optimizer_register_profile_override.value_or(profile));
+  constexpr std::string_view names = "0123456789abcdef";
   std::optional<int> free;
   // Keep historical high homes first; a genuinely unused low home is also
   // legal for direct data. The complete alias/setup proof below is unchanged.
-  for(const int r:{7,8,9,10,11,12,13,14,0,1,2,3,4,5,6}){const std::string name(1,"0123456789abcde"[r]);
+  for(const int r:{7,8,9,10,11,12,13,14,0,1,2,3,4,5,6,15}){
+    if(r==15 && !allow_rf)continue;
+    const std::string name(1,names[static_cast<std::size_t>(r)]);
     if(!used.contains(name) && !context.options.preloaded_constant_registers.contains(name)){free=r;break;}}
   if(!free)return result;
   const auto flow=build_post_layout_control_flow(items,control);
@@ -1139,7 +1149,7 @@ std::vector<ConstrainedRepresentation> pool_allocation_exposed_literals(
     while(end<items.size() && ordinary(end) && items[end].opcode>=0 && items[end].opcode<=9){
       word+=static_cast<char>('0'+items[end].opcode);++end;
     }
-    if(word.size()<3U || word.size()>8U || !ordinary(end) || !binary_boundary(items[end].opcode) ||
+    if(word.size()<(allow_rf?2U:3U) || word.size()>8U || !ordinary(end) || !binary_boundary(items[end].opcode) ||
         !contexts.contains(at) || !bound_ordinary_decimal(word))continue;
     bool valid=true;
     for(const auto s:contexts[at])valid=valid && lift->at(s);
@@ -1190,7 +1200,7 @@ std::vector<ConstrainedRepresentation> pool_allocation_exposed_literals(
         recall.comment="allocation-exposed literal constant";next.artifact.items.push_back(std::move(recall));i=site->second;
       }else next.artifact.items.push_back(items[i++]);
     }
-    const std::string name(1,"0123456789abcde"[*free]);
+    const std::string name(1,names[static_cast<std::size_t>(*free)]);
     next.artifact.preloads.push_back({.register_name=name,.value=word,.counts_against_program=false,.lowered_data_value=word});
     const auto delivered=build_post_layout_control_flow(next.artifact.items,control);
     const auto external=resolve_post_layout_external_entry_contexts(delivered);

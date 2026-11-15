@@ -35,6 +35,7 @@
 #include "mkpro/core/late_bound_decimal_selector.hpp"
 #include "mkpro/core/machine_profile.hpp"
 #include "mkpro/core/natural_target_component_layout.hpp"
+#include "mkpro/core/selector_vacancy_layout.hpp"
 #include "mkpro/core/passes/zero_underflow_constant.hpp"
 #include "mkpro/core/opcodes.hpp"
 #include "mkpro/core/packed_bcd_popcount.hpp"
@@ -81670,6 +81671,146 @@ std::optional<CompileResult> transport_completed_optimizer_root(
 }
 
 
+// Run after the original profiles have completed. Allocation is an enabling
+// choice here, not a replacement for the independently proved incumbent.
+CompileResult close_expanded_selector_vacancies(
+    const std::string& source, CompileResult selected, const CompileOptions& target) {
+  if (!feature_profile_has_expanded_program_space(target.feature_profile) ||
+      !selected.implemented || selected.feature_profile != target.feature_profile ||
+      selected.manual_startup_sequence ||
+      selected.steps.size() <= static_cast<std::size_t>(
+          feature_profile_program_step_limit(target.feature_profile)))
+    return selected;
+
+  struct Root {
+    CompileResult result;
+    CompileOptions owner;
+  };
+  std::vector<Root> roots;
+  const auto continuation = selected.layout_search_continuation;
+  roots.push_back({selected, continuation && continuation->completed_options
+      ? *continuation->completed_options : target});
+  // A completed arrangement can have no gap-compatible smaller successor.
+  // Also price previously proved shapes, without regenerating the source ABI.
+  if (continuation) for (const auto& checkpoint : continuation->checkpoints) {
+    if (roots.size() >= 3U) break;
+    if (checkpoint.unfrozen_geometry ||
+        checkpoint.options.ordinary_decimal_keyboard_input !=
+            target.ordinary_decimal_keyboard_input)
+      continue;
+    const auto restored = transport_completed_optimizer_root(
+        source, checkpoint.result, checkpoint.options, target, nullptr);
+    if (!restored || std::any_of(roots.begin(), roots.end(), [&](const Root& root) {
+          return core::same_layout_search_items(root.result.items, restored->items) &&
+              core::same_layout_search_preloads(root.result.preloads, restored->preloads);
+        }))
+      continue;
+    roots.push_back({std::move(*restored), checkpoint.options});
+  }
+
+  for (auto& root : roots) {
+    if (!root.result.setup_program || !root.result.manual_setup_inputs.empty()) continue;
+    auto options = root.owner;
+    options.feature_profile = target.feature_profile;
+    options.optimizer_feature_profile_override.reset();
+    options.optimizer_register_profile_override = target.optimizer_register_profile_override;
+    options.budget = target.budget;
+    options.analysis = target.analysis;
+    const bool allow_rf = feature_profile_has_rf_register(
+        options.optimizer_register_profile_override.value_or(options.feature_profile));
+    const auto model = address_space_model_for_options(options);
+    core::PostLayoutControlFlowOptions control;
+    control.address_space_model = model;
+    control.empty_return_target = 1;
+    const auto normalized = core::normalize_natural_target_overflow_formals(root.result.items, model);
+    if (!normalized) continue;
+    root.result.items = *normalized;
+    const auto cfg = core::shared_post_layout_control_flow(root.result.items, control);
+    if (!cfg->proved) continue;
+
+    std::set<std::string> reserved;
+    for (const auto& [home, value] : options.preloaded_constant_registers) {
+      (void)value;
+      reserved.insert(home);
+    }
+    auto seeds = core::prepare_selector_vacancy_layout_seeds(
+        root.result.items, root.result.preloads, *cfg, control, allow_rf, reserved);
+    if (seeds.empty()) continue;
+    const auto consider = [&](CompileResult candidate) {
+      candidate = apply_finalization_fixed_point_to_selected_result(
+          source, std::move(candidate), options, target);
+      if (!candidate.implemented || candidate.steps.size() >= selected.steps.size() ||
+          optimizer_static_gate_rejection_reason(options, candidate))
+        return;
+      remember_completed_optimizer_context(candidate, options);
+      selected = std::move(candidate);
+    };
+    for (const auto& seed : seeds) {
+      auto base = root.result;
+      base.items = seed.items;
+      base.preloads = seed.preloads;
+      if (seed.data_moved_to_rf) {
+        for (auto& [name, home] : base.registers) {
+          (void)name;
+          if (home == *seed.data_moved_to_rf) home = "f";
+        }
+        base.optimizations.push_back({"selector-vacancy-rf-data",
+            std::string(seed.split_data_and_selector ? "Split immutable data from R" : "Moved direct data from R") +
+                *seed.data_moved_to_rf +
+                " to Rf without changing the rooted CFG or any indirect data access."});
+      }
+      const auto layout = core::close_selector_vacancy_layout(seed, *cfg,
+          {.address_space_model = model, .maximum_subset_states = 1024,
+           .maximum_anchor_combinations = 32,
+           .constrain_rebindable_selector_targets = true,
+           .allow_size_neutral_flow_rebind = true,
+           .allow_standalone_fallthrough_jump_fold = true});
+      if (layout.plan.proved) {
+        SelectedAbsoluteDarkLayout placed{.items = layout.items, .preloads = layout.preloads,
+            .optimizations = {{"vacant-selector-component-layout",
+                "Solved vacant or split selector allocation together with component placement, "
+                "formal targets and the complete delivered preload environment."}}};
+        auto candidate = materialize_proved_layout_result(source, base, options, placed,
+            FinalLayoutMaterialization::ProvedSearchIntermediate);
+        if (candidate && !optimizer_static_gate_rejection_reason(options, *candidate))
+          consider(std::move(*candidate));
+      }
+      // A split added a setup word. Never pass the unclosed split to a
+      // consumer without the independent Main/setup-stack proof above.
+      if (seed.split_data_and_selector) continue;
+      const auto finalize = [&](const core::LayoutSearchArtifact& artifact, bool intermediate,
+                                bool reports) -> std::optional<CompileResult> {
+        auto alternative = base;
+        alternative.items = artifact.items;
+        alternative.preloads = artifact.preloads;
+        alternative.optimizations = artifact.optimizations;
+        auto delivered = apply_absolute_dark_layout_once(source, alternative, options, true,
+            intermediate ? FinalLayoutMaterialization::ProvedSearchIntermediate
+                         : FinalLayoutMaterialization::StrictImprovement, reports);
+        if (!delivered || optimizer_static_gate_rejection_reason(options, *delivered))
+          return std::nullopt;
+        return delivered;
+      };
+      const auto artifact = [&](const core::LayoutSearchArtifact& candidate, bool intermediate)
+          -> std::optional<core::LayoutSearchArtifact> {
+        const auto closed = finalize(candidate, intermediate, false);
+        if (!closed) return std::nullopt;
+        return core::LayoutSearchArtifact{closed->items, closed->preloads, closed->optimizations};
+      };
+      const auto search = core::search_joint_representation_constraints(
+          {base.items, base.preloads, base.optimizations}, options,
+          [&](const auto& candidate) { return artifact(candidate, false); },
+          core::joint_representation_search_limits(options.fast_candidate_search), true,
+          [&](const auto& candidate) { return artifact(candidate, true); });
+      if (search.incumbent)
+        if (auto candidate = finalize(*search.incumbent, false, true))
+          consider(std::move(*candidate));
+    }
+  }
+  return selected;
+}
+
+
 struct LayoutCheckpointReplayResult {
   std::optional<CompileResult> best;
   CompileOptions best_options;
@@ -82286,6 +82427,58 @@ CompileResult compile_source(std::string source, const CompileOptions& requested
     // stopping after its independently profitable first transformation.
     result = close_final_contextual_layout_roots(
         source, std::move(result), lowering_options, options);
+    // The unrestricted feature portfolio is not a substitute for the
+    // decimal portfolio. Finishing a stock root after promoting its report
+    // to the expanded profile skips closures that require the owning model.
+    // Complete it under the original model, then independently certify its
+    // actual artifact for delivery. Keep the old result if either step fails.
+    if (feature_profile_has_rf_register(options.feature_profile) &&
+        !options.optimizer_feature_profile_override &&
+        !options.optimizer_register_profile_override &&
+        !has_explicit_lowering_variant(options)) {
+      auto stock_options = options;
+      stock_options.feature_profile = FeatureProfile::Standard;
+      // A source that explicitly requests the expanded profile cannot be
+      // recursively compiled as a stock root through this entry point.
+      if (apply_source_feature_profile_hint(source, stock_options).feature_profile ==
+          FeatureProfile::Standard) {
+        const auto stock = compile_source(source, stock_options);
+        std::string reason;
+        std::optional<CompileResult> delivered;
+        if (!stock.implemented) {
+          reason = "stock decimal optimization did not complete";
+        } else if (!stock.layout_search_continuation ||
+                   !stock.layout_search_continuation->completed_options) {
+          reason = "stock decimal root has no completed lowering context";
+        } else {
+          const auto& owner = *stock.layout_search_continuation->completed_options;
+          if (effective_optimizer_feature_profile(owner) == FeatureProfile::Standard &&
+              owner.ordinary_decimal_keyboard_input)
+            delivered = transport_completed_optimizer_root(source, stock, owner, options, &reason);
+          else
+            reason = "stock decimal root has a different owning model or input contract";
+        }
+        const auto incumbent_cells = static_cast<int>(result.steps.size());
+        const bool use_stock = delivered && candidate_beats_best(*delivered, result, options);
+        if (use_stock) result = std::move(*delivered);
+        constexpr auto site = "ordinary-decimal-profile-search";
+        result.candidates.push_back({.site = site, .variant = "target-decimal-root",
+            .steps = incumbent_cells, .selected = !use_stock,
+            .reason = use_stock ? "lost by final size/runtime cost"
+                                : "retained the independently completed target root"});
+        result.candidates.push_back({.site = site, .variant = "transported-stock-decimal-root",
+            .steps = static_cast<int>(stock.steps.size()), .selected = use_stock,
+            .reason = use_stock ? "selected after complete cross-model proof"
+                : delivered ? "lost by final size/runtime cost" : std::move(reason)});
+        if (use_stock)
+          result.optimizations.push_back({site,
+              "Compared the target decimal result (" + std::to_string(incumbent_cells) +
+              " cells) with the independently completed stock decimal result (" +
+              std::to_string(stock.steps.size()) +
+              " cells). Selected the proved transfer after regenerating the target listing and setup."});
+      }
+    }
+    result = close_expanded_selector_vacancies(source, std::move(result), options);
     if (!has_optimization_named(result.optimizations, "ordinary-decimal-keyboard-input-contract"))
       result.optimizations.push_back({"ordinary-decimal-keyboard-input-contract",
           "Explicit runtime input contract: keyboard numbers are ordinary decimal values, "
@@ -82558,6 +82751,7 @@ CompileResult compile_source(std::string source, const CompileOptions& requested
                                        restricted && selected == &*restricted,
                                        continuation.best ? &*continuation.best : nullptr,
                                        continuation.best && selected == &*continuation.best);
+  result = close_expanded_selector_vacancies(source, std::move(result), options);
   result.runtime_cost = runtime_cost_for_result(result);
   return completed(std::move(result));
 }

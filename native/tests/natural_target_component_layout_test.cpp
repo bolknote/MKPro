@@ -9,6 +9,7 @@
 #include "mkpro/core/layout_search_artifact.hpp"
 #include "mkpro/core/opcodes.hpp"
 #include "mkpro/core/selector_writeback.hpp"
+#include "mkpro/core/selector_vacancy_layout.hpp"
 #include "mkpro/core/stable_register_value_flow.hpp"
 #include "mkpro/emulator/mk61.hpp"
 
@@ -899,7 +900,10 @@ bool reason_contains(const core::NaturalTargetComponentLayoutPlan& plan,
 
 } // namespace
 
+void vacant_stable_home_is_a_layout_resource();
+
 void natural_target_component_layout_is_generic_and_proof_gated() {
+  vacant_stable_home_is_a_layout_resource();
 
   const auto tail_fixture = [] {
     Fixture f;
@@ -3584,6 +3588,88 @@ void natural_target_component_layout_is_generic_and_proof_gated() {
     }
   }
 
+}
+
+void vacant_stable_home_is_a_layout_resource() {
+  using namespace core;
+  const std::string helper = "leaf";
+  // A recall makes X and X2 independent of the old numeric entry. Five
+  // recalls also overwrite every initial stack level before the first call.
+  std::vector<MachineItem> items(5, op(0x60));
+  for (int i = 0; i < 5; ++i) {
+    items.push_back(op(0x53));
+    items.push_back(MachineItem::address(helper));
+  }
+  items.push_back(stop());
+  items.push_back(MachineItem::label(helper));
+  items.push_back(op(0x22));
+  items.push_back(op(0x52));
+
+  const PostLayoutControlFlowOptions standard;
+  const auto flow = build_post_layout_control_flow(items, standard);
+  const auto seeds = prepare_selector_vacancy_layout_seeds(items, {}, flow, standard, false);
+  require(seeds.size() == 1 && seeds.front().vacant == "7",
+          "live-free stable storage must be a separate layout choice");
+  const auto placed = close_selector_vacancy_layout(seeds.front(), flow, {});
+  require(placed.plan.proved && placed.removed_cells == 5 &&
+              placed.plan.call_return_equivalent && placed.plan.stack_and_x2_equivalent,
+          "allocate, encode and use a fresh stable selector for all calls to one target");
+  const auto run = [](const auto& program, const auto& preloads) {
+    const auto resolved = resolve_machine_items(program);
+    require(resolved.diagnostics.empty(), "vacancy fixture must resolve");
+    std::vector<int> bytes;
+    for (const auto& step : resolved.steps) bytes.push_back(step.opcode);
+    emulator::MK61 calc;
+    require(calc.load_program(bytes).diagnostics.empty(), "vacancy fixture must fit ROM");
+    calc.set_register("0", "1.01");
+    for (const auto& word : preloads) calc.set_register(word.register_name, word.value);
+    calc.press_sequence({"В/О", "С/П"});
+    require(calc.run_until_stable(12000, 8).stopped, "vacancy fixture must stop");
+    return std::vector<std::string>{calc.display_text(true), calc.read_register("Y"),
+        calc.read_register("Z"), calc.read_register("T"), calc.read_register("X1")};
+  };
+  require(run(items, std::vector<PreloadReport>{}) == run(placed.items, placed.preloads),
+          "a new selector must preserve observed stack state in the ROM");
+
+  auto live_input = items;
+  live_input.erase(live_input.begin(), live_input.begin() + 5);
+  const auto live_flow = build_post_layout_control_flow(live_input, standard);
+  const auto live = prepare_selector_vacancy_layout_seeds(
+      live_input, {}, live_flow, standard, false);
+  require(live.size() == 1 && !close_selector_vacancy_layout(live.front(), live_flow, {}).plan.proved,
+          "a new setup word cannot change a live input-stack value");
+
+  auto raw = items;
+  raw.front().raw = true;
+  require(prepare_selector_vacancy_layout_seeds(
+              raw, {}, build_post_layout_control_flow(raw, standard), standard, true).empty(),
+          "an opaque register footprint cannot prove a vacancy");
+  const std::set<std::string> all_stable{"7", "8", "9", "a", "b", "c", "d", "e"};
+  require(prepare_selector_vacancy_layout_seeds(items, {}, flow, standard, false, all_stable).empty(),
+          "a reserved register cannot receive a new address word");
+
+  auto expanded = items;
+  expanded.insert(expanded.begin() + 5, op(0x68));
+  const std::vector<PreloadReport> owners{{.register_name = "8", .value = "2"}};
+  PostLayoutControlFlowOptions expanded_control;
+  expanded_control.address_space_model = AddressSpaceModel::Mk61SMiniExpanded;
+  const auto expanded_flow = build_post_layout_control_flow(expanded, expanded_control);
+  auto reserved = all_stable;
+  reserved.erase("8");
+  require(prepare_selector_vacancy_layout_seeds(
+              expanded, owners, expanded_flow, expanded_control, false, reserved).empty(),
+          "restricting allocation must not change the memory model or implicitly use Rf");
+  const auto rf = prepare_selector_vacancy_layout_seeds(
+      expanded, owners, expanded_flow, expanded_control, true, reserved);
+  require(rf.size() == 1 && rf.front().data_moved_to_rf == "8" && rf.front().vacant == "8" &&
+              rf.front().items[5].opcode == 0x6f && rf.front().preloads.front().register_name == "f",
+          "use Rf only for direct data and expose the vacated ordinary selector");
+  const auto rf_placed = close_selector_vacancy_layout(rf.front(), expanded_flow,
+      {.address_space_model = expanded_control.address_space_model});
+  require(rf_placed.plan.proved && rf_placed.removed_cells == 5 &&
+              std::all_of(rf_placed.plan.flows.begin(), rf_placed.plan.flows.end(),
+                  [](const auto& rewrite) { return rewrite.selector_register == "8"; }),
+          "address users must use the vacated bank, not an indirect Rf opcode");
 }
 
 } // namespace mkpro::tests

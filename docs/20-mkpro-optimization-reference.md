@@ -6662,3 +6662,19 @@ targets and actual setup expressions remain barriers. Reclaiming an old physical
 home still requires complete entry liveness, unchanged owner/value provenance,
 and independent stack/X1/X2 nonobservation; a source line alone must neither
 forbid nor authorize that transformation.
+
+### Vacant selectors after final allocation
+
+The vacant-selector-component-layout pass makes a proved unused stable register
+a candidate address carrier. The temporary seed is not an executable preload:
+close it against the final target identity and retain the original artifact if
+the complete layout does not shrink. Preserved noncanonical direct targets
+constrain placement before the search chooses a component order.
+
+The expanded memory profile can also move direct-only data to Rf and give the
+vacant ordinary home to a selector. A read-only word with separate data and
+address uses can split only if every original indirect writeback preserves its
+full machine word. Rf never serves as a selector. Register ownership, reserved
+homes, executable operands, all indirect memory aliases, exact return contexts,
+and the setup stack are checked independently. Neutral layouts can enable
+another pass, but do not displace the independently proved incumbent.
