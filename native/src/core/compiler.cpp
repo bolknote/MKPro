@@ -35,6 +35,7 @@
 #include "mkpro/core/late_bound_decimal_selector.hpp"
 #include "mkpro/core/machine_profile.hpp"
 #include "mkpro/core/natural_target_component_layout.hpp"
+#include "mkpro/core/passes/finite_mode_representation.hpp"
 #include "mkpro/core/selector_vacancy_layout.hpp"
 #include "mkpro/core/passes/zero_underflow_constant.hpp"
 #include "mkpro/core/opcodes.hpp"
@@ -57896,6 +57897,12 @@ bool optimizer_static_gate_accepts(const CompileOptions& candidate_options,
 
 std::optional<std::string> optimizer_static_gate_rejection_reason(
     const CompileOptions& candidate_options, const CompileResult& result) {
+  if (std::any_of(result.optimizations.begin(), result.optimizations.end(),
+          [](const auto& report) { return report.name == "phase-coefficient-selector-copy"; })) {
+    if (const auto reason = core::passes::phase_selector_copy_rejection(
+            result.items, result.preloads, address_space_model_for_options(candidate_options), true))
+      return reason;
+  }
   if (const auto reason = core::shared_helper_dual_mode_closure_rejection_reason(
           result.items, address_space_model_for_options(candidate_options)))
     return reason;

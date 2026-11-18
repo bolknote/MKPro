@@ -8,6 +8,7 @@
 #include "mkpro/core/passes/semantic_region_folding.hpp"
 #include "mkpro/core/passes/liveness_analysis.hpp"
 #include "mkpro/core/indirect_addressing.hpp"
+#include "mkpro/core/late_bound_decimal_selector.hpp"
 #include "mkpro/core/opcodes.hpp"
 #include "mkpro/core/post_layout_control_flow.hpp"
 #include "mkpro/core/post_layout_numeric_ranges.hpp"
@@ -265,12 +266,19 @@ struct Projection {
   std::size_t end = 0;
 
   bool same_function(const Projection& other) const {
-    return opcode == other.opcode && operand == other.operand;
+    return opcode == other.opcode && operand == other.operand && sign_first == other.sign_first;
   }
 
   std::optional<std::string> apply(const std::string& value) const {
+    if (sign_first) {
+      const auto sign = exact_projection(0x32, value, std::nullopt);
+      if (!sign) return std::nullopt;
+      return exact_projection(opcode, *sign, operand);
+    }
     return exact_projection(opcode, value, operand);
   }
+
+  bool sign_first = false;
 };
 
 std::optional<Projection> projection_after(const std::vector<IrOp>& ops,
@@ -324,6 +332,10 @@ struct Macro {
   // Restore only the transition result in X; the stored carrier stays encoded.
   std::vector<int> post_store_projection;
   bool transition_x_decoded = false;
+  // The old digits ended immediately before this address-only store. Its
+  // other, independently entered contexts keep their original X argument.
+  std::optional<std::size_t> copied_selector_store;
+  std::string copied_selector_target;
 };
 
 enum class ExitRecoveryKind {
@@ -1142,6 +1154,9 @@ std::optional<Decoder> choose_decoder(
     candidates.push_back({0x13, *divisor, 0});
   std::optional<Decoder> best;
   for (const auto& candidate : candidates) {
+    // An observed composition may seed a codebook. It is not one of the
+    // one-operation decoders emitted by projection_code.
+    if (candidate.sign_first) continue;
     const auto code = projection_code(candidate);
     if (!code || (best && (code->size() > best->code.size() ||
                           (code->size() == best->code.size() && *code >= best->code))))
@@ -2458,11 +2473,13 @@ struct Equality {
   bool coefficient_ready = false;
   // A dead private word is physically unequal until its next write.
   bool retired = false;
+  bool phase_copy_pending = false;
 
   int key() const {
     return stack_value_equality_key(stack) | (initialized ? 64 : 0) |
            (entry ? 128 : 0) | (encoded_input ? 256 : 0) |
-           (coefficient_ready ? 512 : 0) | (retired ? 1024 : 0);
+           (coefficient_ready ? 512 : 0) | (retired ? 1024 : 0) |
+           (phase_copy_pending ? 2048 : 0);
   }
 };
 
@@ -2480,9 +2497,12 @@ bool prove(const std::vector<MachineItem>& items,
   std::set<std::size_t> interiors;
   std::map<std::size_t, std::size_t> final_item;
   std::map<std::size_t, std::size_t> required_predecessor;
+  std::set<std::size_t> phase_copy_stores;
   for (const auto& [begin, macro] : plan.macros) {
     starts.emplace(machine[begin], &macro);
     final_item.emplace(machine[begin], machine[macro.end - 1U]);
+    if (macro.copied_selector_store)
+      phase_copy_stores.insert(machine[*macro.copied_selector_store]);
     for (std::size_t i = begin + 1U; i < macro.end; ++i) {
       interiors.insert(machine[i]);
       required_predecessor.emplace(machine[i], machine[i - 1U]);
@@ -2635,7 +2655,14 @@ bool prove(const std::vector<MachineItem>& items,
       }
       state.encoded_input = false;
     }
-    if (const auto found = starts.find(item_index); found != starts.end()) {
+    if (state.phase_copy_pending) {
+      if (!phase_copy_stores.contains(item_index))
+        return fail("phase copy has no immediately matched selector store");
+      // Store different words with the same proved repeated selector target.
+      // The selector has no value observers, and both stores close entry.
+      state.phase_copy_pending = false;
+      state.entry = false;
+    } else if (const auto found = starts.find(item_index); found != starts.end()) {
       const auto& macro = *found->second;
       // A new independently proved producer begins another finite epoch. Its
       // following store, not an unrelated read, reactivates the carrier.
@@ -2784,6 +2811,22 @@ bool prove(const std::vector<MachineItem>& items,
         if (remaining-- == 0U || flow.execution_successors[index].size() != 1U)
           return fail("transaction has a non-linear internal continuation");
         index = flow.execution_successors[index].front();
+        if (macro.copied_selector_store &&
+            flow.execution_states[index].item_index == machine[macro.end - 2U] &&
+            !automatic_entry_lift[index])
+          return fail("old selector digits have no proved fresh entry");
+      }
+      if (macro.copied_selector_store) {
+        const auto& successors = flow.execution_successors[index];
+        if (successors.size() != 1U ||
+            flow.execution_states[successors.front()].item_index !=
+                machine[*macro.copied_selector_store])
+          return fail("selector store is not the exact continuation of the old charge");
+        // The old digits lifted and the new copy did not. Nothing of the
+        // stack or hidden shadows is assumed equal until the continuation
+        // re-establishes the needed equalities.
+        state.stack = {{false, false, false, false}, false, false};
+        state.phase_copy_pending = true;
       }
     } else {
       const int opcode = item.opcode;
@@ -3312,7 +3355,18 @@ bool prove_with_finite_exits(
 // a decimal word; unsupported or rounded constants remain ordinary barriers.
 static std::optional<Projection> preloaded_projection_after(
     const std::vector<IrOp>& ops, std::size_t read) {
-  if (auto projection = projection_after(ops, read)) return projection;
+  if (auto projection = projection_after(ops, read)) {
+    if (projection->opcode == 0x32 && !projection->operand) {
+      auto next = projection_after(ops, projection->end - 1U);
+      if (next && next->operand && next->end < ops.size() &&
+          ordinary(ops[next->end]) && ops[next->end].kind == IrKind::Plain &&
+          ops[next->end].opcode == 0x12) {
+        next->sign_first = true;
+        return next;
+      }
+    }
+    return projection;
+  }
   const auto literal = literal_at(ops, read + 1U);
   if (!literal || literal->end + 1U >= ops.size() ||
       !ordinary(ops[literal->end]) || ops[literal->end].kind != IrKind::Plain ||
@@ -3369,6 +3423,110 @@ static bool normalized_power10_product_input(
     if (!incoming) return false;
   }
   return reached;
+}
+
+static constexpr std::string_view kPhaseSelectorCopy = "finite-phase-selector-copy:";
+
+struct PhaseSelectorCopy {
+  std::size_t transition = 0;
+  std::size_t store = 0;
+  std::string label;
+  int target = 0;
+  int selector = 0;
+};
+
+// It is the COPY that is consumed by the indirect instruction. Its first
+// writeback may discard the fractional coefficient. Prove the whole orbit,
+// rather than pretending the two machine words are identical or testing
+// only the first use.
+static bool stable_selector_target_orbit(std::string word, int selector, int target,
+                                         AddressSpaceModel model) {
+  std::set<std::string> seen;
+  try {
+    for (std::size_t step = 0; step < 16U; ++step) {
+      if (!seen.insert(word).second) return true;
+      const auto value = evaluate_indirect_address(register_name_for_index(selector), word,
+          IndirectOperationKind::Flow, model);
+      if (!value || value->mutation != IndirectSelectorMutation::Stable ||
+          value->actual_flow_target != target || !value->formal_address ||
+          value->formal_address->kind != FormalAddressKind::Official ||
+          !value->result_value)
+        return false;
+      word = *value->result_value;
+    }
+  } catch (const std::exception&) {
+    return false;
+  }
+  return false;
+}
+
+static bool phase_selector_is_address_only(
+    const std::vector<MachineItem>& items, const AuthoritativePostLayoutControlFlow& flow,
+    int selector, int address) {
+  bool referenced = false;
+  for (std::size_t at = 0; at < items.size(); ++at) {
+    const auto& item = items[at];
+    if (item.raw) return false;
+    if (item.kind != MachineItemKind::Op) continue;
+    const int family = item.opcode & 0xf0;
+    if (item.opcode == 0x60 + selector ||
+        ((family == 0xb0 || family == 0xd0) && (item.opcode & 15) == selector))
+      return false;
+    if (family == 0xb0 || family == 0xd0) {
+      const auto aliases = flow.indirect_memory_targets.find(at);
+      if (aliases == flow.indirect_memory_targets.end() ||
+          std::find(aliases->second.begin(), aliases->second.end(), selector) != aliases->second.end())
+        return false;
+    } else if (family >= 0x70 && family <= 0xe0 && (item.opcode & 15) == selector) {
+      const auto use = flow.indirect_flow_targets.find(at);
+      if (use == flow.indirect_flow_targets.end() || use->second.empty()) return false;
+      referenced = referenced || std::any_of(use->second.begin(), use->second.end(),
+          [&](const auto& target) { return target.address == address; });
+    }
+  }
+  return referenced;
+}
+
+static std::vector<PhaseSelectorCopy> discover_phase_selector_copies(
+    const std::vector<IrOp>& ops, const std::vector<std::size_t>& machine,
+    const AuthoritativePostLayoutControlFlow& flow, int carrier,
+    const std::set<std::size_t>& updates) {
+  std::vector<PhaseSelectorCopy> copies;
+  const auto code = lower_ir_to_machine(ops);
+  // Keep this lane limited to one outstanding placement certificate.
+  // The publication check requires its marker.
+  if (std::any_of(code.begin(), code.end(), [](const auto& item) {
+        return std::any_of(item.roles.begin(), item.roles.end(), [](const auto& role) {
+          return role.starts_with(kPhaseSelectorCopy);
+        });
+      }))
+    return copies;
+  const auto charges = inspect_deferred_decimal_selector_charges(code);
+  if (!charges.diagnostics.empty()) return copies;
+  for (const auto read : updates) {
+    if (read + 5U >= ops.size()) continue;
+    const auto charge = std::find_if(charges.charges.begin(), charges.charges.end(),
+        [&](const auto& entry) {
+          return !entry.single_cell && entry.target_address >= 10 &&
+              entry.high_item_index == machine[read + 3U] &&
+              entry.low_item_index == machine[read + 4U];
+        });
+    if (charge == charges.charges.end()) continue;
+    auto store = read + 5U;
+    while (store < ops.size() && ops[store].kind == IrKind::Label) ++store;
+    if (store == ops.size() || ops[store].kind != IrKind::Store ||
+        ops[store].meta.raw || ops[store].meta.manual_interaction ||
+        ops[store].opcode < 0x47 || ops[store].opcode > 0x4e)
+      continue;
+    const int selector = ops[store].opcode - 0x40;
+    if (selector == carrier ||
+        !phase_selector_is_address_only(code, flow, selector, charge->target_address) ||
+        !stable_selector_target_orbit(std::to_string(charge->target_address), selector,
+            charge->target_address, flow.address_space_model))
+      continue;
+    copies.push_back({read, store, charge->target_label, charge->target_address, selector});
+  }
+  return copies;
 }
 
 // Recheck a closed raw numeric orbit after independent, proved edits elsewhere.
@@ -3586,10 +3744,42 @@ static std::vector<Plan> discover_preloaded_inline_carriers(
       ordinary_encoding.push_back(*word);
     }
     if(ordinary_encoding.size()!=values.size()) continue;
-    struct Encoding{std::vector<std::string> words;bool raw=false;};
+    struct Encoding {
+      std::vector<std::string> words;
+      bool raw = false;
+      const PhaseSelectorCopy* copy = nullptr;
+    };
     std::vector<Encoding> alternatives{{ordinary_encoding,false}};
     const bool symmetric=ordinary_encoding.size()==2U &&
         ordinary_encoding[0]=="-"+ordinary_encoding[1];
+    // The finite carrier's data view is its signed fractional part. The
+    // integer component comes from the typed destination, not a source hint.
+    // Keep the ordinary coefficient-only plan independent.
+    std::vector<PhaseSelectorCopy> copies;
+    if (reg >= 7 && symmetric && control_reads.empty() && !products.empty() &&
+        options.preserve_compiler_selector_charges &&
+        ordinary_encoding[1].starts_with("0.")) {
+      copies = discover_phase_selector_copies(ops, machine, flow, reg, updates);
+      for (const auto& copy : copies) {
+        if (alternatives.size() >= options.maximum_candidates) break;
+        const std::string integer = std::to_string(copy.target);
+        const auto packed = synthesize_constant({
+            .observations = {{ConstantObservationKind::Integer, integer},
+                             {ConstantObservationKind::Fraction, ordinary_encoding[1]}},
+            .maximum_work = 256});
+        if (!packed.value) continue;
+        const auto negative_word = exact_projection(0x0b, *packed.value, std::nullopt);
+        if (!negative_word ||
+            exact_projection(0x35, *negative_word, std::nullopt) != ordinary_encoding[0] ||
+            exact_projection(0x35, *packed.value, std::nullopt) != ordinary_encoding[1] ||
+            !stable_selector_target_orbit(*packed.value, copy.selector, copy.target,
+                flow.address_space_model) ||
+            !stable_selector_target_orbit(*negative_word, copy.selector, copy.target,
+                flow.address_space_model))
+          continue;
+        alternatives.push_back({{*negative_word, *packed.value}, false, &copy});
+      }
+    }
     const bool compatible_products=!products.empty() && std::all_of(
         products.begin(),products.end(),[&](auto read){
           return encoder.same_function(observations.at(read)) &&
@@ -3629,6 +3819,7 @@ static std::vector<Plan> discover_preloaded_inline_carriers(
       plan.synthesized=true;plan.value_count=values.size();
       plan.preload_replacement=FiniteModePreloadReplacement{*initial,replacement};
       plan.transition_count=updates.size();plan.finite_values=values;plan.finite_encoding=encoding.words;
+      if (encoding.copy) plan.fixed_targets.emplace(encoding.copy->label, encoding.copy->target);
       for(std::size_t row=0;row<values.size();++row){
         if(!plan.encoding_summary.empty())plan.encoding_summary+=", ";
         plan.encoding_summary+=values[row]+" -> "+encoding.words[row];
@@ -3716,6 +3907,12 @@ static std::vector<Plan> discover_preloaded_inline_carriers(
         transition.replacement_projection=decoder->code;transition.replacement_binary=decoder->binary;
         transition.finite_transition_rows=std::move(rows);
         plan.saved_cells+=1-static_cast<int>(decoder->code.size());
+        if (encoding.copy && encoding.copy->transition == read) {
+          transition.end += 2U;
+          transition.copied_selector_store = encoding.copy->store;
+          transition.copied_selector_target = encoding.copy->label;
+          plan.saved_cells += 2;
+        }
         plan.macros.emplace(read,std::move(transition));
       }
       std::size_t end=0;
@@ -3723,6 +3920,7 @@ static std::vector<Plan> discover_preloaded_inline_carriers(
       if(!valid)continue;
       if(plan.saved_cells>=-options.maximum_growth_cells &&
           (options.maximum_growth_cells>0 || plan.saved_cells>0))output.push_back(plan);
+      if (encoding.copy) continue;
       const auto inverse=encoding.raw?raw_decoder(values):choose_decoder(encoding.words,values,functions);
       if(!inverse || inverse->binary || inverse->code.empty())continue;
       for(auto read:updates){
@@ -3961,7 +4159,23 @@ static std::vector<DeferredFiniteModeRepresentation> finite_mode_candidates_impl
   std::stable_sort(proved_plans.begin(), proved_plans.end(), [](const Plan& a, const Plan& b) {
     return a.saved_cells > b.saved_cells;
   });
+  const auto carries_selector_copy = [](const Plan& plan) {
+    return std::any_of(plan.macros.begin(), plan.macros.end(), [](const auto& entry) {
+      return entry.second.copied_selector_store.has_value();
+    });
+  };
+  // A decoder with one more local cell can release a separate charge or
+  // compose with a different placement. Give the best such proof one slot
+  // without changing the older local frontier or spending its capacity.
+  const bool has_selector_copy = std::any_of(
+      proved_plans.begin(), proved_plans.end(), carries_selector_copy);
+  std::size_t ordinary_candidates = 0;
+  bool kept_selector_copy = false;
   for (const auto& plan : proved_plans) {
+    const bool selector_copy = carries_selector_copy(plan);
+    if (selector_copy ? kept_selector_copy
+                      : ordinary_candidates >= candidate_options.maximum_candidates)
+      continue;
     std::vector<IrOp> rewritten;
     std::map<std::size_t, std::size_t> unchanged_ir;
     for (std::size_t i = 0; i < ops.size();) {
@@ -4045,7 +4259,14 @@ static std::vector<DeferredFiniteModeRepresentation> finite_mode_candidates_impl
           rewritten.push_back(std::move(decoder));
         }
         if (macro.transition) {
-          rewritten.push_back(ops[macro.end - 1U]);
+          if (macro.copied_selector_store) {
+            auto store = ops[i + 2U];
+            store.meta.roles.push_back(std::string(kPhaseSelectorCopy) +
+                macro.copied_selector_target);
+            rewritten.push_back(std::move(store));
+          } else {
+            rewritten.push_back(ops[macro.end - 1U]);
+          }
           for (const int opcode : macro.post_store_projection) {
             IrOp decoder;
             decoder.kind = IrKind::Plain;
@@ -4221,6 +4442,13 @@ static std::vector<DeferredFiniteModeRepresentation> finite_mode_candidates_impl
           "stack/X1/X2 and every original control/return path. The complete artifact must "
           "match the initializer ownership snapshot and discharge all placement bindings."});
     }
+    if (selector_copy) {
+      alternatives.back().transformation.optimizations.push_back({
+          "phase-coefficient-selector-copy",
+          "Synthesized one ordinary signed phase word: its fractional part supplies the "
+          "coefficient, and its copy charges the stable address-only selector. Reproved "
+          "the repeated writeback orbit, exact continuation and final target identity."});
+    }
     if (plan.raw_coefficient && plan.preload_replacement && plan.flow_reads.empty() &&
         plan.preloads.empty() && candidate_options.runtime_preloads) {
       auto environment = *candidate_options.runtime_preloads;
@@ -4314,10 +4542,144 @@ static std::vector<DeferredFiniteModeRepresentation> finite_mode_candidates_impl
           "Proved the finite representation over exact selected callback contexts using "
           "encoded command origins, not speculative physical addresses; retained every "
           "unchanged destination equation for independent final layout and return proof."});
-    if (alternatives.size() >= candidate_options.maximum_candidates)
+    if (selector_copy)
+      kept_selector_copy = true;
+    else
+      ++ordinary_candidates;
+    if (ordinary_candidates >= candidate_options.maximum_candidates &&
+        (!has_selector_copy || kept_selector_copy))
       break;
   }
   return alternatives;
+}
+
+std::optional<std::string> phase_selector_copy_rejection(
+    const std::vector<MachineItem>& items, const std::vector<PreloadReport>& preloads,
+    AddressSpaceModel model, bool required) {
+  std::map<std::size_t, std::string> copies;
+  std::map<std::string, int> labels;
+  std::set<std::string> duplicate_labels;
+  int address = 0;
+  for (std::size_t i = 0; i < items.size(); ++i) {
+    const auto& item = items[i];
+    if (item.kind == MachineItemKind::Label) {
+      if (!labels.emplace(item.name, address).second) duplicate_labels.insert(item.name);
+    } else {
+      ++address;
+    }
+    for (const auto& role : item.roles) {
+      if (!role.starts_with(kPhaseSelectorCopy)) continue;
+      if (!copies.emplace(i, role.substr(kPhaseSelectorCopy.size())).second)
+        return "ambiguous finite phase selector copy";
+    }
+  }
+  if (copies.empty()) {
+    if (required) return "missing finite phase selector copy";
+    return std::nullopt;
+  }
+  PostLayoutControlFlowOptions control;
+  control.address_space_model = model;
+  control.empty_return_target = 1;
+  const auto cfg = shared_post_layout_control_flow(items, control);
+  if (!cfg->proved || !prove_post_layout_input_boundaries(items, *cfg).proved)
+    return "phase selector copy has no complete input and control-flow proof";
+  const auto preceding = [&](std::size_t i) -> std::optional<std::size_t> {
+    while (i != 0) {
+      --i;
+      if (items[i].kind != MachineItemKind::Label) return i;
+    }
+    return std::nullopt;
+  };
+  const auto plain = [&](std::size_t i, int opcode) {
+    return items[i].kind == MachineItemKind::Op && items[i].opcode == opcode &&
+        !items[i].raw && !items[i].manual_interaction;
+  };
+  std::map<std::size_t, std::size_t> required_predecessors;
+  std::map<std::size_t, std::size_t> required_successors;
+  std::map<int, std::string> carrier_seeds;
+  for (const auto& [site, label] : copies) {
+    const auto target = labels.find(label);
+    if (label.empty() || target == labels.end() || duplicate_labels.contains(label) ||
+        items[site].opcode < 0x47 || items[site].opcode > 0x4e ||
+        !plain(site, items[site].opcode))
+      return "phase selector copy has no unique typed destination or stable carrier";
+    const int carrier = items[site].opcode - 0x40;
+    auto store = site + 1U;
+    while (store < items.size() && items[store].kind == MachineItemKind::Label) ++store;
+    if (store == items.size() || items[store].opcode < 0x47 || items[store].opcode > 0x4e ||
+        !plain(store, items[store].opcode) || items[store].opcode == items[site].opcode)
+      return "phase selector copy no longer feeds its address-only store";
+    const int selector = items[store].opcode - 0x40;
+    if (!phase_selector_is_address_only(items, *cfg, selector, target->second))
+      return "phase selector copy has an observed data word or lost its target";
+    auto seed = carrier_seeds.find(carrier);
+    if (seed == carrier_seeds.end()) {
+      const auto name = register_name_for_index(carrier);
+      const auto word = std::find_if(preloads.begin(), preloads.end(), [&](const auto& preload) {
+        return preload.register_name == name;
+      });
+      if (word == preloads.end() || word->counts_against_program || word->setup_expression ||
+          word->setup_target_name || word->setup_expression_text || !encode_decimal(word->value) ||
+          std::any_of(word + 1, preloads.end(), [&](const auto& other) {
+            return other.register_name == name;
+          }))
+        return "phase selector copy has no unique literal Main initializer";
+      seed = carrier_seeds.emplace(carrier, word->value).first;
+    }
+    const auto negative = exact_projection(0x0b, seed->second, std::nullopt);
+    if (!negative ||
+        !stable_selector_target_orbit(seed->second, selector, target->second, model) ||
+        !stable_selector_target_orbit(*negative, selector, target->second, model))
+      return "phase selector copy no longer decodes to its placed destination";
+    required_successors.emplace(site, store);
+  }
+  // Recheck that every definition, not just the marked copy, belongs to the
+  // same two-value orbit. No opcode may observe or mutate this word indirectly.
+  for (std::size_t site = 0; site < items.size(); ++site) {
+    const auto& item = items[site];
+    if (item.kind != MachineItemKind::Op) continue;
+    const int family = item.opcode & 0xf0;
+    const int reg = item.opcode & 15;
+    if (family >= 0x70 && family <= 0xe0 && carrier_seeds.contains(reg))
+      return "indirect access mutates an encoded phase carrier";
+    if (family == 0xb0 || family == 0xd0) {
+      const auto aliases = cfg->indirect_memory_targets.find(site);
+      if (aliases == cfg->indirect_memory_targets.end() ||
+          std::any_of(aliases->second.begin(), aliases->second.end(),
+              [&](const int alias) { return carrier_seeds.contains(alias); }))
+        return "indirect memory may observe an encoded phase carrier";
+    }
+    if (family != 0x40 || !carrier_seeds.contains(reg)) continue;
+    const auto negate = preceding(site);
+    const auto read = negate ? preceding(*negate) : std::nullopt;
+    if (!read || !plain(*read, 0x60 + reg) || !plain(*negate, 0x0b) ||
+        !plain(site, 0x40 + reg))
+      return "encoded phase carrier has a noncanonical definition";
+    required_predecessors.emplace(*negate, *read);
+    required_predecessors.emplace(site, *negate);
+  }
+  for (const auto& entry : cfg->external_entries)
+    if (required_predecessors.contains(entry.entry.item_index))
+      return "external entry bypasses a phase transition";
+  std::set<std::size_t> reached;
+  for (std::size_t state = 0; state < cfg->execution_states.size(); ++state) {
+    const auto site = cfg->execution_states[state].item_index;
+    const auto& successors = cfg->execution_successors[state];
+    if (const auto next = required_successors.find(site); next != required_successors.end()) {
+      reached.insert(site);
+      if (successors.size() != 1U ||
+          cfg->execution_states[successors.front()].item_index != next->second)
+        return "encoded phase value does not exclusively reach the selector store";
+    }
+    for (const auto next : successors) {
+      const auto target = cfg->execution_states[next].item_index;
+      const auto required_prev = required_predecessors.find(target);
+      if (required_prev != required_predecessors.end() && required_prev->second != site)
+        return "side entry bypasses a phase transition";
+    }
+  }
+  if (reached.size() != copies.size()) return "unreachable finite phase selector copy";
+  return std::nullopt;
 }
 
 std::vector<DeferredFiniteModeRepresentation>

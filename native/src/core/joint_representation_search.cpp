@@ -3820,6 +3820,11 @@ preloaded_finite_state_layout_transactions(const LayoutSearchArtifact& artifact,
         node, context, control, true, false, nullptr, proof_input, true, nullptr, cells(artifact));
     if (!closed || cells(*closed) >= cells(artifact)) continue;
     closed = rebind_layout_search_artifact(std::move(*closed));
+    if (closed && std::any_of(closed->optimizations.begin(), closed->optimizations.end(),
+            [](const auto& report) { return report.name == "phase-coefficient-selector-copy"; }) &&
+        passes::phase_selector_copy_rejection(closed->items, closed->preloads,
+            control.address_space_model, true))
+      continue;
     if (closed && build_post_layout_control_flow(closed->items, control).proved)
       result.push_back({std::move(*closed), "preloaded-finite-state-layout", true});
   }

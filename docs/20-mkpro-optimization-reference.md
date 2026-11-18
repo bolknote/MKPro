@@ -6678,3 +6678,19 @@ full machine word. Rf never serves as a selector. Register ownership, reserved
 homes, executable operands, all indirect memory aliases, exact return contexts,
 and the setup stack are checked independently. Neutral layouts can enable
 another pass, but do not displace the independently proved incumbent.
+
+### Finite coefficients that also supply a selector charge
+
+An exactly sign-toggled finite carrier can store a signed decimal word whose
+fractional view is the existing product coefficient. Its integer component is
+synthesized from a typed two-digit destination. The transition copies the new
+word to an address-only stable selector, omitting the separate digits. The
+coefficient itself is never subjected to indirect writeback.
+
+Both signs and the complete repeated selector writeback orbit must denote the
+same placed command. Direct data observations, memory aliases, side entries
+into the transition, or live differences in stack and last-X prevent the
+rewrite. The compiler can retain a shared selector store entered by unchanged
+predecessors. Publication revalidates the coefficient owner and the address
+equation on the final artifact; loss of the charge or movement of its target
+without a new certificate is a rejection.

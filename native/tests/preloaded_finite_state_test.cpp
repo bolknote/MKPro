@@ -4,6 +4,7 @@
 #include "mkpro/core/passes/finite_mode_representation.hpp"
 #include "mkpro/core/passes/semantic_region_folding.hpp"
 #include "mkpro/core/raw_bcd_word.hpp"
+#include "mkpro/core/late_bound_decimal_selector.hpp"
 #include "mkpro/core/post_layout_control_flow.hpp"
 #include "mkpro/emulator/mk61.hpp"
 #include "test_support.hpp"
@@ -161,6 +162,107 @@ void negatives() {
       "IR-only clients cannot silently replace an owned initialization");
 }
 
+void phase_coefficient_and_selector_share_one_word() {
+  MachineEmitter e;
+  e.emit_jump(0x51, "jump", "main");
+  // The helper precedes the changing region. Its two-digit ordinal is
+  // chosen by the fixture geometry, not supplied to the numeric solver.
+  for (int i = 0; i < 10; ++i) e.emit_op(0x54);
+  e.emit_label("leaf");
+  e.emit_number("1");
+  e.emit_op(0x4e);
+  e.emit_op(0x52);
+  e.emit_label("main");
+  e.emit_op(0x68);
+  e.emit_op(0x0b);
+  e.emit_op(0x48);
+  e.emit_op(0x01);
+  e.items.back().roles.push_back(make_late_bound_decimal_selector_role(
+      LateBoundDecimalSelectorPart::High, "leaf"));
+  e.emit_op(0x02);
+  e.items.back().roles.push_back(make_late_bound_decimal_selector_role(
+      LateBoundDecimalSelectorPart::Low, "leaf"));
+  e.emit_label("selector_store");
+  e.emit_op(0x4a);
+  for (int i = 0; i < 5; ++i) e.emit_op(0x67);
+  for (int i = 0; i < 2; ++i) {
+    e.emit_op(0xaa);
+    e.items.back().indirect_flow_targets = std::vector<IrTarget>{std::string("leaf")};
+  }
+  for (int i = 0; i < 3; ++i) {
+    e.emit_number(std::to_string(i + 1));
+    e.emit_op(0x15);
+    e.emit_op(0x68);
+    e.emit_op(0x32);
+    e.emit_number("10");
+    e.emit_op(0x13);
+    e.emit_op(0x12);
+    e.emit_op(0x44 + i);
+  }
+  e.emit_jump(0x5d, "loop", "main");
+  e.emit_op(0x67);
+  e.emit_op(0x4a);
+  for (int i = 0; i < 5; ++i) e.emit_op(0x67);
+  e.emit_op(0x22);
+  e.emit_stop(StopDisposition::Terminal);
+
+  CompileOptions options;
+  options.analysis = true;
+  options.defer_return_suffix_until_callee_hole = true;
+  for (const std::string phase : {"1", "-1"}) {
+    const std::vector<PreloadReport> words{
+        {.register_name = "0", .value = "3"},
+        {.register_name = "7", .value = "2"},
+        {.register_name = "8", .value = phase, .lowered_data_value = phase},
+        {.register_name = "e", .value = "9"}};
+    const auto candidates = [&](const auto& items) {
+      auto variants = passes::deferred_finite_mode_representation_candidates(
+          raise_machine_to_ir(items), {options}, {.maximum_candidates = 12,
+            .allow_target_relayout = true, .runtime_preloads = &words,
+            .preserve_compiler_selector_charges = true, .encode_preloaded_state = true});
+      std::erase_if(variants, [](const auto& variant) {
+        return std::none_of(variant.transformation.optimizations.begin(),
+            variant.transformation.optimizations.end(), [](const auto& report) {
+              return report.name == "phase-coefficient-selector-copy";
+            });
+      });
+      return variants;
+    };
+    const auto proved = candidates(e.items);
+    require(!proved.empty(), "finite phase must synthesize and copy a combined coefficient/address");
+    const auto placed = preloaded_finite_state_layout_transactions({e.items, words, {}}, options);
+    require(std::any_of(placed.begin(), placed.end(), [](const auto& candidate) {
+      return std::any_of(candidate.node.optimizations.begin(), candidate.node.optimizations.end(),
+          [](const auto& report) { return report.name == "phase-coefficient-selector-copy"; });
+    }), "a locally dearer shared word must retain an independent production layout slot");
+    const auto& plan = proved.front();
+    require(plan.required_target_addresses.at("leaf") == 12 &&
+                plan.preload_replacements.size() == 1,
+            "the encoded selector must constrain the displaced command identity");
+    LayoutSearchArtifact after{lower_ir_to_machine(plan.transformation.ops), words, {}};
+    after.preloads[2] = plan.preload_replacements.front().after;
+    require(cells(after.items) + 11 == cells(e.items),
+            "save the two charge digits and three cells at each signed product");
+    require(!passes::phase_selector_copy_rejection(after.items, after.preloads,
+                AddressSpaceModel::Standard, true),
+            "publication must reprove both signs and repeated indirect calls");
+    require(observe({e.items, words, {}}, 8, false) == observe(after, 8, false),
+            "the ROM must preserve products, calls and observable state over all transitions");
+    auto shifted = after;
+    const auto label = std::find_if(shifted.items.begin(), shifted.items.end(), [](const auto& item) {
+      return item.kind == MachineItemKind::Label && item.name == "leaf";
+    });
+    shifted.items.insert(label, MachineItem::op(0x54, "displaced destination"));
+    require(passes::phase_selector_copy_rejection(shifted.items, shifted.preloads,
+                AddressSpaceModel::Standard, true).has_value(),
+            "a stale copied selector may not survive target motion");
+    auto observed = e.items;
+    observed.insert(observed.end() - 1, MachineItem::op(0x6a, "address observed as data"));
+    require(candidates(observed).empty(),
+            "a data read must block replacement of the original selector word");
+  }
+}
+
 void raw_coefficient_alternatives(){
   for(const bool already_scaled:{false,true}){
     MachineEmitter e;
@@ -293,6 +395,7 @@ int main() {
         positive(Variant::PowerLiteral, interactive, carrier, initial);
       }
     raw_coefficient_alternatives();
+    phase_coefficient_and_selector_share_one_word();
     negatives(); compiler_contract();
     std::cout << "preloaded finite state compiler/ROM contracts passed\n";
     return 0;

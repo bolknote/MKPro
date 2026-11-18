@@ -88,6 +88,12 @@ struct DeferredFiniteModeRepresentation {
   std::shared_ptr<const ClosedNumericLayoutCertificate> numeric_layout_certificate = {};
 };
 
+// Revalidate a compiler-owned phase/selector copy after physical placement.
+// A moved or removed required charge must not silently lose its fixed target.
+std::optional<std::string> phase_selector_copy_rejection(
+    const std::vector<MachineItem>& items, const std::vector<PreloadReport>& preloads,
+    AddressSpaceModel model, bool required = false);
+
 // The relational data/stack proof is complete, but placement is deliberately
 // NOT performed. This type is not an executable artifact. Only a joint-search
 // finalizer that proves all required destinations may publish its contents.
