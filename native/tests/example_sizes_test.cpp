@@ -126,12 +126,7 @@ void require_selector_data_opportunity_context(const CompileResult& result) {
   }
 }
 
-CompileResult compile_example(const std::filesystem::path& path, bool analysis_budgeted) {
-  CompileOptions options;
-  if (analysis_budgeted) {
-    options.analysis = true;
-    options.budget = 999999;
-  }
+CompileResult compile_example(const std::filesystem::path& path, const CompileOptions& options) {
   const CompileResult result = compile_source(read_file(path), options);
   require(result.implemented, "native compiler should implement example: " + path.string());
   require(!has_error_diagnostic(result), "example compile diagnostics should not include errors: " + path.string());
@@ -140,6 +135,15 @@ CompileResult compile_example(const std::filesystem::path& path, bool analysis_b
     require_selector_data_opportunity_context(result);
   }
   return result;
+}
+
+CompileResult compile_example(const std::filesystem::path& path, bool analysis_budgeted) {
+  CompileOptions options;
+  if (analysis_budgeted) {
+    options.analysis = true;
+    options.budget = 999999;
+  }
+  return compile_example(path, options);
 }
 
 std::size_t example_steps(const std::filesystem::path& path, bool analysis_budgeted) {
@@ -244,10 +248,20 @@ void example_sizes_match_typescript_baselines() {
       {"wumpus", 105},
       {"zagaday-tsifru", 105},
   };
-  const std::map<std::string, std::size_t> PENDING_BASELINE{
-      {"nekromant", 138},
-      {"podvodnaya-lodka-lazarev", 246},
-      {"tic-tac-toe-4x4", 122},
+  struct PendingSizeBaseline {
+    std::size_t cells;
+    int analysis_budget = 999999;
+    bool ordinary_decimal_input = false;
+    OutputFormat output = OutputFormat::Listing;
+  };
+  const std::map<std::string, PendingSizeBaseline> PENDING_BASELINE{
+      {"nekromant", {.cells = 138}},
+      {"podvodnaya-lodka-lazarev", {.cells = 246}},
+      // The documented keyboard protocol admits ordinary decimal numbers,
+      // without bounds on sign, magnitude or integrality. These options
+      // reproduce the size measurement, not a stock/expanded hardware fit.
+      {"tic-tac-toe-4x4", {.cells = 117, .analysis_budget = 112,
+                         .ordinary_decimal_input = true, .output = OutputFormat::Json}},
   };
 
   const std::filesystem::path root = std::filesystem::current_path();
@@ -546,8 +560,16 @@ void example_sizes_match_typescript_baselines() {
                 << std::endl;
     }
     const std::filesystem::path path = pending_root / (name + ".mkpro");
-    const CompileResult result = compile_example(path, /*analysis_budgeted=*/true);
-    record_size_mismatch("pending example", name, expected, result.steps.size());
+    CompileOptions options;
+    options.analysis = true;
+    options.budget = expected.analysis_budget;
+    options.ordinary_decimal_keyboard_input = expected.ordinary_decimal_input;
+    options.output = expected.output;
+    const CompileResult result = compile_example(path, options);
+    record_size_mismatch("pending example", name, expected.cells, result.steps.size());
+    if (expected.ordinary_decimal_input)
+      require(has_optimization(result, "ordinary-decimal-keyboard-input-contract"),
+              "pending example must report its measured decimal keyboard contract: " + name);
     if (size_only)
       continue;
     if (name == "tic-tac-toe-4x4") {

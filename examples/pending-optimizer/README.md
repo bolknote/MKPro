@@ -15,12 +15,26 @@ with a raw listing: the goal is to make the high-level source fit.
 
 | File | Current | Target | Gap | Status |
 | --- | ---: | ---: | ---: | --- |
-| `tic-tac-toe-4x4.mkpro` | 122 | 105 | +17 | pending optimizer |
+| `tic-tac-toe-4x4.mkpro` | 117 | 105 | +12 | pending optimizer; ordinary decimal keyboard input |
 | `nekromant.mkpro` | 138 | 105 | +33 | pending optimizer; +3 after correctness fixes |
 | `podvodnaya-lodka-lazarev.mkpro` | 246 | 105 | +141 | pending optimizer; continuous symbolic display |
 
 The `Current` number is the local `--analysis` size. Strict `mk-pro compile`
 mode may reject over-window programs earlier than the analysis path.
+
+The 4x4 size baseline uses the game's documented keyboard input: ordinary
+decimal numbers, without narrowing the sign, magnitude or integrality of
+those numbers. Run it from the repository root with:
+
+```sh
+mk-pro compile examples/pending-optimizer/tic-tac-toe-4x4.mkpro \
+  --analysis --budget 112 --ordinary-decimal-input --out json
+```
+
+The budget selects the measured search configuration; it does not add
+hardware cells. The unrestricted-input analysis with budget `999999` was
+measured separately at 122 cells. The 117-cell build still exceeds both the
+stock MK-61 window (105) and the MK-61S Mini expanded window (112).
 
 ## Regression checks and optimization goals
 
@@ -420,5 +434,6 @@ ordinary coordinate normalization, two-phase input and report logic are unchange
 Canonical literal/store elision, complete selector-family allocation and
 reopened shared-tail placement jointly reduce the unchanged 4x4 source from
 123 to 122 cells. Literal deletion alone closes at 123, so the result belongs
-to the combined transaction, not to an asserted local saving. The 105-cell
-hardware target remains separate from this measured regression baseline.
+to the combined transaction, not to an asserted local saving. This was the
+unrestricted-input result; the current 117-cell baseline uses the explicit
+decimal keyboard contract above. The 105-cell hardware target is unchanged.
