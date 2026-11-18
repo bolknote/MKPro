@@ -430,6 +430,22 @@ void run_tests() {
   deferred_callback_web_contracts();
   available_definition_contracts();
   manual_web_contracts();
+  {
+    const auto source = fixture(0, 8);
+    const auto graph = build_post_layout_control_flow(lower_ir_to_machine(source.ops));
+    const std::vector demands{query(source, true), query(source, false), query(source, true)};
+    const auto direct = analyze_unreachable_definition_uses(source.ops, graph, demands);
+    LivenessOptions spilled;
+    for (int i = 0; i < 20; ++i)
+      spilled.equal_entry_value_classes.emplace("unused" + std::to_string(i), "literal:17");
+    const auto many = analyze_unreachable_definition_uses(source.ops, graph, demands, spilled);
+    require(!direct.exhausted && !many.exhausted && direct.work == many.work &&
+            direct.excluded_uses.contains(demands.front()) && many.excluded_uses == direct.excluded_uses,
+            "spill slots and reused demand rows preserve guarded joins, kills and work limits");
+    const auto bounded = analyze_unreachable_definition_uses(source.ops, graph, demands, spilled, 1U);
+    require(bounded.exhausted && bounded.work == 1U && bounded.excluded_uses.empty(),
+            "guarded proof exhaustion must never publish surviving scratch rows");
+  }
   for (const int payload : {0, 1, 2}) {
     for (const int guard : {8, 12}) {
       const Fixture positive = fixture(payload, guard);

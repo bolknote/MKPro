@@ -184,6 +184,19 @@ void compilation_scope_contracts() {
   changed_data[static_cast<std::size_t>(digit - changed_opcode.begin())].opcode = 0x34;
   require(shared_post_layout_control_flow(changed_data) == graphs.front(),
           "ordinary data operators cannot change the control-only snapshot");
+  {
+    const auto isolated = detail::make_post_layout_proof_cache();
+    const detail::PostLayoutProofCacheScope isolated_scope(isolated);
+    const auto separate = shared_post_layout_control_flow(changed_data);
+    require(separate != graphs.front() && same_facts(*separate, *graphs.front()) &&
+            shared_post_layout_control_flow(changed_data) == separate,
+            "a recent worker-local hit belongs only to its compilation owner");
+    const auto isolated_stats = detail::post_layout_proof_cache_stats(*isolated);
+    require(isolated_stats.cfg_builds == 1 && isolated_stats.cfg_hits == 1,
+            "worker-local hits are counted without recomputing the graph");
+  }
+  require(shared_post_layout_control_flow(changed_data) == graphs.front(),
+          "leaving a nested compilation restores its parent's snapshots");
   std::vector<MachineItem> encoded{MachineItem::op(0x53, "call"),
       MachineItem::op(4, "operand"), MachineItem::op(0x50, "stop"),
       MachineItem::op(0x52, "return"), MachineItem::op(0x52, "return")};

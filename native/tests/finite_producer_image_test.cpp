@@ -26,7 +26,7 @@ void append(std::vector<MachineItem>& items, std::initializer_list<int> codes) {
 
 std::vector<MachineItem> fixture(Observer observer = Observer::None,
                                bool raw = false, bool repeated = false,
-                               bool negative = false) {
+                               bool negative = false, bool project_sign = false) {
   std::vector<MachineItem> items{MachineItem::label("again")};
   if (negative) {
     append(items, {0x69, 0x69, 0x61, 0x38, 0x49, 0x11, 0x57});
@@ -37,8 +37,13 @@ std::vector<MachineItem> fixture(Observer observer = Observer::None,
   append(items, {0x32, 0x48});
   if (observer == Observer::LastX) append(items, {0x0f, 0x47});
   if (observer == Observer::EntryShadow) append(items, {0x0a, 0x47});
-  append(items, {0x63, 0x15, 0x68, 1, 0, 0x13, 0x12, 0x44,
-                 0x65, 0x15, 0x68, 1, 0, 0x13, 0x12, 0x46, 0, 0x48});
+  for (const auto [exponent, destination] :
+       {std::pair{0x63, 0x44}, std::pair{0x65, 0x46}}) {
+    append(items, {exponent, 0x15, 0x68});
+    if (project_sign) append(items, {0x32});
+    append(items, {1, 0, 0x13, 0x12, destination});
+  }
+  append(items, {0, 0x48});
   if (repeated || negative) {
     append(items, {negative ? 0x51 : 0x5d});
     items.push_back(MachineItem::address(std::string("again")));
@@ -98,13 +103,14 @@ std::vector<std::string> observe(const std::vector<MachineItem>& items,
   return state;
 }
 
-void profitable_image(bool repeated, bool negative) {
-  const auto before = fixture(Observer::None, false, repeated, negative);
+void profitable_image(bool repeated, bool negative, bool project_sign = false) {
+  const auto before = fixture(Observer::None, false, repeated, negative, project_sign);
   const auto setup = preloads();
   const auto alternatives = candidates(before, setup);
   require(!alternatives.empty(), "proved computed inputs need a finite image candidate");
   const auto after = lower_ir_to_machine(alternatives.front().ops);
-  require(cells(after) == cells(before) - 3, "two consumers repay a shared producer decoder");
+  require(cells(after) == cells(before) - (project_sign ? 5 : 3),
+          "two consumers repay a shared producer decoder including redundant sign projections");
   require(observe(before, setup) == observe(after, setup),
           "computed image preserves all words, registers, last-X, X2 and repeated epochs");
 }
@@ -262,11 +268,15 @@ int main() {
     profitable_image(false, false);
     profitable_image(true, false);
     profitable_image(false, true);
+    profitable_image(false, false, true);
+    profitable_image(false, true, true);
     const auto setup = preloads();
     require(candidates(fixture(Observer::LastX), setup).empty(), "live last-X blocks recoding");
     require(candidates(fixture(Observer::EntryShadow), setup).empty(), "live X2 blocks recoding");
     require(candidates(fixture(Observer::None, true), preloads(true)).empty(),
             "an arbitrary raw word has no unit-sign certificate");
+    require(candidates(fixture(Observer::LastX, false, false, false, true), setup).empty(),
+            "sign composition cannot bypass a live last-X observation at the producer");
     std::cout << "finite producer image, entry, positive and negative ROM contracts passed\n";
     return 0;
   } catch (const std::exception& error) {

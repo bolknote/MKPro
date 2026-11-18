@@ -9,7 +9,10 @@
 #include "mkpro/core/stable_register_value_flow.hpp"
 
 #include <algorithm>
+#include <array>
+#include <bit>
 #include <charconv>
+#include <cstdint>
 #include <cstdlib>
 #include <deque>
 #include <exception>
@@ -133,6 +136,58 @@ struct GuardedLifetimeProof {
   std::set<GuardedOldWordQuery> dead_words;
   std::size_t work = 0;
   bool exhausted = false;
+};
+
+// The only learned memory facts are literal entry values and guards. Intern
+// those names once. A hardware bank fits inline; arbitrary logical liveness
+// namespaces retain the same join and kill operations in the spill slots.
+class GuardedMemory {
+ public:
+  static constexpr std::size_t kInlineSlots = 16;
+  explicit GuardedMemory(std::size_t count = 0)
+      : spill_(count > kInlineSlots ? count - kInlineSlots : 0U) {}
+
+  static std::uint32_t bit(std::size_t slot) { return std::uint32_t{1} << slot; }
+
+  std::optional<int> value(std::size_t slot) const {
+    if (slot >= kInlineSlots) return spill_[slot - kInlineSlots];
+    return (known_ & bit(slot)) != 0U ? std::optional{values_[slot]} : std::nullopt;
+  }
+
+  void set(std::size_t slot, int number) {
+    if (slot >= kInlineSlots) {
+      spill_[slot - kInlineSlots] = number;
+    } else {
+      values_[slot] = number;
+      known_ |= bit(slot);
+    }
+  }
+
+  void kill(std::uint32_t inline_mask, const std::vector<std::size_t>& spill_slots) {
+    known_ &= ~inline_mask;
+    for (const auto slot : spill_slots) spill_[slot - kInlineSlots].reset();
+  }
+
+  bool meet(const GuardedMemory& incoming) {
+    auto common = known_ & incoming.known_;
+    for (auto pending = common; pending != 0U; pending &= pending - 1U) {
+      const auto slot = static_cast<std::size_t>(std::countr_zero(pending));
+      if (values_[slot] != incoming.values_[slot]) common &= ~bit(slot);
+    }
+    bool changed = known_ != common;
+    known_ = common;
+    for (std::size_t slot = 0; slot < spill_.size(); ++slot)
+      if (spill_[slot] && spill_[slot] != incoming.spill_[slot]) {
+        spill_[slot].reset();
+        changed = true;
+      }
+    return changed;
+  }
+
+ private:
+  std::array<int, kInlineSlots> values_{};
+  std::uint32_t known_ = 0;
+  std::vector<std::optional<int>> spill_;
 };
 
 template <class Successors>
@@ -286,14 +341,29 @@ GuardedLifetimeProof guarded_register_lifetimes(
 
   enum class Entry { Unknown, Closed, Digits };
   struct Facts {
-    std::map<std::string, int> memory;
+    GuardedMemory memory;
     std::optional<int> x;
     Entry entry = Entry::Unknown;
     // A demand starts in a real reference execution. Global certificates remain
     // valid until a select-store is hypothetically retained by the slice.
     // Once a path diverges, only explicit unaffected-carrier facts may return.
     bool reference_execution = true;
-    bool operator==(const Facts&) const = default;
+    bool meet(const Facts& incoming) {
+      bool changed = memory.meet(incoming.memory);
+      if (reference_execution && !incoming.reference_execution) {
+        reference_execution = false;
+        changed = true;
+      }
+      if (x && x != incoming.x) {
+        x.reset();
+        changed = true;
+      }
+      if (entry != Entry::Unknown && entry != incoming.entry) {
+        entry = Entry::Unknown;
+        changed = true;
+      }
+      return changed;
+    }
   };
   const auto small_integer = [](const std::string& value) -> std::optional<int> {
     if (!value.starts_with("literal:"))
@@ -306,33 +376,60 @@ GuardedLifetimeProof guarded_register_lifetimes(
       return std::nullopt;
     return number;
   };
+  std::map<std::string, Id> memory_slots;
+  std::vector<std::pair<Id, int>> entry_values;
+  for (const auto& [reg, value] : options.equal_entry_value_classes)
+    if (const auto number = small_integer(value)) {
+      const auto slot = memory_slots.try_emplace(reg, memory_slots.size()).first->second;
+      entry_values.emplace_back(slot, *number);
+    }
+  for (const auto& guard : guards)
+    memory_slots.try_emplace(guard, memory_slots.size());
+
+  struct MemoryTransfer {
+    std::optional<Id> operand;
+    std::uint32_t kill_mask = 0;
+    std::vector<Id> spill_kills;
+  };
+  std::vector<MemoryTransfer> memory_transfers(ops.size());
+  for (Id site = 0; site < ops.size(); ++site) {
+    auto& memory = memory_transfers[site];
+    const auto& op = ops[site];
+    if (op.kind == IrKind::Recall || (op.kind == IrKind::Store && guards.contains(op.register_name)))
+      if (const auto slot = memory_slots.find(op.register_name); slot != memory_slots.end())
+        memory.operand = slot->second;
+    for (const auto* defs : {&effects[site].must_defs, &effects[site].may_defs})
+      for (const auto& reg : *defs)
+        if (const auto slot = memory_slots.find(reg); slot != memory_slots.end()) {
+          if (slot->second < GuardedMemory::kInlineSlots)
+            memory.kill_mask |= GuardedMemory::bit(slot->second);
+          else
+            memory.spill_kills.push_back(slot->second);
+        }
+  }
   const auto transfer = [&](Facts state, Id id, bool retain_selector, bool global_path,
                             const RegisterValueSet* sliced_payload = nullptr) {
     const IrOp& op = op_at(id);
-    const RegisterEffects& effect = effects.at(instructions.at(id));
-    const auto old_memory = state.memory;
-    for (const std::string& reg : effect.must_defs)
-      state.memory.erase(reg);
-    for (const std::string& reg : effect.may_defs)
-      state.memory.erase(reg);
+    const auto& memory = memory_transfers[instructions[id]];
+    const auto old_word = retain_selector && memory.operand
+        ? state.memory.value(*memory.operand) : std::nullopt;
+    state.memory.kill(memory.kill_mask, memory.spill_kills);
     if (op.meta.manual_interaction.has_value()) {
       state.x.reset();
       state.entry = Entry::Unknown;
     }
     if (op.kind == IrKind::Store) {
-      if (guards.contains(op.register_name)) {
+      if (memory.operand) {
         if (retain_selector) {
           state.reference_execution = false;
-          if (const auto old = old_memory.find(op.register_name); old != old_memory.end())
-            state.memory[op.register_name] = old->second;
+          if (old_word) state.memory.set(*memory.operand, *old_word);
         } else if (state.x.has_value()) {
-          state.memory[op.register_name] = *state.x;
+          state.memory.set(*memory.operand, *state.x);
         }
       }
       state.entry = Entry::Closed;
     } else if (op.kind == IrKind::Recall) {
-      const auto found = state.memory.find(op.register_name);
-      state.x = found == state.memory.end() ? std::nullopt : std::optional<int>{found->second};
+      state.x = memory.operand ? state.memory.value(*memory.operand) : std::nullopt;
       state.entry = Entry::Closed;
     } else if (op.kind == IrKind::IndirectRecall) {
       state.x.reset();
@@ -399,58 +496,74 @@ GuardedLifetimeProof guarded_register_lifetimes(
     }
     return state;
   };
+  struct Branch {
+    int code = -1;
+    std::optional<Id> fallthrough;
+  };
+  std::vector<Branch> branches(instructions.size());
+  for (Id from = 0; from < instructions.size(); ++from) {
+    auto& branch = branches[from];
+    const auto& op = op_at(from);
+    branch.code = condition_code(op);
+    if (branch.code < 0 || op.meta.manual_interaction || successors.at(from).size() != 2U)
+      continue;
+    const auto& links = successors.at(from);
+    const bool first = fallthrough_edge(from, links.front());
+    const bool last = fallthrough_edge(from, links.back());
+    if (first != last) branch.fallthrough = first ? links.front() : links.back();
+  }
   const auto permits = [&](Id from, Id to, const Facts& input) {
-    const IrOp& op = op_at(from);
-    if (condition_code(op) < 0 || op.meta.manual_interaction.has_value() ||
-        !input.x.has_value() || successors.at(from).size() != 2U)
+    const auto& branch = branches[from];
+    if (!input.x || !branch.fallthrough)
       return true;
-    std::optional<bool> predicate;
-    switch (condition_code(op)) {
+    bool predicate = false;
+    switch (branch.code) {
       case 0x5e: predicate = *input.x == 0; break;
       case 0x57: predicate = *input.x != 0; break;
       case 0x5c: predicate = *input.x < 0; break;
       case 0x59: predicate = *input.x >= 0; break;
       default: return true;
     }
-    const bool has_fallthrough = std::count_if(successors.at(from).begin(), successors.at(from).end(),
-        [&](Id edge) { return fallthrough_edge(from, edge); }) == 1;
-    return !has_fallthrough ||
-        (fallthrough_edge(from, to) == *predicate);
+    return (to == *branch.fallthrough) == predicate;
   };
-  using StateTable = std::vector<std::optional<Facts>>;
   using Seed = std::pair<Id, Facts>;
+  struct PropagationRows {
+    explicit PropagationRows(std::size_t count) : states(count), queued(count, false) {}
+    std::vector<std::optional<Facts>> states;
+    std::vector<bool> queued;
+    std::vector<Id> touched;
+    std::deque<Id> work;
+
+    void clear() {
+      for (const auto id : touched) {
+        states[id].reset();
+        queued[id] = false;
+      }
+      touched.clear();
+      work.clear();
+    }
+  };
+
+  const bool trace_details = std::getenv("MKPRO_NATIVE_TRACE_GUARDED_LIFETIME_DETAILS") != nullptr;
   bool& exhausted = proved.exhausted;
-  const auto propagate = [&](const std::vector<Seed>& seeds, const std::vector<bool>* relevant,
+  const auto propagate = [&](PropagationRows& rows, const std::vector<Seed>& seeds,
+                             const std::vector<bool>* relevant,
                              const RegisterValueSet* payload, const std::set<Id>& retain,
                              std::optional<Id> observed_use = std::nullopt,
                              std::optional<Id> observed_context = std::nullopt,
-                             bool observe_terminal_bank = false)
-      -> std::optional<StateTable> {
-    StateTable states(instructions.size());
-    std::deque<Id> work;
-    std::vector<bool> queued(instructions.size(), false);
+                             bool observe_terminal_bank = false) {
+    rows.clear();
+    auto& [states, queued, touched, work] = rows;
     const auto merge = [&](Id id, const Facts& incoming) {
       if (relevant != nullptr && !relevant->at(id))
         return;
-      Facts next = incoming;
-      if (states.at(id).has_value()) {
-        next = *states.at(id);
-        for (auto item = next.memory.begin(); item != next.memory.end();) {
-          const auto other = incoming.memory.find(item->first);
-          if (other == incoming.memory.end() || other->second != item->second)
-            item = next.memory.erase(item);
-          else
-            ++item;
-        }
-        next.reference_execution = next.reference_execution && incoming.reference_execution;
-        if (next.x != incoming.x)
-          next.x.reset();
-        if (next.entry != incoming.entry)
-          next.entry = Entry::Unknown;
-        if (next == *states.at(id))
-          return;
+      auto& fact = states.at(id);
+      if (fact) {
+        if (!fact->meet(incoming)) return;
+      } else {
+        fact = incoming;
+        touched.push_back(id);
       }
-      states.at(id) = std::move(next);
       if (!queued.at(id)) {
         queued.at(id) = true;
         work.push_back(id);
@@ -461,7 +574,7 @@ GuardedLifetimeProof guarded_register_lifetimes(
     while (!work.empty()) {
       if (proved.work >= maximum_work) {
         exhausted = true;
-        return std::nullopt;
+        return false;
       }
       ++proved.work;
       const Id id = work.front();
@@ -479,14 +592,15 @@ GuardedLifetimeProof guarded_register_lifetimes(
                       op_at(id).meta.stop_disposition == StopDisposition::Terminal &&
                       std::find(op_at(id).meta.roles.begin(), op_at(id).meta.roles.end(),
                                 kTypedDisplayObservationRole) != op_at(id).meta.roles.end())))) {
-          if (std::getenv("MKPRO_NATIVE_TRACE_GUARDED_LIFETIME_DETAILS") != nullptr) {
+          if (trace_details) {
             std::cerr << "[guarded-register-lifetime] old read " << name << " at "
                       << instructions.at(id) << " facts:";
-            for (const auto& [reg, value] : states.at(id)->memory)
-              std::cerr << ' ' << reg << '=' << value;
+            for (const auto& [reg, slot] : memory_slots)
+              if (const auto value = states.at(id)->memory.value(slot))
+                std::cerr << ' ' << reg << '=' << *value;
             std::cerr << '\n';
           }
-          return std::nullopt;
+          return false;
         }
         if (effect.must_defs.contains(name))
           continue;
@@ -496,11 +610,11 @@ GuardedLifetimeProof guarded_register_lifetimes(
         if (permits(id, to, *states.at(id)))
           merge(to, after);
     }
-    return states;
+    return true;
   };
 
-  Facts entry;
-  if (std::getenv("MKPRO_NATIVE_TRACE_GUARDED_LIFETIME_DETAILS") != nullptr) {
+  Facts entry{.memory = GuardedMemory(memory_slots.size())};
+  if (trace_details) {
     for (std::size_t i = 0; i < ops.size(); ++i) {
       const auto& op = ops.at(i);
       std::cerr << "[guarded-register-lifetime] ir " << i << " kind="
@@ -509,26 +623,26 @@ GuardedLifetimeProof guarded_register_lifetimes(
                 << " manual=" << op.meta.manual_interaction.has_value() << '\n';
     }
   }
-  for (const auto& [reg, value] : options.equal_entry_value_classes) {
-    if (std::getenv("MKPRO_NATIVE_TRACE_GUARDED_LIFETIME_DETAILS") != nullptr)
+  if (trace_details)
+    for (const auto& [reg, value] : options.equal_entry_value_classes)
       std::cerr << "[guarded-register-lifetime] setup " << reg << '=' << value << '\n';
-    if (const auto number = small_integer(value))
-      entry.memory[reg] = *number;
-  }
+  for (const auto& [slot, number] : entry_values) entry.memory.set(slot, number);
   std::vector<Seed> seeds;
   Facts invariant = entry;
-  for (const auto& effect : effects) {
-    for (const auto& reg : effect.must_defs)
-      invariant.memory.erase(reg);
-    for (const auto& reg : effect.may_defs)
-      invariant.memory.erase(reg);
-  }
+  for (const auto& memory : memory_transfers)
+    invariant.memory.kill(memory.kill_mask, memory.spill_kills);
   for (const Id root : roots)
     if (root == 0U || !options.closed_program_entry)
       seeds.emplace_back(root, root == 0U ? entry : invariant);
-  const auto global = propagate(seeds, nullptr, nullptr, {});
-  if (!global.has_value())
+  PropagationRows global(instructions.size());
+  if (!propagate(global, seeds, nullptr, nullptr, {}))
     return proved;
+  PropagationRows demand(instructions.size());
+  std::vector<core::detail::InlineProofRow<Id, 2>> contexts(
+      queries.empty() && old_queries.empty() ? 0U : ops.size());
+  if (!contexts.empty())
+    for (Id id = 0; id < instructions.size(); ++id)
+      contexts[instructions[id]].push_back(id);
 
   struct Slice {
     std::vector<bool> relevant;
@@ -577,14 +691,14 @@ GuardedLifetimeProof guarded_register_lifetimes(
       // With a closed entry contract, an unreachable execution context is
       // not an additional invocation. Unknown or unresolved transfers have
       // already rejected the matched-context proof before reaching here.
-      if (!global->at(id).has_value())
+      if (!global.states.at(id))
         continue;
-      const Facts after = transfer(global->at(id).value_or(Facts{}), id, false, true);
+      const Facts after = transfer(*global.states.at(id), id, false, true);
       for (const Id to : successors.at(id))
         starts.emplace_back(to, after);
     }
     const RegisterValueSet query{payload};
-    return propagate(starts, &slice.relevant, &query, slice.retain).has_value();
+    return propagate(demand, starts, &slice.relevant, &query, slice.retain);
   };
   for (const Pair& pair : pairs) {
     if (exhausted)
@@ -599,7 +713,7 @@ GuardedLifetimeProof guarded_register_lifetimes(
     if (query.definition >= ops.size() || query.use >= ops.size() ||
         query.register_name.empty() ||
         !effects.at(query.definition).must_defs.contains(query.register_name) ||
-        std::find(instructions.begin(), instructions.end(), query.use) == instructions.end() ||
+        contexts[query.use].empty() ||
         (query.definition_state && (*query.definition_state >= instructions.size() ||
             instructions[*query.definition_state] != query.definition)) ||
         (query.use_state && (*query.use_state >= instructions.size() ||
@@ -608,18 +722,17 @@ GuardedLifetimeProof guarded_register_lifetimes(
       continue;
     const Slice& slice = get_slice(query.register_name, query.use, query.use_state);
     std::vector<Seed> starts;
-    for (Id id = 0; id < instructions.size(); ++id) {
-      if (instructions.at(id) != query.definition ||
-          (query.definition_state && id != *query.definition_state) || !global->at(id).has_value())
+    for (const auto id : contexts[query.definition]) {
+      if ((query.definition_state && id != *query.definition_state) || !global.states[id])
         continue;
-      const Facts after = transfer(*global->at(id), id, false, true);
+      const Facts after = transfer(*global.states[id], id, false, true);
       for (const Id to : successors.at(id))
-        if (permits(id, to, *global->at(id)))
+        if (permits(id, to, *global.states[id]))
           starts.emplace_back(to, after);
     }
     const RegisterValueSet payload{query.register_name};
     if (!starts.empty() &&
-        propagate(starts, &slice.relevant, &payload, slice.retain, query.use, query.use_state).has_value())
+        propagate(demand, starts, &slice.relevant, &payload, slice.retain, query.use, query.use_state))
       proved.excluded_uses.insert(query);
   }
   for (const GuardedOldWordQuery& query : old_queries) {
@@ -633,12 +746,11 @@ GuardedLifetimeProof guarded_register_lifetimes(
       continue;
     const Slice& slice = get_slice(query.register_name);
     std::vector<Seed> starts;
-    for (Id id = 0; id < instructions.size(); ++id) {
-      if (instructions[id] != query.after_instruction ||
-          (query.execution_state && id != *query.execution_state) || !global->at(id)) continue;
-      const Facts after = transfer(*global->at(id), id, false, true);
+    for (const auto id : contexts[query.after_instruction]) {
+      if ((query.execution_state && id != *query.execution_state) || !global.states[id]) continue;
+      const Facts after = transfer(*global.states[id], id, false, true);
       for (const Id to : successors.at(id))
-        if (permits(id, to, *global->at(id))) starts.emplace_back(to, after);
+        if (permits(id, to, *global.states[id])) starts.emplace_back(to, after);
     }
     const RegisterValueSet payload{query.register_name};
     // The reverse slice includes reads. Public terminal observations must be
@@ -664,7 +776,7 @@ GuardedLifetimeProof guarded_register_lifetimes(
     for (const SelectWindow& window : windows)
       if (relevant[window.branch] && !relevant[window.zero] && relevant[window.nonzero])
         retain.insert(window.store);
-    if (!starts.empty() && propagate(starts, &relevant, &payload, retain,
+    if (!starts.empty() && propagate(demand, starts, &relevant, &payload, retain,
                                     std::nullopt, std::nullopt, true))
       proved.dead_words.insert(query);
   }

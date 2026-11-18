@@ -78,7 +78,7 @@ PackedSignInputProof prove_post_layout_packed_sign_inputs(
   // Backward must proof with grounded producer leaves. A cycle cannot prove
   // itself; every predecessor dependency must independently become ready.
   const auto originate = [&](const std::vector<std::size_t>& roots,
-                             const auto& producer) {
+                             const auto& producer, bool sign_only = false) {
     if (roots.empty()) return false;
     std::deque<std::size_t> pending(roots.begin(), roots.end()), ready;
     std::set<std::size_t> seen, proved;
@@ -95,7 +95,14 @@ PackedSignInputProof prove_post_layout_packed_sign_inputs(
         ready.push_back(state);
         continue;
       }
-      if (!transparent(state) || predecessors[state].empty()) return false;
+      const auto& item = items[flow.execution_states[state].item_index];
+      // K sign preserves an already proved sign, not the original word.
+      // In particular, the old-minus-new orientation proof below must
+      // still stop at it, and an opaque input cannot acquire a sign here.
+      const bool normalizes_sign = sign_only && item.kind == MachineItemKind::Op &&
+          !item.raw && !item.manual_interaction && item.opcode == 0x32;
+      if ((!transparent(state) && !normalizes_sign) || predecessors[state].empty())
+        return false;
       unresolved[state] = predecessors[state].size();
       for (const auto previous : predecessors[state]) {
         if (!charge()) return false;
@@ -129,7 +136,7 @@ PackedSignInputProof prove_post_layout_packed_sign_inputs(
     const bool positive = originate(predecessors[state], [&](auto previous) {
       const auto& item = items[flow.execution_states[previous].item_index];
       return !item.raw && item.opcode >= 0x37 && item.opcode <= 0x3a;
-    });
+    }, true);
     if (result.exhausted) return result;
     if (positive) {
       result.signs.emplace(state, 1);
@@ -184,8 +191,11 @@ PackedSignInputProof prove_post_layout_packed_sign_inputs(
     // arbitrary join. The singleton predecessor check above is mandatory.
     const bool negative = state == witness.target_state ||
         originate(predecessors[state], [&](auto previous) {
-          return previous == witness.target_state && transparent(previous);
-        });
+          if (previous != witness.target_state) return false;
+          const auto& item = items[flow.execution_states[previous].item_index];
+          return transparent(previous) || (item.kind == MachineItemKind::Op &&
+              !item.raw && !item.manual_interaction && item.opcode == 0x32);
+        }, true);
     if (result.exhausted) {
       result.signs.clear();
       return result;

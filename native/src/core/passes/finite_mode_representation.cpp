@@ -301,6 +301,24 @@ std::optional<Projection> projection_after(const std::vector<IrOp>& ops,
   return Projection{operation.opcode, literal->value, literal->end + 1U};
 }
 
+// Keep this composed projection confined to complete right-product consumers.
+// It is not a one-op decoder or a state transition. K sign closes decimal
+// entry and does not move Y/Z/T, so the following binary projection has the
+// same stack arity as a direct literal projection.
+std::optional<Projection> product_projection_after(const std::vector<IrOp>& ops,
+                                                  std::size_t recall) {
+  auto projection = projection_after(ops, recall);
+  if (!projection || projection->opcode != 0x32 || projection->operand)
+    return projection;
+  auto suffix = projection_after(ops, projection->end - 1U);
+  if (!suffix || !suffix->operand || suffix->end >= ops.size() ||
+      !ordinary(ops[suffix->end]) || ops[suffix->end].kind != IrKind::Plain ||
+      ops[suffix->end].opcode != 0x12)
+    return projection;
+  suffix->sign_first = true;
+  return suffix;
+}
+
 struct Macro {
   std::size_t end = 0; // exclusive
   bool definition = false;
@@ -1510,7 +1528,7 @@ std::vector<Plan> discover_inline_coefficient_carriers(
   for (std::size_t i = 0; i < ops.size() && !has_product; ++i) {
     if (ops[i].kind != IrKind::Recall || ops[i].opcode != 0x60 + reg)
       continue;
-    const auto projection = projection_after(ops, i);
+    const auto projection = product_projection_after(ops, i);
     has_product = projection && projection->end < ops.size() &&
         ordinary(ops[projection->end]) && ops[projection->end].kind == IrKind::Plain &&
         ops[projection->end].opcode == 0x12;
@@ -1551,7 +1569,7 @@ std::vector<Plan> discover_inline_coefficient_carriers(
         complete = false;
         break;
       }
-      auto projection = projection_after(ops, read);
+      auto projection = product_projection_after(ops, read);
       if (!projection)
         projection = Projection{-1, std::nullopt, read + 1U}; // logical identity
       const bool product = projection->opcode >= 0 && projection->end < ops.size() &&
@@ -3355,18 +3373,8 @@ bool prove_with_finite_exits(
 // a decimal word; unsupported or rounded constants remain ordinary barriers.
 static std::optional<Projection> preloaded_projection_after(
     const std::vector<IrOp>& ops, std::size_t read) {
-  if (auto projection = projection_after(ops, read)) {
-    if (projection->opcode == 0x32 && !projection->operand) {
-      auto next = projection_after(ops, projection->end - 1U);
-      if (next && next->operand && next->end < ops.size() &&
-          ordinary(ops[next->end]) && ops[next->end].kind == IrKind::Plain &&
-          ops[next->end].opcode == 0x12) {
-        next->sign_first = true;
-        return next;
-      }
-    }
+  if (auto projection = product_projection_after(ops, read))
     return projection;
-  }
   const auto literal = literal_at(ops, read + 1U);
   if (!literal || literal->end + 1U >= ops.size() ||
       !ordinary(ops[literal->end]) || ops[literal->end].kind != IrKind::Plain ||

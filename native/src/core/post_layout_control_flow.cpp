@@ -1270,7 +1270,28 @@ struct ProofSnapshotCache {
 
   template<class Match, class Capture, class Build>
   std::shared_ptr<const Output> get(std::size_t hash, Match match, Capture capture, Build build) {
-    auto& shard = shards_[hash % shards_.size()];
+    // The common sequence of proofs on one worker revisits a few immutable
+    // snapshots. Keep weak references so this tier neither pins evicted
+    // graphs nor carries a graph across compilation owners. A full key
+    // comparison still takes place on a hit, just outside the shard lock.
+    struct Recent {
+      std::weak_ptr<detail::PostLayoutProofCache> owner;
+      std::weak_ptr<Job> job;
+      std::size_t hash = 0;
+    };
+    static thread_local std::array<Recent, 32> recent;
+    auto& local = recent[(hash ^ (hash >> 11U) ^ (hash >> 21U)) % recent.size()];
+    const auto& owner = detail::active_post_layout_proof_cache;
+    if (local.hash == hash && !local.owner.owner_before(owner) && !owner.owner_before(local.owner)) {
+      if (const auto last_job = local.job.lock(); last_job && match(last_job->input)) {
+        hits.fetch_add(1, std::memory_order_relaxed);
+        return last_job->value; // only successful, published jobs enter this tier
+      }
+    }
+    const auto remember = [&](const std::shared_ptr<Job>& completed) {
+      local = Recent{owner, completed, hash};
+    };
+    auto& shard = shards_[(hash ^ (hash >> 11U) ^ (hash >> 21U)) % shards_.size()];
     std::shared_ptr<Job> job;
     bool producer = false;
     {
@@ -1294,6 +1315,7 @@ struct ProofSnapshotCache {
         job->ready.wait(false, std::memory_order_acquire);
       }
       if (job->error) std::rethrow_exception(job->error);
+      remember(job);
       return job->value;
     }
 
@@ -1334,6 +1356,7 @@ struct ProofSnapshotCache {
         erase(shard, hash, job);
       }
     }
+    remember(job);
     return result;
   }
 

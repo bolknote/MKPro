@@ -157,6 +157,11 @@ return-context keys store at most five frames inline, preserving active-frame
 lexicographic order, traversal, formal counters and all previous failure limits.
 These changes reduce allocation/copy work, not proof coverage or candidate cost.
 
+Compilation workers can reuse a recent completed CFG, selector or projection
+snapshot after the same full-key check without acquiring the shared shard lock.
+The worker tier uses weak references tied to the current compilation owner;
+it does not extend the shared cache's retention or publish partial proofs.
+
 This is an implementation-level reference for the current translator in this
 repository. It describes what the compiler optimizes and lowers, where each
 optimization is applied, and how to read reported capabilities.
@@ -6113,6 +6118,12 @@ carrier dependency proof is required; a later global fact cannot prove its own
 retained guard. The IR, original CFG, real register reads and terminal observations
 are unchanged.
 
+Guarded lifetime queries intern the actual guard and literal-entry homes once.
+A physical bank uses inline value slots; larger logical namespaces spill without
+changing the must-join. Each query clears only the reached scratch rows. Exact
+context indices and precomputed fallthroughs retain the same proof transfers,
+query order and exhaustion rules.
+
 Literal source-owned setup words are valid entry facts even when their report
 retains a source line. This grants no permission to retune that initializer,
 replace its ownership or assume it at an external resume. Expression-valued,
@@ -6694,3 +6705,11 @@ rewrite. The compiler can retain a shared selector store entered by unchanged
 predecessors. Publication revalidates the coefficient owner and the address
 equation on the final artifact; loss of the charge or movement of its target
 without a new certificate is a rejection.
+
+Literal-seeded and computed finite carrier webs can synthesize a shorter
+decoder for a complete right product whose coefficient is projected through
+`K sign` and ordinary decimal arithmetic. The proof compares the entire
+finite coefficient table and retains the multiplication itself, including its
+rounding order. `K sign` transports grounded sign facts across exact caller
+contexts; it cannot ground a sign, preserve the complete input word, or act
+as a transparent command in the subtraction-orientation proof.

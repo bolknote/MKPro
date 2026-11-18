@@ -16,14 +16,25 @@ int main() {try {
   const auto flow=build_post_layout_control_flow(items);
   const auto lift=analyze_post_layout_automatic_entry_lift(items,flow,100000);
   if(!lift)throw std::runtime_error("entry proof");
-  std::vector<std::size_t> queries,stores;
+  std::vector<std::size_t> queries,stores,store_contexts;
   for(std::size_t s=0;s<flow.execution_states.size();++s)if(items[flow.execution_states[s].item_index].opcode==0x32)queries.push_back(s);
   for(std::size_t i=0;i<items.size();++i)if(items[i].opcode==0x48)stores.push_back(i);
+  for (std::size_t s = 0; s < flow.execution_states.size(); ++s)
+    if (items[flow.execution_states[s].item_index].opcode == 0x48) store_contexts.push_back(s);
   const auto proof=prove_post_layout_packed_sign_inputs(items,flow,*lift,queries,&p,100000);
   const auto& signs=proof.signs;
   bool positive=false,negative=false;
   for(const auto& [s,v]:signs){(void)s;positive|=v==1;negative|=v==-1;}
   if(!positive||!negative)throw std::runtime_error("caller-context signed word facts");
+  const auto normalized = prove_post_layout_packed_sign_inputs(items, flow, *lift, store_contexts, &p);
+  bool normalized_positive = false, normalized_negative = false;
+  for (const auto& [state, sign] : normalized.signs) {
+    (void)state;
+    normalized_positive |= sign == 1;
+    normalized_negative |= sign == -1;
+  }
+  if (normalized.signs.size() != store_contexts.size() || !normalized_positive || !normalized_negative)
+    throw std::runtime_error("K sign lost a grounded caller-specific sign at the shared store");
   const auto numeric=prove_post_layout_numeric_ranges(items,flow,*lift,stores,&p);
   if(numeric.exhausted)throw std::runtime_error("numeric proof budget");
   for(const auto store:stores) {
@@ -51,5 +62,7 @@ int main() {try {
   const std::vector<PreloadReport> raw{{.register_name="1",.value="FA"}};
   if(!rawlift||prove_post_layout_numeric_ranges(opaque,rawflow,*rawlift,{2},&raw).x_before.contains(2))
     throw std::runtime_error("super-number sign must remain unknown");
+  if (!prove_post_layout_packed_sign_inputs(opaque, rawflow, *rawlift, {2U}, &raw).signs.empty())
+    throw std::runtime_error("opaque sign input must not become a producer certificate");
   std::cout<<"packed sign/numeric proof transport contracts passed\n";return 0;
 }catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}}
