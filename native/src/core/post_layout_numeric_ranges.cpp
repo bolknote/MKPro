@@ -61,10 +61,9 @@ Range join(const Range& left, const Range& right) {
 // Used only after each caller bounds the exponent to 0..8. These powers
 // and every interval endpoint below are exactly representable on the MK-61.
 std::int64_t decimal_power(std::int64_t exponent) {
-  std::int64_t value = 1;
-  for (std::int64_t digit = 0; digit < exponent; ++digit)
-    value *= 10;
-  return value;
+  constexpr std::array<std::int64_t, 9> powers{1, 10, 100, 1000, 10000,
+      100000, 1000000, 10000000, 100000000};
+  return powers[static_cast<std::size_t>(exponent)];
 }
 
 Range unary(int opcode, const Range& input) {
@@ -152,6 +151,8 @@ using Quantum = std::optional<QuantizedRange>;
 Quantum quantized(std::int64_t lo, std::int64_t hi, std::int64_t denominator) {
   if (denominator <= 0 || lo > hi)
     return std::nullopt;
+  if (denominator == 1)
+    return lo >= -limit && hi <= limit ? Quantum{QuantizedRange{lo, hi, 1}} : std::nullopt;
   if (lo == hi) {
     const auto common = std::gcd(lo < 0 ? -lo : lo, denominator);
     lo /= common;
@@ -181,6 +182,7 @@ Quantum quantized_range(const Range& range) {
 }
 
 Range quantized_enclosure(const QuantizedRange& q) {
+  if (q.denominator == 1) return bounded(q.lower, q.upper, true);
   return bounded(q.lower / q.denominator - (q.lower % q.denominator < 0 ? 1 : 0),
                  q.upper / q.denominator + (q.upper % q.denominator > 0 ? 1 : 0),
                  q.denominator == 1);
@@ -189,6 +191,11 @@ Range quantized_enclosure(const QuantizedRange& q) {
 Quantum join_quantized(const Quantum& a, const Quantum& b) {
   if (!a || !b)
     return std::nullopt;
+  // All operands have already passed quantized(). Avoid another gcd and
+  // decimal normalization at the many unchanged fixed-point joins.
+  if (a == b) return a;
+  if (a->denominator == b->denominator)
+    return quantized(std::min(a->lower, b->lower), std::max(a->upper, b->upper), a->denominator);
   const auto common = std::gcd(a->denominator, b->denominator);
   const auto left_scale = b->denominator / common;
   const auto right_scale = a->denominator / common;
@@ -829,6 +836,55 @@ struct NumericProgressProjection {
   }
 };
 
+// Keep the dense worklist's key order and fan-out, but don't construct a
+// vector object for every possible (state, slot) pair. Most have no users
+// or up to two; the few longer rows spill without changing visit order.
+class NumericDependents {
+ public:
+  explicit NumericDependents(std::size_t count) : rows_(count) {}
+
+  void insert(std::size_t key, std::uint32_t user) {
+    auto& row = rows_[key];
+    if (row.second == kSpill) {
+      auto& list = spill_[row.first];
+      const auto at = std::lower_bound(list.begin(), list.end(), user);
+      if (at == list.end() || *at != user) list.insert(at, user);
+      return;
+    }
+    if (row.first == user || row.second == user) return;
+    if (row.first == kEmpty) {
+      row.first = user;
+    } else if (row.second == kEmpty) {
+      row.second = user;
+      if (row.first > row.second) std::swap(row.first, row.second);
+    } else {
+      std::array values{row.first, row.second, user};
+      std::sort(values.begin(), values.end());
+      const auto index = static_cast<std::uint32_t>(spill_.size());
+      spill_.emplace_back(values.begin(), values.end());
+      row = {index, kSpill};
+    }
+  }
+
+  template<class Visit>
+  void visit(std::size_t key, const Visit& callback) const {
+    const auto& row = rows_[key];
+    if (row.second == kSpill) {
+      for (const auto user : spill_[row.first]) callback(user);
+    } else if (row.first != kEmpty) {
+      callback(row.first);
+      if (row.second != kEmpty) callback(row.second);
+    }
+  }
+
+ private:
+  static constexpr std::uint32_t kEmpty = 0xffffffffU;
+  static constexpr std::uint32_t kSpill = kEmpty - 1U;
+  struct Row { std::uint32_t first = kEmpty, second = kEmpty; };
+  std::vector<Row> rows_;
+  std::vector<std::vector<std::uint32_t>> spill_;
+};
+
 static PostLayoutNumericRangeProof prove_numeric_ranges_on_graph(
     const std::vector<MachineItem>& items,
     const AuthoritativePostLayoutControlFlow& flow,
@@ -1081,7 +1137,7 @@ static PostLayoutNumericRangeProof prove_numeric_ranges_on_graph(
     bool operator==(const Fact&) const = default;
   };
   const Fact unknown{true, std::nullopt, std::nullopt};
-  const auto constant = [precise_memory_values](Range range, Quantum quantum = std::nullopt) {
+  const auto normalize_number = [precise_memory_values](Range& range, Quantum& quantum) {
     if (quantum && (precise_memory_values || !range || quantum->denominator == 1)) {
       const auto precise = quantized_enclosure(*quantum);
       if (range && precise)
@@ -1095,6 +1151,9 @@ static PostLayoutNumericRangeProof prove_numeric_ranges_on_graph(
       quantum.reset();
     else if (!quantum)
       quantum = quantized_range(range);
+  };
+  const auto constant = [&](Range range, Quantum quantum = std::nullopt) {
+    normalize_number(range, quantum);
     const bool integer_word = range && range->integral && range->lower >= 1;
     const auto mantissa = range ? ordinary_mantissa() : MantissaShape{};
     auto fact = Fact{true, std::move(range), std::move(quantum), integer_word, mantissa};
@@ -1132,7 +1191,12 @@ static PostLayoutNumericRangeProof prove_numeric_ranges_on_graph(
   const auto merge = [&](const Fact& a, const Fact& b) {
     if (!a.grounded) return b;
     if (!b.grounded) return a;
-    auto joined = constant(join(a.range, b.range), join_quantized(a.quantum, b.quantum));
+    auto range = join(a.range, b.range);
+    auto quantum = join_quantized(a.quantum, b.quantum);
+    normalize_number(range, quantum);
+    // Do not compute a new enclosure or mantissa just to overwrite it with
+    // the must-join of the incoming word facts below.
+    Fact joined{true, std::move(range), std::move(quantum)};
     joined.integer_selector_word = a.integer_selector_word && b.integer_selector_word;
     joined.canonical_small_integer = a.canonical_small_integer && b.canonical_small_integer;
     joined.normalized_or_payload = a.normalized_or_payload && b.normalized_or_payload;
@@ -1264,7 +1328,7 @@ static PostLayoutNumericRangeProof prove_numeric_ranges_on_graph(
   }
   std::vector<Fact> dense_cache(dense_slots);
   std::vector<bool> dense_present(dense_slots, false), dense_queued(dense_slots, false);
-  std::vector<detail::InlineProofRow<std::uint32_t, 2>> dense_dependents(dense_slots);
+  NumericDependents dense_dependents(dense_slots);
   std::vector<std::size_t> dense_changes(dense_slots, 0U);
   std::unordered_map<Key, Fact, KeyHash> cache;
   std::vector<bool> canonical_memory_loads(count, false);
@@ -1289,8 +1353,9 @@ static PostLayoutNumericRangeProof prove_numeric_ranges_on_graph(
   };
   const auto visit_dependents = [&](const Key& key, const auto& visit) {
     if (dense) {
-      for (const auto user : dense_dependents.at(dense_index(key)))
+      dense_dependents.visit(dense_index(key), [&](std::uint32_t user) {
         visit(Key{user / 19U, static_cast<int>(user % 19U)});
+      });
     } else if (const auto found = dependents.find(key); found != dependents.end()) {
       for (const auto& user : found->second) visit(user);
     }
@@ -1330,11 +1395,31 @@ static PostLayoutNumericRangeProof prove_numeric_ranges_on_graph(
     if (inserted)
       enqueue(key);
     if (evaluating) {
-      if (dense) dense_dependents.at(dense_index(key)).insert_sorted_unique(
+      if (dense) dense_dependents.insert(dense_index(key),
           static_cast<std::uint32_t>(dense_index(*evaluating)));
       else dependents[key].insert(*evaluating);
     }
     return *value;
+  };
+  // Fixed model and register bank for this interpreter. Cache only exact
+  // small integer words; raw words and the authoritative alias check are
+  // not part of this lookup. All other operands use the original decoder.
+  constexpr std::int8_t not_decoded = -2, no_memory_target = -1;
+  std::array<std::array<std::int8_t, 100>, 15> small_selector_targets;
+  for (auto& row : small_selector_targets) row.fill(not_decoded);
+  const auto integer_memory_target = [&](int reg, std::int64_t number) -> std::optional<int> {
+    const auto decode = [&]() -> std::optional<int> {
+      const auto word = evaluate_indirect_address(std::string(1, "0123456789abcde"[reg]),
+          std::to_string(number), IndirectOperationKind::Memory, flow.address_space_model);
+      return word ? word->memory_target : std::nullopt;
+    };
+    if (number < 0 || number >= 100) return decode();
+    auto& target = small_selector_targets[static_cast<std::size_t>(reg)][static_cast<std::size_t>(number)];
+    if (target == not_decoded) {
+      const auto decoded = decode();
+      target = decoded ? static_cast<std::int8_t>(*decoded) : no_memory_target;
+    }
+    return target == no_memory_target ? std::nullopt : std::optional<int>{target};
   };
   const auto after = [&](std::size_t state, int slot, std::size_t successor) -> Fact {
     const auto at = flow.execution_states[state].item_index;
@@ -1353,11 +1438,8 @@ static PostLayoutNumericRangeProof prove_numeric_ranges_on_graph(
       std::optional<int> selected;
       if (reg < 4 && counter.normalized_or_payload) selected = 7;
       else if (counter.integer_selector_word && counter.range && counter.range->integral &&
-               counter.range->lower == counter.range->upper) {
-        const auto decoded = evaluate_indirect_address(std::string(1, "0123456789abcde"[reg]),
-            std::to_string(counter.range->lower), IndirectOperationKind::Memory, flow.address_space_model);
-        if (decoded) selected = decoded->memory_target;
-      }
+               counter.range->lower == counter.range->upper)
+        selected = integer_memory_target(reg, counter.range->lower);
       if (selected) {
         if (!memory_targets || std::find(memory_targets->begin(), memory_targets->end(), *selected) == memory_targets->end())
           return unknown;

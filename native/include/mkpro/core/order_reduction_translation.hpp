@@ -12,8 +12,9 @@ struct OrderReductionTranslationProof {
 };
 
 // A negative-only preflight over the same relational transfer. Assume
-// numeric side conditions can hold; defer if they can select a different
-// relation or execution path. False includes inconclusive.
+// numeric side conditions can hold. Walk alias-independent transfers and
+// defer unresolved paths; an unconditional rejection is still decisive.
+// False includes inconclusive.
 bool order_reduction_translation_is_structurally_impossible(
     const std::vector<MachineItem>& items,
     const AuthoritativePostLayoutControlFlow& flow,

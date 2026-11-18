@@ -82395,7 +82395,9 @@ CompileResult compile_source(std::string source, const CompileOptions& requested
                 << " literals=" << stats.literals.builds << '/' << stats.literals.hits << '/' << stats.literals.waits
                 << " closures=" << stats.closures.builds << '/' << stats.closures.hits << '/' << stats.closures.waits
                 << " order-proofs=" << stats.order_proofs.builds << '/' << stats.order_proofs.hits
-                << '/' << stats.order_proofs.waits << '\n';
+                << '/' << stats.order_proofs.waits
+                << " completed-frontiers=" << stats.frontiers.builds << '/'
+                << stats.frontiers.hits << '\n';
     }
   };
   const JointWorkTrace joint_work_trace{joint_work,

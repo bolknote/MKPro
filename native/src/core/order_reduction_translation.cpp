@@ -86,15 +86,27 @@ static OrderReductionTranslationProof prove_order_reduction_translation_impl(
     maximum_delta = std::min(maximum_delta, static_cast<int>(floor(100 * scale - 1 - enclosure->upper)));
     return minimum_delta <= maximum_delta;
   };
+  std::vector<const std::array<OrdinaryStackValue, 4>*> stack_rows;
+  std::vector<unsigned> negative_slots;
+  if (bounds) {
+    stack_rows.resize(count);
+    negative_slots.resize(count);
+    for (const auto& [state, row] : bounds->stack_before_state) {
+      if (state >= count) continue;
+      stack_rows[state] = &row;
+      for (std::size_t slot = 0; slot < row.size(); ++slot) {
+        const auto& value = row[slot];
+        if (value.ordinary && ((value.enclosure && value.enclosure->upper < 0) ||
+                               (value.range && value.range->upper < 0)))
+          negative_slots[state] |= 1U << slot;
+      }
+    }
+  }
   const auto value_at = [&](std::size_t state, std::size_t slot) -> OrdinaryStackValue {
-    if (!bounds) return {};
-    const auto found = bounds->stack_before_state.find(state);
-    return found == bounds->stack_before_state.end() ? OrdinaryStackValue{} : found->second[slot];
+    return bounds && stack_rows[state] ? (*stack_rows[state])[slot] : OrdinaryStackValue{};
   };
   const auto negative_at = [&](std::size_t state, std::size_t slot) {
-    const auto value = value_at(state, slot);
-    return value.ordinary && ((value.enclosure && value.enclosure->upper < 0) ||
-                              (value.range && value.range->upper < 0));
+    return bounds && (negative_slots[state] & (1U << slot)) != 0U;
   };
   PostLayoutSuccessors predecessors(count);
   for (std::size_t state = 0; state < count; ++state)
@@ -132,6 +144,7 @@ static OrderReductionTranslationProof prove_order_reduction_translation_impl(
   for (const auto state : boundaries.main_states) pending.emplace_back(state, Values{});
   if (pending.empty()) return reject("missing main entry");
   bool used_maximum = false;
+  bool deferred_alias_path = false;
   while (!pending.empty()) {
     auto [state, values] = pending.front(); pending.pop_front();
     if (!seen.emplace(state, values).second) continue;
@@ -180,9 +193,39 @@ static OrderReductionTranslationProof prove_order_reduction_translation_impl(
       const auto targets = flow.indirect_memory_targets.find(at);
       if (targets == flow.indirect_memory_targets.end() || targets->second.empty())
         return fail("unknown memory aliases");
-      // A numeric alias can select a different path or make the proof fail.
-      // Never derive a structural rejection from an arbitrarily chosen alias.
-      if (!bounds && targets->second.size() != 1U) return defer_to_numeric();
+      const auto after_target = [&](int target) {
+        auto next_values = values;
+        if (reg <= 6) next_values[4U + static_cast<std::size_t>(reg)] = Equal;
+        if (family == 0xb0) next_values[4U + static_cast<std::size_t>(target)] = values[0];
+        else {
+          // Mutation precedes a self recall. Equal selector WORDS produce
+          // equal updated words, even at the zero-underflow boundary.
+          next_values[0] = target == reg && reg <= 6 ? Cell{Equal}
+              : values[4U + static_cast<std::size_t>(target)];
+          next_values[1] = values[0]; next_values[2] = values[1]; next_values[3] = values[2];
+          next_values[entry_x] = values[0];
+        }
+        return next_values;
+      };
+      if (!bounds && targets->second.size() != 1U) {
+        // A numeric alias can prune an ambiguous path. Follow it without
+        // bounds only when EVERY declared alias has the same abstract
+        // transfer. An unresolved path must not hide a rejection proved
+        // on a different, already unconditional path.
+        const auto valid = [](int target) { return target >= 0 && target < 15; };
+        if (!std::all_of(targets->second.begin(), targets->second.end(), valid)) {
+          deferred_alias_path = true;
+          continue;
+        }
+        const auto common = after_target(targets->second.front());
+        if (!std::all_of(std::next(targets->second.begin()), targets->second.end(),
+                        [&](int target) { return after_target(target) == common; })) {
+          deferred_alias_path = true;
+          continue;
+        }
+        for (const auto next : flow.execution_successors[state]) pending.emplace_back(next, common);
+        continue;
+      }
       auto selected_targets = targets->second;
       if (bounds) if (const auto known = bounds->memory_selector_before_state.find(state);
           known != bounds->memory_selector_before_state.end()) {
@@ -205,18 +248,7 @@ static OrderReductionTranslationProof prove_order_reduction_translation_impl(
       // correlation between the selected bank and its stored relation.
       for (const int target : selected_targets) {
         if (target < 0 || target >= 15) return fail("invalid memory alias");
-        auto next_values = values;
-        if (reg <= 6) next_values[4U + static_cast<std::size_t>(reg)] = Equal;
-        if (family == 0xb0) next_values[4U + static_cast<std::size_t>(target)] = values[0];
-        else {
-          // Mutation precedes a self recall. Equal selector WORDS produce
-          // equal updated words, even at the zero-underflow boundary; they
-          // need not retain the old numeric value or its negative class.
-          next_values[0] = target == reg && reg <= 6 ? Cell{Equal}
-              : values[4U + static_cast<std::size_t>(target)];
-          next_values[1] = values[0]; next_values[2] = values[1]; next_values[3] = values[2];
-          next_values[entry_x] = values[0];
-        }
+        const auto next_values = after_target(target);
         for (const auto next : flow.execution_successors[state]) pending.emplace_back(next, next_values);
       }
       continue;
@@ -373,6 +405,7 @@ static OrderReductionTranslationProof prove_order_reduction_translation_impl(
       pending.emplace_back(next, next_values);
     }
   }
+  if (deferred_alias_path) return defer_to_numeric();
   if (!used_maximum || (minimum_delta == 0 && maximum_delta == 0)) return reject("no nontrivial order-only family");
   if (!bounds) return defer_to_numeric();
   result.proved = true;

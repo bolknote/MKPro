@@ -2,6 +2,8 @@
 #include "mkpro/core/joint_representation_search.hpp"
 #include "mkpro/core/joint_proof_input.hpp"
 #include "mkpro/core/joint_constraint_origins.hpp"
+#include "mkpro/core/detail/joint_layout_work.hpp"
+#include "mkpro/core/detail/exact_layout_image_interner.hpp"
 #include "mkpro/core/indirect_addressing.hpp"
 #include "mkpro/core/natural_target_component_layout.hpp"
 #include "mkpro/core/emit/machine_emitter.hpp"
@@ -16,6 +18,7 @@
 #include "test_support.hpp"
 
 #include <algorithm>
+#include <future>
 #include <iostream>
 #include <limits>
 #include <map>
@@ -35,6 +38,85 @@ void emit(std::vector<MachineItem>& items, std::initializer_list<int> code) {
 int cells(const LayoutSearchArtifact& artifact) {
   return static_cast<int>(std::count_if(artifact.items.begin(), artifact.items.end(),
       [](const auto& item) { return item.kind != MachineItemKind::Label; }));
+}
+
+void relaxed_region_order_contracts() {
+  std::vector<MachineItem> items;
+  emit(items, {0x52}); // fixed root at 00
+  items.push_back(MachineItem::label("first-anchor"));
+  emit(items, {0x52});
+  items.push_back(MachineItem::label("second-anchor"));
+  emit(items, {0x52});
+  emit(items, {0x54, 0x52});       // the only two-cell component
+  emit(items, {0x54, 0x54, 0x52}); // fits neither two-cell gap
+  const auto ir = raise_machine_to_ir(items);
+  const std::map<std::string, int> anchors{{"first-anchor", 3}, {"second-anchor", 6}};
+  const passes::RelaxedSymbolicRegionConstraints relaxation;
+  require(passes::symbolic_region_constraints_may_fit(ir, {}, anchors, "second-anchor", 6, 6, 0),
+          "independent subset sums can borrow the same component for both gaps");
+  require(!passes::symbolic_region_constraints_may_fit(ir, {}, anchors, "second-anchor", 6, 6, 0,
+              std::nullopt, &relaxation),
+          "joint feasibility cannot put one component in two disjoint gaps");
+  require(passes::symbolic_region_constraints_may_fit(ir, {}, anchors, "second-anchor", 6, 6, 2,
+              11, &relaxation) &&
+          !passes::symbolic_region_constraints_may_fit(ir, {}, anchors, "second-anchor", 6, 6, 2,
+              10, &relaxation),
+          "waiting at a seam is legal in the relaxation but every cell counts against the size bound");
+  const passes::RelaxedSymbolicRegionConstraints incomplete{.maximum_order_states = 1};
+  require(passes::symbolic_region_constraints_may_fit(ir, {}, anchors, "second-anchor", 6, 6, 0,
+              std::nullopt, &incomplete),
+          "an incomplete subset search does not reject an unresolved geometry");
+}
+
+void gapless_prefix_replay_contracts() {
+  std::vector<MachineItem> items;
+  const std::array<std::string, 7> targets{"large-a", "large-b", "large-c",
+      "small-a", "small-b", "small-c", "anchor"};
+  for (const auto& name : targets) {
+    emit(items, {0x53});
+    items.push_back(MachineItem::address(name));
+  }
+  emit(items, {0x50});
+  items.back().stop_disposition = StopDisposition::Terminal;
+  for (std::size_t i = 0; i < targets.size(); ++i) {
+    items.push_back(MachineItem::label(targets[i]));
+    const int prefix = i < 3 ? 3 : i < 6 ? 2 : 0;
+    for (int n = 0; n < prefix; ++n) emit(items, {0x54});
+    emit(items, {0x52});
+  }
+  const CompileOptions options;
+  const auto ir = raise_machine_to_ir(items);
+  const std::map<std::string, int> fixed{{"anchor", 24}};
+  // Root width 15; the three three-cell parts alone can fill a nine-cell
+  // gap. Earlier width-four alternatives visit some equal failed subsets
+  // in different orders. Count their work as in the un-memoized search.
+  const auto placed = passes::layout_symbolic_regions(ir, fixed, {options}, 30);
+  require(placed && placed->work == 30 && placed->projected_targets.at("small-a") == 15 &&
+          placed->projected_targets.at("small-b") == 18 &&
+          placed->projected_targets.at("small-c") == 21 &&
+          placed->projected_targets.at("anchor") == 24,
+          "replayed failed prefixes preserve both the first layout and its logical work");
+  require(!passes::layout_symbolic_regions(ir, fixed, {options}, 29),
+          "memoized dead ends cannot spend less of the gapless budget");
+}
+
+void exact_layout_image_interner_contracts() {
+  detail::ExactLayoutImageInterner interner;
+  std::vector<MachineItem> image;
+  for (int i = 0; i < 35; ++i) emit(image, {0x54});
+  image[18].roles = {"same-a", "original-proof", "same-b"};
+  const auto ids = interner.intern(image);
+  require(ids.size() == 3 && interner.intern(image) == ids,
+          "equal images share their exact chunk identities");
+  auto changed = image;
+  changed[18].roles[1] = "changed-proof"; // same bucket, different typed item
+  const auto other = interner.intern(changed);
+  require(ids[0] == other[0] && ids[1] != other[1] && ids[2] == other[2],
+          "identical bytecodes and hashes cannot merge different proof metadata");
+  changed.pop_back();
+  const auto shorter = interner.intern(changed);
+  require(shorter[0] == other[0] && shorter[1] == other[1] && shorter[2] != other[2],
+          "the final partial chunk preserves exact image length");
 }
 
 LayoutSearchArtifact fixture(bool expose_selector = false, bool different_effect = false) {
@@ -1967,9 +2049,31 @@ void run() {
   require(same_layout_search_artifact(input, original), "search must never mutate its root");
   std::cout << "joint constraints: " << cells(input) << " -> " << cells(best) << " cells\n";
 
-  const auto repeated = search_joint_representation_constraints(input, options);
-  require(repeated.incumbent && same_layout_search_artifact(best, *repeated.incumbent),
-          "search and final selector words must be deterministic");
+  {
+    const auto work = detail::make_joint_layout_work();
+    const detail::JointLayoutWorkScope scope(work);
+    const auto repeated = search_joint_representation_constraints(input, options);
+    require(repeated.incumbent && same_layout_search_artifact(best, *repeated.incumbent),
+            "search and final selector words must be deterministic");
+    const auto before = detail::joint_layout_work_stats(*work).frontiers;
+    const auto replayed = std::async(std::launch::async, [&] {
+      const detail::JointLayoutWorkScope worker_scope(work);
+      auto root = input;
+      root.optimizations.push_back({"test-worker-report", "current root only"});
+      return search_joint_representation_constraints(root, options);
+    }).get();
+    const auto after = detail::joint_layout_work_stats(*work).frontiers;
+    require(after.hits == before.hits + 1 && after.builds == before.builds && !after.waits &&
+            replayed.incumbent && same_layout_search_artifact(*repeated.incumbent, *replayed.incumbent) &&
+            replayed.expanded == repeated.expanded && replayed.admitted == repeated.admitted &&
+            replayed.duplicate == repeated.duplicate && replayed.rejected == repeated.rejected &&
+            replayed.budget_exhausted == repeated.budget_exhausted,
+            "another worker must reuse the complete search, including frontier accounting");
+    const auto& reports = replayed.incumbent->optimizations;
+    require(reports.size() == repeated.incumbent->optimizations.size() + 1 &&
+            reports.at(input.optimizations.size()).name == "test-worker-report",
+            "completed frontier must restore only the current worker's input report prefix");
+  }
   std::size_t finalizer_vetoes = 0;
   const auto vetoed = search_joint_representation_constraints(input,options,
       [&](const LayoutSearchArtifact&) -> std::optional<LayoutSearchArtifact> {
@@ -2003,6 +2107,9 @@ void run() {
 
 int main() {
   try {
+    relaxed_region_order_contracts();
+    gapless_prefix_replay_contracts();
+    exact_layout_image_interner_contracts();
     set_valued_closure_frontier_contracts();
     mutable_selector_keeps_independent_charge_origins();
     deferred_web_recoloring_contracts();

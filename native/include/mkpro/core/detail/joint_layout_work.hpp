@@ -16,6 +16,7 @@ struct JointLayoutWorkCounts {
 
 struct JointLayoutWorkStats {
   JointLayoutWorkCounts variants, literals, closures, order_proofs;
+  JointLayoutWorkCounts frontiers;
 };
 
 std::shared_ptr<JointLayoutWork> make_joint_layout_work();

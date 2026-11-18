@@ -123,11 +123,27 @@ GaplessPacking pack_gapless_regions(const std::vector<Component>& parts,
 
   GaplessPacking result;
   result.order.reserve(parts.size());
+  struct FailedPrefix {
+    std::uint32_t used = 0xffffffffU;
+    std::size_t work = 0;
+  };
+  std::array<FailedPrefix, 128> failed;
   const auto place = [&](auto&& self, std::uint32_t used, int address) -> bool {
-    if (result.work++ >= maximum_work)
+    const auto before = result.work++;
+    if (before >= maximum_work)
       return false;
     if (result.order.size() == parts.size())
       return true;
+    // In a gapless prefix, the set of used components determines its
+    // end. The remaining DFS order is independent of the prefix order.
+    // Replay the exact logical cost of a completely explored failure.
+    // Near the limit the old traversal may be cut off inside that branch;
+    // use it verbatim instead of buying another search slot.
+    auto& failure = failed[(used ^ (used >> 7U) ^ (used >> 14U)) % failed.size()];
+    if (failure.used == used && failure.work < maximum_work - before) {
+      result.work = before + failure.work;
+      return false;
+    }
     std::optional<std::size_t> due;
     int deadline = 1000000;
     for (std::size_t i = 0; i < parts.size(); ++i) {
@@ -156,10 +172,80 @@ GaplessPacking pack_gapless_regions(const std::vector<Component>& parts,
       if (result.work >= maximum_work)
         return false;
     }
+    if (result.work < maximum_work)
+      failure = {used, result.work - before};
     return false;
   };
   result.placed = place(place, 0, 0);
   cached = Entry{std::move(input), result};
+  return result;
+}
+
+bool relaxed_region_order_may_fit(const std::vector<Component>& parts,
+    const std::vector<std::optional<int>>& starts,
+    const std::vector<std::pair<int, int>>& bounds, int padding_limit,
+    std::size_t maximum_states) {
+  if (maximum_states == 0U) return true;
+  GaplessPackingInput input{.maximum_work = maximum_states};
+  input.slots.reserve(parts.size());
+  std::size_t hash = maximum_states ^ static_cast<std::size_t>(padding_limit);
+  const auto mix = [&](int value) { hash = hash * 16777619U ^ static_cast<std::size_t>(value); };
+  for (std::size_t i = 0; i < parts.size(); ++i) {
+    // Zero-width labels can commute with their neighbours in the real
+    // packer; dropping them is a safe relaxation, not a placement witness.
+    if (parts[i].cells == 0) continue;
+    const auto window = starts[i] ? std::pair{*starts[i], *starts[i]} : bounds[i];
+    input.slots.push_back({parts[i].cells, std::nullopt, window});
+    mix(parts[i].cells);
+    mix(window.first);
+    mix(window.second);
+  }
+  struct Entry { GaplessPackingInput input; int padding; bool may_fit; };
+  static thread_local std::array<std::optional<Entry>, 256> memo;
+  auto& cached = memo[hash % memo.size()];
+  if (cached && cached->padding == padding_limit && cached->input == input)
+    return cached->may_fit;
+
+  std::vector<std::size_t> order(input.slots.size());
+  std::iota(order.begin(), order.end(), 0U);
+  std::stable_sort(order.begin(), order.end(), [&](auto a, auto b) {
+    return input.slots[a].bounds.second < input.slots[b].bounds.second;
+  });
+  const auto all = (std::uint32_t{1} << order.size()) - 1U;
+  std::unordered_map<std::uint32_t, std::int64_t> earliest_end;
+  earliest_end.reserve(std::min(maximum_states, order.size() * 4U));
+  std::size_t work = 0;
+  const auto fit = [&](auto&& self, std::uint32_t placed, std::int64_t end, int width) -> bool {
+    if (placed == all) return true;
+    // At a fixed subset the occupied width is fixed. A smaller end has
+    // consumed less padding and can reproduce any later placement by
+    // waiting until the same address. Padding is allowed at every seam in
+    // this relaxation; the real packer still checks whether it is legal.
+    const auto [at, inserted] = earliest_end.try_emplace(placed, end);
+    if (!inserted) {
+      if (at->second <= end) return false;
+      at->second = end;
+    }
+    if (work++ >= maximum_states) return true;
+    for (const auto i : order) {
+      const auto bit = std::uint32_t{1} << i;
+      if (placed & bit) continue;
+      // A missed deadline for any remaining component is irreversible.
+      if (end > input.slots[i].bounds.second) return false;
+      break; // remaining components are in ascending deadline order
+    }
+    for (const auto i : order) {
+      const auto bit = std::uint32_t{1} << i;
+      if (placed & bit) continue;
+      const auto& slot = input.slots[i];
+      const auto start = std::max<std::int64_t>(end, slot.bounds.first);
+      if (start > slot.bounds.second || start - width > padding_limit) continue;
+      if (self(self, placed | bit, start + slot.width, width + slot.width)) return true;
+    }
+    return false;
+  };
+  const bool result = fit(fit, 0, 0, 0);
+  cached = Entry{std::move(input), padding_limit, result};
   return result;
 }
 
@@ -488,7 +574,7 @@ bool symbolic_region_constraints_may_fit(
     const std::vector<IrOp>& ops, const std::vector<int>& projected_widths,
     const std::map<std::string, int>& required_targets, const std::string& target,
     int minimum_address, int maximum_address, int padding_limit,
-    std::optional<int> exclusive_cells) {
+    std::optional<int> exclusive_cells, const RelaxedSymbolicRegionConstraints* relaxation) {
   auto parts = components(ops);
   if (parts.empty() || parts.size() > 24U || minimum_address < 0 ||
       minimum_address > maximum_address || maximum_address > 99 || padding_limit < 0 ||
@@ -496,6 +582,7 @@ bool symbolic_region_constraints_may_fit(
     return true;
   std::map<std::string_view, std::pair<std::size_t, int>, std::less<>> labels;
   std::vector<std::optional<int>> starts(parts.size());
+  std::vector<bool> manual_parts(parts.size(), false);
   starts[0] = 0;
   int original = 0, cells = 0;
   for (std::size_t i = 0; i < parts.size(); ++i) {
@@ -511,8 +598,10 @@ bool symbolic_region_constraints_may_fit(
     }
     if (std::any_of(ops.begin() + static_cast<std::ptrdiff_t>(part.begin),
                     ops.begin() + static_cast<std::ptrdiff_t>(part.end),
-                    [](const auto& op) { return op.meta.manual_interaction.has_value(); }))
+                    [](const auto& op) { return op.meta.manual_interaction.has_value(); })) {
+      manual_parts[i] = true;
       starts[i] = original;
+    }
     for (std::size_t at = part.begin; at < part.end; ++at)
       original += cells_per_op(ops[at]);
     cells += part.cells;
@@ -538,7 +627,39 @@ bool symbolic_region_constraints_may_fit(
   // use the wider official fallback; leave them unrestricted here.
   std::vector<std::pair<int, int>> bounds(parts.size(), {0, 1000000});
   bounds[part] = range;
+  if (relaxation) {
+    for (const auto& [name, window] : relaxation->target_bounds) {
+      const auto at = labels.find(name);
+      if (at == labels.end()) continue;
+      if (window.first < 0 || window.first > window.second) return true;
+      const auto [owner, offset_at] = at->second;
+      bounds[owner].first = std::max(bounds[owner].first, window.first - offset_at);
+      bounds[owner].second = std::min(bounds[owner].second, window.second - offset_at);
+      if (bounds[owner].first > bounds[owner].second) return false;
+    }
+    if (relaxation->address_space_model) {
+      for (const auto& op : ops) {
+        if (!op.target_meta.formal_opcode) continue;
+        const auto* name = std::get_if<std::string>(&op.target);
+        if (!name || *op.target_meta.formal_opcode < 0 || *op.target_meta.formal_opcode > 255)
+          return true;
+        const auto at = labels.find(*name);
+        if (at == labels.end()) return true;
+        const auto [owner, offset_at] = at->second;
+        // The actual layout first installs formal anchors, then pins manual
+        // components. Use the latter anchor by itself when they coincide.
+        if (manual_parts[owner]) continue;
+        const int fixed = formal_address_info(*op.target_meta.formal_opcode,
+            *relaxation->address_space_model).actual - offset_at;
+        if (fixed < 0 || (starts[owner] && *starts[owner] != fixed)) return false;
+        starts[owner] = fixed;
+      }
+    }
+  }
   if (!anchored_gaps_can_fit(parts, starts, bounds, padding_limit)) return false;
+  if (relaxation)
+    return relaxed_region_order_may_fit(parts, starts, bounds, padding_limit,
+        relaxation->maximum_order_states);
   if (starts[part] || parts[part].cells == 0) return true;
   for (int start = range.first; start <= range.second; ++start) {
     bool free = true;

@@ -60,14 +60,23 @@ bool unprojected_symbolic_region_target_may_fit(
     const std::vector<IrOp>& ops, const std::string& label,
     int minimum_address, int maximum_address, int maximum_padding_cells);
 
-// Relaxed geometry over exact hard anchors and a single required target
-// range. Other selector constraints are dropped, so a rejection also rules
-// out the wider official-encoding fallback. Empty widths mean ordinary IR.
+struct RelaxedSymbolicRegionConstraints {
+  std::optional<AddressSpaceModel> address_space_model;
+  // Must include every address the eventual binder may try, including its
+  // wider official-encoding fallback. Absent labels can be ignored.
+  std::map<std::string, std::pair<int, int>> target_bounds;
+  std::size_t maximum_order_states = 2048;
+};
+
+// Necessary geometry only. Empty widths mean ordinary IR. When given more
+// relaxed bounds, prove joint incompatibility of the gaps with bounded
+// subset search. Work exhaustion cannot reject a candidate.
 bool symbolic_region_constraints_may_fit(
     const std::vector<IrOp>& ops, const std::vector<int>& projected_widths,
     const std::map<std::string, int>& required_targets, const std::string& target,
     int minimum_address, int maximum_address, int padding_limit,
-    std::optional<int> exclusive_cells = std::nullopt);
+    std::optional<int> exclusive_cells = std::nullopt,
+    const RelaxedSymbolicRegionConstraints* relaxation = nullptr);
 
 struct DeferredStackProducerLimits {
   std::size_t maximum_candidates = 6;

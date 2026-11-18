@@ -75,12 +75,38 @@ intermediate coloring or a historical scalar seed. The selected scalar must
 still equal its delivered callback address, and that complete-family witness is
 rechecked after any finalizer, together with final CFG and return obligations.
 
+The negative-only relational preflight follows an indirect memory command
+without numeric alias facts only when all declared targets have the same
+relational transfer. Unresolved paths defer to the original bounded proof;
+they cannot hide an independent structural rejection. The bounded numeric
+solver keeps compact sorted dependency rows and reuses exact small-integer
+selector decodes in one model. It preserves the same transfer and join
+order, work charges, domain, and layout candidate budgets.
+
+Before asking for a parametric numeric domain, a negative-only geometry
+check may prove that even the widest scalar and selector address windows
+cannot fit. It includes formal anchors, projected component widths and
+the official-BCD fallback, and does not let disjoint gaps spend the same
+component twice. The subset search allows padding at any seam and retains
+the earliest reachable end for each subset. Exhaustion is inconclusive.
+Successful geometry still goes through the original bounded numeric proof,
+exact packer, selector binding and final hardware CFG validation.
+
+The gapless packer replays completely explored failed suffixes by their
+placed-component subset. A subset determines the next address without
+padding. Replay charges the original search work, including when a later
+padding search receives the remaining budget; a cutoff uses the original
+traversal. The single-winner literal lane also uses its actual incumbent as
+the placement limit when there is no finalizer to repay temporary growth.
+
 Completed joint searches without callbacks are memoized by the complete typed
 artifact, initializer ownership, frozen machine context,
-all frontier limits and preload-completeness contract. Entries are thread-local
-and bounded; only completed outcomes are stored. Arbitrary finalizers and
-continuation callbacks are never cached. A hit returns the exact artifact and
-statistics, without reducing proof work or exploration budgets on a cache miss.
+all frontier limits and preload-completeness contract. A bounded compilation
+scope shares completed outcomes across layout workers, while standalone
+searches keep a thread-local fallback. A frontier never waits for another
+in-flight frontier. Arbitrary finalizers and continuation callbacks are never
+cached. A hit returns the exact artifact and statistics; a miss retains the
+full search budget.
 
 Pure joint search does not consume its incoming report history. Its cache
 stores a relative winning suffix only when the result retains the exact input
@@ -92,8 +118,11 @@ because those consumers can inspect it.
 Within one joint invocation, revisiting an identical pending node reuses both
 its discrete and parametric literal closure. Equality includes target equations,
 encoded-selector origins, numeric-certificate identity, complete typed items,
-initializer ownership and proof-report history. Different pending bindings are
-not merged; the final initial-root visit does not replay the same placements.
+and initializer ownership. Identical chunks of typed items are owned once per
+frontier; a hash collision cannot merge different instructions or metadata.
+With a finalizer, proof-report history remains part of the key. Without one,
+the same pending artifact cannot improve on the first such path, so report-only
+changes need not start a new search. Different pending bindings are not merged.
 
 The frozen machine context excludes only independently audited source-only
 switches: alternating-argument promotion, source zero-underflow regeneration,

@@ -180,6 +180,39 @@ void bounded_numeric_cache_contracts() {
 }
 
 void translation_contracts() {
+  for (const bool multiply : {false, true}) {
+    auto aliased = fixture("0.125", 0, multiply);
+    auto store = MachineItem::op(0xb7, "address-independent memory store");
+    store.indirect_memory_targets = std::vector<int>{4, 5};
+    aliased.items.insert(aliased.items.begin(), std::move(store));
+    ++aliased.first;
+    ++aliased.last;
+    aliased.preloads.push_back({.register_name = "7", .value = "4"});
+    const auto flow = build_post_layout_control_flow(aliased.items);
+    const auto lift = analyze_post_layout_automatic_entry_lift_with_indirect_store_facts(
+        aliased.items, flow, 100000);
+    require(flow.proved && lift.has_value(), "alias preflight fixture must have a complete CFG");
+    require(order_reduction_translation_is_structurally_impossible(
+                aliased.items, flow, *lift, aliased.first, aliased.last) == multiply,
+            "equal alias transfers may expose a definite non-order consumer, not reject a valid sum");
+    require(prove(aliased).proved != multiply,
+            "alias-independent preflight agrees with the full numerical proof on both continuations");
+  }
+  {
+    auto dependent = fixture("0.125");
+    auto store = MachineItem::op(0xb7, "address-dependent memory store");
+    store.indirect_memory_targets = std::vector<int>{4, 5};
+    dependent.items.insert(dependent.items.begin() + static_cast<std::ptrdiff_t>(dependent.last + 1U),
+                           std::move(store));
+    dependent.items.insert(dependent.items.end() - 1, MachineItem::op(0x64, "observed memory alias"));
+    dependent.preloads.push_back({.register_name = "7", .value = "5"});
+    const auto flow = build_post_layout_control_flow(dependent.items);
+    const auto lift = analyze_post_layout_automatic_entry_lift_with_indirect_store_facts(
+        dependent.items, flow, 100000);
+    require(flow.proved && lift.has_value() && !order_reduction_translation_is_structurally_impossible(
+                dependent.items, flow, *lift, dependent.first, dependent.last),
+            "an unresolved translated memory alias cannot prove a structural rejection");
+  }
   for (const char* increment : {"0", "0.0000001", "0.1234567", "0.9999999", "1.0000001", "-0.0000001"}) {
     const auto f = fixture(increment);
     const auto proof = prove(f);

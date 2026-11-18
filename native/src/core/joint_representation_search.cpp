@@ -1,4 +1,5 @@
 #include "mkpro/core/joint_representation_search.hpp"
+#include "mkpro/core/detail/exact_layout_image_interner.hpp"
 #include "mkpro/core/compiler.hpp"
 #include "mkpro/core/joint_proof_input.hpp"
 #include "mkpro/core/joint_constraint_origins.hpp"
@@ -614,6 +615,51 @@ class JointWorkMemo {
     }
   }
 
+  // A whole frontier may start other jobs. It must never wait for another
+  // worker to finish a frontier: that worker might need this one to proceed.
+  template <class Match>
+  std::shared_ptr<const Value> find_completed(std::size_t hash, Match match) {
+    auto& shard = shards_[hash % shards_.size()];
+    const std::lock_guard lock(shard.mutex);
+    const auto [begin, end] = shard.entries.equal_range(hash);
+    for (auto it = begin; it != end; ++it) {
+      const auto& entry = *it->second;
+      if (entry.ready.load(std::memory_order_acquire) && entry.value && match(entry.key)) {
+        hits_.fetch_add(1, std::memory_order_relaxed);
+        return entry.value;
+      }
+    }
+    return {};
+  }
+
+  template <class Match, class Capture>
+  void publish_completed(std::size_t hash, Match match, Capture capture, Value value) {
+    auto& shard = shards_[hash % shards_.size()];
+    std::shared_ptr<Entry> retired;
+    {
+      const std::lock_guard lock(shard.mutex);
+      const auto [begin, end] = shard.entries.equal_range(hash);
+      for (auto it = begin; it != end; ++it)
+        if (match(it->second->key)) return;
+      auto entry = std::make_shared<Entry>(hash, capture());
+      entry->value = std::make_shared<const Value>(std::move(value));
+      entry->ready.store(true, std::memory_order_release);
+      const auto inserted = shard.entries.emplace(hash, entry);
+      try {
+        shard.completed.push_back(std::move(entry));
+      } catch (...) {
+        shard.entries.erase(inserted);
+        throw;
+      }
+      if (shard.completed.size() > per_shard_) {
+        retired = std::move(shard.completed.front());
+        shard.erase(*retired);
+        shard.completed.pop_front();
+      }
+    }
+    builds_.fetch_add(1, std::memory_order_relaxed);
+  }
+
   detail::JointLayoutWorkCounts counts() const {
     return {builds_.load(), hits_.load(), waits_.load()};
   }
@@ -662,6 +708,13 @@ struct JointOrderProofKey {
   std::size_t first, last;
 };
 
+struct JointFrontierKey {
+  LayoutSearchArtifact root;
+  std::string options;
+  TransactionSearchLimits limits;
+  bool complete_preloads;
+};
+
 bool same_order_proof_items(const std::vector<MachineItem>& a,
                             const std::vector<MachineItem>& b) {
   // This cache returns only a numeric interval or a rejection. Neither
@@ -698,6 +751,7 @@ struct JointLayoutWork {
   JointWorkMemo<JointLiteralKey, std::vector<LiteralLayout>> literals{128};
   JointWorkMemo<JointClosureKey, JointClosureProof> closures{96};
   JointWorkMemo<JointOrderProofKey, std::optional<OrderReductionTranslationProof>> order_proofs{16};
+  JointWorkMemo<JointFrontierKey, TransactionSearchResult<LayoutSearchArtifact>> frontiers{16};
 };
 
 std::shared_ptr<JointLayoutWork> make_joint_layout_work() {
@@ -706,7 +760,7 @@ std::shared_ptr<JointLayoutWork> make_joint_layout_work() {
 
 JointLayoutWorkStats joint_layout_work_stats(const JointLayoutWork& work) {
   return {work.variants.counts(), work.literals.counts(), work.closures.counts(),
-          work.order_proofs.counts()};
+          work.order_proofs.counts(), work.frontiers.counts()};
 }
 
 } // namespace detail
@@ -2108,6 +2162,10 @@ std::shared_ptr<const std::optional<OrderReductionTranslationProof>> prove_order
     NumericRangeInputPolicy policy, std::size_t first, std::size_t last) {
   using Proof = std::optional<OrderReductionTranslationProof>;
   const auto& flow = *projection;
+  auto* work = detail::active_joint_layout_work.get();
+  const char* numeric_cache = std::getenv("MKPRO_NATIVE_NUMERIC_PROOF_CACHE");
+  const bool share = work && input.size() <= 512U && flow.execution_states.size() <= 2048U &&
+      (!numeric_cache || std::string_view(numeric_cache) != "0");
   const auto compute = [&]() -> Proof {
     const auto lift = analyze_post_layout_automatic_entry_lift_with_indirect_store_facts(input, flow, 200000);
     if (!lift) return std::nullopt;
@@ -2120,13 +2178,9 @@ std::shared_ptr<const std::optional<OrderReductionTranslationProof>> prove_order
         input, flow, *lift, queries, preloads, 2000000, policy);
     return prove_order_reduction_translation(input, flow, *lift, bounds, first, last);
   };
-  auto* work = detail::active_joint_layout_work.get();
-  const char* numeric_cache = std::getenv("MKPRO_NATIVE_NUMERIC_PROOF_CACHE");
   // Retain only the compact relational answer, not the bounded-product graph
   // or its numeric facts. Own the immutable input as long as it is cached.
-  if (!work || input.size() > 512U || flow.execution_states.size() > 2048U ||
-      (numeric_cache && std::string_view(numeric_cache) == "0"))
-    return std::make_shared<const Proof>(compute());
+  if (!share) return std::make_shared<const Proof>(compute());
   auto key = mix_joint_key(joint_item_key(input), first);
   key = mix_joint_key(key, last);
   key = mix_joint_key(key, static_cast<std::size_t>(policy));
@@ -2329,10 +2383,30 @@ parametric_order_reduction_layout_transactions(const ConstrainedRepresentation& 
         PreparedJointProofInput proof(BorrowedJointProofInput{pending.items, source.artifact.preloads}, control);
         const auto bindings = prepare_joint_selector_constraints(source, proof, true, true, &pending, true);
         if (!bindings) continue;
-        if (fits_without_tail)
+        const auto relaxed_constraints = [&](const std::vector<MachineItem>& items) {
+          passes::RelaxedSymbolicRegionConstraints relaxation{
+              .address_space_model = control.address_space_model};
+          const int widest = std::max(99, official_program_last_address(control.address_space_model));
+          for (const auto& [name, selector] : bindings->selectors) {
+            (void)name;
+            if (selector.flexible)
+              for (const auto& label : selector.labels)
+                relaxation.target_bounds.emplace(label, std::pair{0, widest});
+          }
+          for (const auto& item : items) {
+            if (!charged_constraint_consumer(item) || !item.indirect_flow_targets) continue;
+            for (const auto& target : *item.indirect_flow_targets)
+              if (const auto* label = std::get_if<std::string>(&target))
+                relaxation.target_bounds.insert_or_assign(*label, std::pair{0, 99});
+          }
+          return relaxation;
+        };
+        if (fits_without_tail) {
+          const auto relaxation = relaxed_constraints(pending.items);
           fits_without_tail = passes::symbolic_region_constraints_may_fit(
               *ordinary, {}, bindings->fixed, pending.target_label, 10, 99,
-              kJointMaximumRegionPadding, limit);
+              kJointMaximumRegionPadding, limit, &relaxation);
+        }
 
         std::optional<SharedHelperDualModePreparation> prepared_tail;
         // When only the projected lane remains, test its actual widths
@@ -2348,9 +2422,10 @@ parametric_order_reduction_layout_transactions(const ConstrainedRepresentation& 
           auto fixed = bindings->fixed;
           const int address = prepared_tail->required_final_start_address;
           const auto [anchor, added] = fixed.emplace(prepared_tail->continuation.helper_label, address);
+          const auto relaxation = relaxed_constraints(prepared_tail->items);
           fits_with_tail = (added || anchor->second == address) &&
               passes::symbolic_region_constraints_may_fit(ops, *ir_widths, fixed,
-                  pending.target_label, 10, 99, kJointMaximumRegionPadding, limit);
+                  pending.target_label, 10, 99, kJointMaximumRegionPadding, limit, &relaxation);
         }
         if (!fits_without_tail && !fits_with_tail) continue;
         // These are only necessary conditions on the layout. Prove the
@@ -2963,22 +3038,31 @@ TransactionSearchResult<LayoutSearchArtifact> search_joint_representation_constr
   // closure lane, borrowing exactly the already-admitted representation and
   // allocation states. No larger search limits or source-specific seeds.
   std::optional<LayoutSearchArtifact> data_control_incumbent;
-  std::unordered_map<std::size_t, std::vector<ConstrainedRepresentation>> closed_parametric_roots;
+  struct ClosedLiteralRoot {
+    std::vector<std::size_t> code;
+    ConstrainedRepresentation equations;
+  };
+  detail::ExactLayoutImageInterner literal_closure_images;
+  std::unordered_map<std::size_t, std::vector<ClosedLiteralRoot>> closed_parametric_roots;
   const auto needs_literal_closure = [&](const ConstrainedRepresentation& node) {
     if (!preload_environment_complete || limits.maximum_expansions == 0 ||
         limits.maximum_candidates == 0 || limits.maximum_depth == 0)
       return false;
-    const auto same_pending = [&](const auto& old) {
-      return old.targets == node.targets && old.encoded_selectors == node.encoded_selectors &&
-          old.numeric_layout_certificate == node.numeric_layout_certificate &&
-          same_layout_search_artifact(old.artifact, node.artifact) &&
-          old.artifact.optimizations.size() == node.artifact.optimizations.size() &&
-          std::equal(old.artifact.optimizations.begin(), old.artifact.optimizations.end(),
-              node.artifact.optimizations.begin(), [](const auto& a, const auto& b) {
+    auto code = literal_closure_images.intern(node.artifact.items);
+    auto key = code.size();
+    for (const auto id : code) key = mix_joint_key(key, id);
+    const auto same_pending = [&](const ClosedLiteralRoot& old) {
+      const auto& previous = old.equations.artifact;
+      return old.code == code && same_joint_equations(old.equations, node) &&
+          same_layout_search_preloads(previous.preloads, node.artifact.preloads) &&
+          (!finalize ||
+           std::equal(previous.optimizations.begin(), previous.optimizations.end(),
+              node.artifact.optimizations.begin(), node.artifact.optimizations.end(),
+              [](const auto& a, const auto& b) {
                 return a.name == b.name && a.detail == b.detail;
-              });
+              }));
     };
-    auto& bucket = closed_parametric_roots[joint_item_key(node.artifact.items)];
+    auto& bucket = closed_parametric_roots[key];
     if (std::any_of(bucket.begin(), bucket.end(), same_pending)) {
       ++joint_literal_closure_reuses;
       return false;
@@ -2986,7 +3070,12 @@ TransactionSearchResult<LayoutSearchArtifact> search_joint_representation_constr
     // Both the discrete and parametric closures are pure in this invocation.
     // In particular the final initial-root visit must not replay all discrete
     // placements merely because only the parametric half used to be memoized.
-    bucket.push_back(node);
+    // With no callback, only the first report path is ever returned for
+    // equal candidates. Keep full report identity when a finalizer can
+    // accept or reject a candidate by its history.
+    bucket.push_back({std::move(code), {{ {}, node.artifact.preloads,
+        finalize ? node.artifact.optimizations : std::vector<OptimizationReport>{}},
+        node.targets, node.encoded_selectors, node.numeric_layout_certificate}});
     return true;
   };
   const auto prove_literal_closures = [&](const ConstrainedRepresentation& literal_root,
@@ -3026,8 +3115,13 @@ TransactionSearchResult<LayoutSearchArtifact> search_joint_representation_constr
           best = std::move(closed);
       }
     }
+    // This lane only returns a strictly improving closure, never an
+    // intermediate for later composition. A real finalizer can repay debt;
+    // without one the incumbent is also an upper bound on placement.
+    const int parametric_limit = finalize ? origin_cells :
+        best ? cells(*best) : incumbent_cells;
     for (auto& edge : parametric_order_reduction_layout_transactions(
-             literal_root, options, control_options, origin_cells, finalize))
+             literal_root, options, control_options, parametric_limit, finalize))
       if (cells(edge.node) < incumbent_cells && (!best || cells(edge.node) < cells(*best)))
         best = std::move(edge.node);
     return best;
@@ -5574,39 +5668,40 @@ TransactionSearchResult<LayoutSearchArtifact> search_joint_representation_constr
         std::equal(a.optimizations.begin(),a.optimizations.end(),b.optimizations.begin(),
             [](const auto& x,const auto& y){return x.name==y.name && x.detail==y.detail;});
   };
-  struct Completed {
-    std::string options;
-    LayoutSearchArtifact root;
-    TransactionSearchLimits limits;
-    bool complete_preloads = false;
-    TransactionSearchResult<LayoutSearchArtifact> result;
-  };
+  using Frontier = TransactionSearchResult<LayoutSearchArtifact>;
+  struct Completed { JointFrontierKey key; Frontier result; };
   static thread_local std::vector<Completed> completed;
   // Arbitrary callbacks have no cacheable identity. Only the entirely pure
   // search may share completed outcomes across independent layout roots.
   const bool cacheable = !finalize && !finalize_intermediate;
   const auto cache_key = cacheable ? representation_context_key(options) : std::string{};
-  if (cacheable)
+  auto* work = cacheable && root.items.size() <= 512U ? detail::active_joint_layout_work.get() : nullptr;
+  const auto frontier_hash = work ? mix_joint_key(joint_item_key(root.items),
+      std::hash<std::string>{}(cache_key)) : 0U;
+  const auto matches = [&](const JointFrontierKey& key) {
+    return key.options == cache_key && key.complete_preloads == preload_environment_complete &&
+        same_joint_limits(key.limits, limits) && same_layout_search_artifact(key.root, root);
+  };
+  const auto replay = [&](const Frontier& proof) {
+    ++joint_completed_cache_hits;
+    if (std::getenv("MKPRO_NATIVE_TRACE_JOINT_CACHE"))
+      std::cerr << "[joint-layout-cache] completed pure frontier reused\n";
+    auto reused = proof;
+    if (reused.incumbent) {
+      auto& reports = reused.incumbent->optimizations;
+      reports.insert(reports.begin(), root.optimizations.begin(), root.optimizations.end());
+    }
+    return reused;
+  };
+  if (work) {
+    if (const auto proof = work->frontiers.find_completed(frontier_hash, matches)) return replay(*proof);
+  } else if (cacheable) {
     for (auto at = completed.begin(); at != completed.end(); ++at)
-      if (at->options == cache_key && at->complete_preloads == preload_environment_complete &&
-          same_joint_limits(at->limits, limits) &&
-          same_layout_search_artifact(at->root, root)) {
-        ++joint_completed_cache_hits;
+      if (matches(at->key)) {
         std::rotate(completed.begin(), at, std::next(at));
-        if (std::getenv("MKPRO_NATIVE_TRACE_JOINT_CACHE"))
-          std::cerr << "[joint-layout-cache] completed pure frontier reused\n";
-        auto reused = completed.front().result;
-        if (reused.incumbent) {
-          // Pure machine search does not inspect the incoming report history.
-          // Its completed witness is relative to that history, not permission
-          // to publish a different caller's source/static-gate evidence.
-          auto& reports = reused.incumbent->optimizations;
-          reports.erase(reports.begin(), reports.begin() +
-              static_cast<std::ptrdiff_t>(completed.front().root.optimizations.size()));
-          reports.insert(reports.begin(), root.optimizations.begin(), root.optimizations.end());
-        }
-        return reused;
+        return replay(completed.front().result);
       }
+  }
   ExactSearchFinalizerMemo<LayoutSearchArtifact,JointRepresentationFinalizer,decltype(same_input)>
       strict_memo(finalize,same_input,16), intermediate_memo(finalize_intermediate,same_input,16);
   const JointRepresentationFinalizer strict = finalize
@@ -5812,9 +5907,23 @@ TransactionSearchResult<LayoutSearchArtifact> search_joint_representation_constr
              return a.name == b.name && a.detail == b.detail;
            }));
   if (cacheable && retained_report_prefix) {
-    if (completed.size() >= 32U) completed.pop_back();
-    completed.insert(completed.begin(), Completed{
-        cache_key, root, limits, preload_environment_complete, result});
+    auto relative = result;
+    if (relative.incumbent) {
+      auto& reports = relative.incumbent->optimizations;
+      reports.erase(reports.begin(),
+          reports.begin() + static_cast<std::ptrdiff_t>(root.optimizations.size()));
+    }
+    const auto capture = [&] {
+      JointFrontierKey key{root, cache_key, limits, preload_environment_complete};
+      key.root.optimizations.clear();
+      return key;
+    };
+    if (work) {
+      work->frontiers.publish_completed(frontier_hash, matches, capture, std::move(relative));
+    } else {
+      if (completed.size() >= 32U) completed.pop_back();
+      completed.insert(completed.begin(), Completed{capture(), std::move(relative)});
+    }
   }
   if (std::getenv("MKPRO_NATIVE_TRACE_JOINT_PROOF_INPUT"))
     std::cerr << "[joint-proof-input] inputs=" << proof_counts.inputs

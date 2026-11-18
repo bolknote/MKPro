@@ -31,10 +31,7 @@ inline std::optional<LayoutSearchArtifact> rebind_layout_search_artifact(
   return artifact;
 }
 
-inline bool same_layout_search_items(const std::vector<MachineItem>& a,
-                                    const std::vector<MachineItem>& b) {
-  if (a.size() != b.size())
-    return false;
+inline bool same_layout_search_item(const MachineItem& a, const MachineItem& b) {
   // Include typed proof/observation metadata, not just bytes or CFG shape.
   // Keep label metadata too; machine_items_equal intentionally compares
   // different subsets of fields for different item kinds.
@@ -50,10 +47,12 @@ inline bool same_layout_search_items(const std::vector<MachineItem>& a,
                     item.borrowed_entry_phase_selector,
                     item.semantic_call_origins, item.target, item.formal_opcode);
   };
-  return std::equal(a.begin(), a.end(), b.begin(),
-                    [&](const auto& left, const auto& right) {
-                      return item_fields(left) == item_fields(right);
-                    });
+  return item_fields(a) == item_fields(b);
+}
+
+inline bool same_layout_search_items(const std::vector<MachineItem>& a,
+                                    const std::vector<MachineItem>& b) {
+  return std::equal(a.begin(), a.end(), b.begin(), b.end(), same_layout_search_item);
 }
 
 inline bool same_layout_search_preloads(const std::vector<PreloadReport>& a,
